@@ -438,7 +438,7 @@ describe("webUiFeatureOptions - connection-error view", () => {
     await flush();
 
     assert.match(skeleton.headerInfo.textContent,
-      /getControllers must resolve to \{ controllers, error \} with optional string guidance and headline\./,
+      /getControllers must resolve to \{ controllers, error \} with optional string emptyMessage, guidance, and headline\./,
       "the contract guard's own message reaches the user verbatim");
     assert.match(skeleton.headerInfo.textContent, /The plugin failed while retrieving the controller list\./, "under the controllers site's plugin-failure headline");
     assert.match(skeleton.headerInfo.textContent, /Retry, and if it keeps failing, restart Homebridge and check its log for the reason\./,

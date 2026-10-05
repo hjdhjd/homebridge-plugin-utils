@@ -19,14 +19,16 @@ const CATALOG = {
   validators: { isController: () => false, validOption: () => true, validOptionCategory: () => true }
 };
 
-const setup = ({ mode = "device-only" } = {}) => {
+const CONTROLLER = { address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" };
+
+const setup = ({ controllers = [], mode = "device-only" } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const root = document.createElement("div");
   const controller = new AbortController();
 
   document.body.appendChild(root);
-  store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode, type: "model:loaded" });
+  store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers, mode, type: "model:loaded" });
   mountHeaderView({ root, signal: controller.signal, store });
 
   return { abort: () => controller.abort(), root, store };
@@ -38,11 +40,45 @@ describe("mountHeaderView", () => {
 
     using dom = createTestDom();
 
-    const { root } = setup({ mode: "controller-based" });
+    const { root } = setup({ controllers: [CONTROLLER], mode: "controller-based" });
 
     assert.match(root.textContent, /Global options/);
     assert.match(root.textContent, /Controller options/);
     assert.match(root.textContent, /Device options/);
+  });
+
+  test("omits the controller hop on a controller-based page whose list holds no controller", () => {
+
+    using dom = createTestDom();
+
+    const { root } = setup({ mode: "controller-based" });
+
+    assert.match(root.textContent, /Global options/);
+    assert.doesNotMatch(root.textContent, /Controller options/, "the hop would name a level the page has nothing at");
+    assert.match(root.textContent, /Device options/);
+  });
+
+  test("follows the list: the hop appears when a list arrival brings the first controller, and goes when a load removes the last", () => {
+
+    using dom = createTestDom();
+
+    const { root, store } = setup({ mode: "controller-based" });
+
+    assert.doesNotMatch(root.textContent, /Controller options/, "precondition: the empty page renders no controller hop");
+
+    store.dispatch({ controllers: [CONTROLLER], type: "controllers:loaded" });
+
+    assert.match(root.textContent, /Controller options/, "a refresh that brings the first controller brings the hop with it, on a page whose status never moved");
+
+    const rendered = root.firstChild;
+
+    store.dispatch({ controllers: [ CONTROLLER, { ...CONTROLLER, serialNumber: "ctrl-b" } ], type: "controllers:loaded" });
+
+    assert.ok(root.firstChild === rendered, "an arrival that keeps the list populated rebuilds nothing");
+
+    store.dispatch({ catalog: CATALOG, configuredOptions: [], controllers: [], mode: "controller-based", type: "model:loaded" });
+
+    assert.doesNotMatch(root.textContent, /Controller options/, "an establishment that removes the last controller takes the hop away");
   });
 
   test("omits the controller hop in device-only mode", () => {

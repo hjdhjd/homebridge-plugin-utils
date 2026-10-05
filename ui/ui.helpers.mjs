@@ -17,8 +17,8 @@
  *     toggles) or minimal stubs (getPluginConfig returns the seeded config). Individual tests override the methods they care about on a per-test basis.
  *
  * Layered on top are the module's remaining exports, each documented at its own definition: session and timing helpers ({@link openTestSession},
- * {@link waitFor}), global-installation helpers ({@link installHomebridge}, {@link installWebUiBoot}), and DOM-interaction and probe-shim helpers
- * ({@link clickCategoryHeader}, {@link BOOTSTRAP_PROBE_ACCENT}, {@link seedBootstrapProbeShim}).
+ * {@link waitFor}), global-installation helpers ({@link installHomebridge}, {@link installWebUiBoot}), DOM-interaction and DOM-reading helpers
+ * ({@link clickCategoryHeader}, {@link readActiveSerial}), and probe-shim helpers ({@link BOOTSTRAP_PROBE_ACCENT}, {@link seedBootstrapProbeShim}).
  *
  * Files under `ui/` are copied to `dist/ui/` during `npm run build-ui`; the step's shippable filter (see `build/fs-ops.mjs`) excludes every test-only file shape
  * so nothing from this module ships in the published package.
@@ -477,6 +477,20 @@ export function installWebUiBoot(fake) {
 export function clickCategoryHeader(details) {
 
   details.querySelector("summary").click();
+}
+
+/**
+ * Read the serial of the active sidebar link inside a container: the `data-device-serial` of the first `.nav-link.active` beneath it in document order. The nav view
+ * marks a selection by toggling `active` on the link itself, so a suite asks the sidebar, the controllers container, or the devices container which row holds the
+ * selection through this query rather than spelling the selector at each assertion.
+ *
+ * @param {HTMLElement} container - The element to search: the sidebar, or its controllers or devices container.
+ * @returns {string|null} The active link's serial, or null when no link in the container is active or the active link is the Global Options row, which carries
+ *          no serial.
+ */
+export function readActiveSerial(container) {
+
+  return container.querySelector(".nav-link.active")?.getAttribute("data-device-serial") ?? null;
 }
 
 /**

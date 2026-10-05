@@ -99,12 +99,16 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
 /**
  * The resolved shape of a `getControllers` hook: the single contract every controller fetch crosses. It carries the controller list and the connection outcome
  * together, on the same reasoning as {@link DeviceListResult} - a failure travels back with the response it belongs to rather than through a separate side-channel -
- * and it is what lets the page tell "this plugin has no controllers configured" apart from "the controllers could not be reached", two situations whose remedies
- * have nothing in common. The display copy travels the same way and for the same reason: the outcome is what knows which failure this was, so the words describing
- * it belong to the outcome rather than to a static setting that has to speak for every failure at once.
+ * and it is what lets the page tell "this plugin has no controller configured yet" apart from "the controllers could not be reached", two situations whose remedies
+ * have nothing in common: the first loads the page on its global options with the empty state said under the sidebar's controllers heading, and the second lands
+ * on the retry view. The display copy travels the same way and for the same reason: the outcome is what knows which situation this was, so the words describing
+ * it belong to the outcome rather than to a static setting that has to speak for every one of them at once.
  *
  * @typedef {Object} ControllerListResult
  * @property {Controller[]} controllers - The plugin's configured controllers; empty when the probe failed or when the plugin legitimately has none configured.
+ * @property {string} [emptyMessage] - The sentence the sidebar shows under the controllers heading when `controllers` and `error` are both empty, read in no other
+ *   case. It replaces the page's own sentence, which sends the user to the main settings tab, so a plugin whose controllers arrive some other way - a discovery
+ *   still running, a refresh action of its own - says so in its own words.
  * @property {string} error - The user-facing connection-failure message: empty when the fetch succeeded, the failure text when the fetch failed and `controllers`
  *   is empty.
  * @property {string} [guidance] - What the user should do about THIS failure, read only when `error` is non-empty. It overrides the guidance the page would
@@ -235,9 +239,9 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   it, and the ungrouped section holds its place ahead of every group whatever the comparator answers. Absent, the sections fall in plain string order, which is what
  *   a plugin supplying nothing gets. A plugin locking one group to the end sorts the rest by locale and answers the fixed name last.
  * @property {Object} [sidebar.refresh] - A refresh action docked inline on the sidebar's primary list heading, rendered as an icon-only button in the framework's
- *   quiet action treatment. Which heading is primary follows the mode: the controllers heading where the plugin has controllers, the top-level devices heading where
- *   it does not. Where that heading does not exist, neither does the action - global-only mode mounts no navigation at all, and a device list whose every entry
- *   carries a `sidebarGroup` heads its groups without a top-level heading to dock on.
+ *   quiet action treatment. Which heading is primary follows the mode: the controllers heading in controller-based mode, which renders whether or not the plugin
+ *   lists a controller yet, and the top-level devices heading in device-only mode. Where that heading does not exist, neither does the action - global-only mode
+ *   mounts no navigation at all, and a device list whose every entry carries a `sidebarGroup` heads its groups without a top-level heading to dock on.
  * @property {string} [sidebar.refresh.label="Refresh"] - The action's accessible name and tooltip. The button shows a glyph rather than this text, so the label is
  *   what a screen reader announces and what a hover reveals.
  * @property {Function} [sidebar.refresh.onRefresh] - The plugin's refresh handler, synchronous or async. Its job is invalidation and nothing more: clear a cache, ask
@@ -275,7 +279,7 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   and cheap: it runs on every projection recompute, the same cadence as `ui.validOption`. A catalog naming a source that no resolver here answers to fails the page
  *   at load, since a picker with no list behind it can only render as an empty control the user cannot act on.
  * @property {string} [ui.connectingMessage="Loading..."] - The copy the boot affordance shows while the page loads. It holds the frame from the moment teardown empties
- *   the page until a terminal state takes it - the revealed page, the connection-error view, or the no-controllers helper - so it is the only thing on screen for a boot
+ *   the page until a terminal state takes it - the revealed page or the connection-error view - so it is the only thing on screen for a boot
  *   whose device fetch is slow. The framework default says nothing about what is being waited on, because only the plugin knows: a plugin whose boot is dominated by a
  *   controller login supplies copy that names it.
  * @property {string} [ui.controllerFailureGuidance] - The guidance line shown when a controller cannot be reached, replacing the framework's own. The default says
@@ -664,26 +668,30 @@ export class webUiFeatureOptions {
    *      visibilitychange and window blur listeners, which drain a pending edit when the page is hidden or loses focus - the blur listener first commits a value
    *      input that still holds focus. The theming registration's I/O - the lighting-mode read and the Bootstrap probe - runs in the background.
    *   7. Once controllers resolves: hold it to the hook contract, then check the error it carries - a wrong-shaped result and a reported connection failure both
-   *      land on the connection-error view and return, so the no-controllers helper text can never stand in for an unreachable controller or a hook that answered
-   *      in the wrong shape - then, in controller-based mode with an empty list, show the no-controllers message and return. Both of those surfaces take the frame
-   *      from the boot affordance, which clears as they render.
-   *   8. In the device-bearing modes, select the initial controller (the same transient controller scope a sidebar click dispatches), then record and pre-fire its
-   *      devices fetch through the shared device fetch's request phase (a `devices:requested` mints its sequence) so it overlaps with the feature catalog.
-   *      Device-only mode has no controller to select and stays on global; global-only mode skips the step entirely - it fetches no devices.
+   *      land on the connection-error view and return, taking the frame from the boot affordance as it renders, so neither can read as a plugin with no controller
+   *      configured. An empty list with no error goes on like any other: the page loads on its global options, and the sidebar says under its controllers
+   *      heading that no controller is configured yet.
+   *   8. In controller-based mode with a controller to select, begin the page's first selection of a controller: select it (the same transient controller scope a
+   *      sidebar click dispatches), then record and pre-fire its devices fetch through the shared device fetch's request phase (a `devices:requested` mints its
+   *      sequence) so it overlaps with the feature catalog. A controller-based list with no controller in it fires no device request, since there is no controller
+   *      to ask about. Device-only mode has no controller to select, stays on global, and pre-fires its single list's fetch the same way; global-only mode skips
+   *      the step entirely - it fetches no devices.
    *   9. Once the feature catalog resolves: build the catalog, throw through assertChoiceSources when it names a choice source no resolver backs, and dispatch
    *      model:loaded - the mounted views transition off their loading placeholder and render. Then call the plugin's onLoaded hook, with no await between the
    *      dispatch and the call.
    *  10. Global-only mode ends here: after the theme settles it clears #headerInfo (the header view that reclaims it in the other modes never mounts), clears the boot
    *      affordance, and reveals the reduced region set - everything but the sidebar and header - then returns. The device-bearing modes continue: settle the device
-   *      fetch through the shared device fetch's settle phase, the one a sidebar click ends on, which bounds it and dispatches devices:loaded carrying the outcome
-   *      and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure into the connection-error transition. A
-   *      connection-error status, whichever fetch left it, clears the affordance and returns without revealing. Otherwise an outcome that applied carries the
-   *      selection on to the controller-as-device entry when the mode and the device list call for that, and a superseded one leaves the selection to the fetch that
-   *      superseded it.
+   *      fetch the boot fired, where it fired one, through the shared device fetch's settle phase, the one a sidebar click ends on, which bounds it and dispatches
+   *      devices:loaded carrying the outcome and its sequence. The reducer applies it only when it still answers the pending request and folds a fetch failure into
+   *      the connection-error transition. An outcome that applied carries a first selection on to the controller-as-device entry when the device list calls for
+   *      that, and a superseded one leaves the selection to the fetch that superseded it. A connection-error status, whichever fetch left it, then clears the
+   *      affordance and returns without revealing.
    *  11. Clear the boot affordance and reveal the full region set the views render into.
    *
-   * A plugin's own call boots the page fresh, on the first controller in the device-bearing modes. The page's own re-entries go through the same boot with the
-   * page they replace handed over, so they come back on the controller that page had selected.
+   * A plugin's own call boots the page fresh, on the first controller in controller-based mode, and on its global options while the plugin lists no controller.
+   * The page's own re-entries go through the same boot with the page they replace handed over, so they come back on the controller that page had selected. A
+   * list that gains its first controller after the load, through {@link webUiFeatureOptions#refreshControllers} or a coordinated write, moves the page onto that
+   * controller the way a boot onto that list would have landed.
    *
    * @param {import("./pluginConfigSession.mjs").PluginConfigSession} session - The config session supplied by the orchestrator; the page's single source of
    *        persisted config and the interface through which option edits are staged.
@@ -904,8 +912,8 @@ export class webUiFeatureOptions {
     try {
 
       // The contract check runs inside this try so a hook answering in the wrong shape lands where a hook that threw lands: the retry view. A hook that resolves a
-      // bare controller array is the case this exists for, and the alternative - letting the array fall through - is the silent degradation into "no controllers
-      // are configured" that this whole channel exists to prevent.
+      // bare controller array is the case this exists for: the array carries neither member the page reads, and naming the contract on the retry view is what
+      // keeps that mistake from being read as some other answer, a plugin with no controller configured yet among them.
       controllerResult = assertControllerListResult(await withDeadline({ promise: controllersPromise, seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal }));
     } catch(err) {
 
@@ -919,9 +927,9 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // A hook that reports a connection failure lands on the same retry view a hook that throws does. Routing it here, ahead of the empty-list check, is what keeps
-    // the "no controllers are configured" helper text from standing in for "the controllers could not be reached" - two situations whose remedies have nothing in
-    // common, and only one of which the user can act on from this page.
+    // A hook that reports a connection failure lands on the same retry view a hook that throws does. Routing it here, ahead of everything the list feeds, is what
+    // keeps "the controllers could not be reached" from loading the page as "no controller is configured yet" - two situations whose remedies have nothing in
+    // common, and only the first of which the retry view answers.
     if(controllerResult.error) {
 
       this.#failConnection({ copy: { guidance: controllerResult.guidance, headline: controllerResult.headline }, err: controllerResult.error, kind: "reported",
@@ -930,58 +938,37 @@ export class webUiFeatureOptions {
       return;
     }
 
-    // An empty list in controller-based mode means the plugin has no controllers configured - the helper text says so and the cycle bails. A device-only page has
-    // no hook and reaches here on the empty stand-in the fetch resolved, which this check passes over.
+    // An empty list goes on like any other: the page loads on its global options, and the sidebar says under its controllers heading that no controller is
+    // configured yet, in the plugin's words where the result carried an `emptyMessage`. A device-only page has no hook and reaches here on the empty stand-in the
+    // fetch resolved.
     const controllers = controllerResult.controllers;
-
-    if(this.#noControllersConfigured(controllers)) {
-
-      this.#removeBootAffordance();
-      showNoControllersMessage();
-
-      return;
-    }
 
     /* Choose the controller the boot selects. A fresh page has no selection to keep and lands on the first controller. A re-entered page started from the
      * selection of the page it replaced, and the model load below reconciles that selection against the list just fetched - but the choice has to be made now,
      * ahead of that load, so the device fetch can overlap the catalog read. The reducer module's own query answers where that load is about to leave the
-     * selection, rename included, and the boot selects that controller; a selection the list cannot place, and a global one, land on the first controller.
+     * selection, rename included, and the boot selects that controller; a selection the list cannot place, and a global one, land on the first controller. A
+     * list with no controller in it leaves nothing to choose, and the page rests on global.
      */
     const landedControllerId = reconciledControllerId({ arriving: controllers, rename, state: this.#store.state });
     const initialController = controllers.find((controller) => controller.serialNumber === landedControllerId) ?? controllers[0] ?? null;
 
-    // The device machinery is inert in global-only mode: with scope locked to global there is no controller device to fetch or select, so the pre-fire here and the
-    // matching settle and scope decision further down all sit on the device-bearing path. The global-only branch after the theme await returns before reaching them,
-    // so this binding is read only when it was assigned.
-    let devicesRequest;
-
-    /* In the device-bearing modes the boot is a click of the controller it chose, and it takes the click's shape exactly: select the controller, record the fetch at
-     * the store's chokepoint, then fire it. One operation, one choreography. The selection ahead of the fetch is what carries the controller through a failure - the
-     * connection-error view hands its plugin panel the selected controller entry, so a boot that cannot reach the controller offers the same repair surface a click
-     * that cannot reach it offers. Device-only mode has no controller to select and keeps the global scope the initial state already holds. The boot departs from
-     * a click in the move's origin: the boot selects for the page rather than for a user, so its move is tagged as the boot's own, and the reducer knows
-     * that no one has moved away from a takeover a plugin opens from `onLoaded`.
-     *
-     * The sequence, not the controller, is the fetch identity, so a controller click racing this initial fetch resolves last-request-wins at the reducer.
+    /* Begin the device request this boot settles once its model has loaded, here and ahead of the catalog read so the two overlap. A controller to select begins
+     * the page's first selection of a controller, the choreography a sidebar click takes. Device-only mode has no controller to select, keeps the global scope the
+     * initial state already holds, and asks for its single list with no controller. A controller-based list with no controller in it fires no request at all,
+     * since there is no controller to ask about, and neither does global-only mode, which fetches no devices.
      *
      * One null-controller case survives by design: a catalog or bridge failure landing after this selection but before model:loaded still hands the panel a null
      * controller, because the controller record is answered only once a model has loaded - before that, the list on hand is at best the one a re-entry inherited.
      * That failure belongs to the plugin bridge rather than to the controller, so offering no controller-repair surface is the honest rendering of it.
      */
-    if(!this.#config.globalOnly) {
+    let devicesRequest = null;
 
-      if(initialController !== null) {
+    if(initialController !== null) {
 
-        this.#store.dispatch({ origin: "boot", scope: { controllerId: initialController.serialNumber, kind: "controller" }, type: "scope:changed" });
-      }
+      devicesRequest = this.#beginControllerSelection({ controller: initialController, store: this.#store });
+    } else if(!this.#config.globalOnly && !this.#config.getControllers) {
 
-      devicesRequest = requestControllerDevices({
-
-        controller: initialController,
-        controllerId: initialController?.serialNumber ?? null,
-        getDevices: (controller) => this.#devicesFor(controller),
-        store: this.#store
-      });
+      devicesRequest = requestControllerDevices({ controller: null, controllerId: null, getDevices: (controller) => this.#devicesFor(controller), store: this.#store });
     }
 
     // Wait for the feature catalog. The accessor's own bound, the catalog deadline, is armed once, at the moment the read is first issued, so it is the bound that
@@ -1024,6 +1011,7 @@ export class webUiFeatureOptions {
 
       catalog,
       controllers,
+      controllersEmptyMessage: controllerResult.emptyMessage,
       moveBoundary: !this.#initialOptions || !sameOptionsSet(this.#initialOptions, loadedOptions),
       options: loadedOptions,
       rename
@@ -1099,24 +1087,25 @@ export class webUiFeatureOptions {
       return;
     }
 
-    /* Settle the device fetch the pre-fire recorded, through the same settle a sidebar click and a post-write refetch end on, so a device failure reads the same
-     * whichever of them met it. The bound is armed here, like every other host await, and the outcome lands only once the model has loaded: that is what puts the
-     * controller entry in the store before a failure hands the plugin's connection-error panel its controller, and a boot that ends at an earlier failure never
-     * lands a device outcome over it.
+    /* Settle the device request the boot began, where it began one, through the same settle a sidebar click and a post-write refetch end on, so a device failure
+     * reads the same whichever of them met it. The bound is armed here, like every other host await, and the outcome lands only once the model has loaded: that is
+     * what puts the controller entry in the store before a failure hands the plugin's connection-error panel its controller, and a boot that ends at an earlier
+     * failure never lands a device outcome over it. A first selection completes inside its own settle, which is equivalent to completing it after the
+     * connection-error check below, since only a clean outcome of its own completes it; device-only mode's single list settles with no selection to complete.
      *
-     * The verdict is the reducer's: this outcome applied, carrying no failure, only when the sequence it carried is the one the reducer recorded. A fetch that
+     * The verdict is the reducer's: an outcome applied, carrying no failure, only when the sequence it carried is the one the reducer recorded. A fetch that
      * superseded it, such as the selection refetch a coordinated write issues while the boot is still out, owns the device list and the selection, so the verdict
-     * gates the one follow-up below that writes scope. It does not gate the reveal: every view renders from the store whichever fetch filled it, so the page is
-     * revealed into the winning fetch's outcome, and while that fetch is still out the page shows the busy table a sidebar click shows during its own fetch.
+     * gates the one follow-up that writes scope. It does not gate the reveal: every view renders from the store whichever fetch filled it, so the page is revealed
+     * into the winning fetch's outcome, and while that fetch is still out the page shows the busy table a sidebar click shows during its own fetch.
      */
-    const applied = await settleControllerDevices({
+    if(initialController !== null) {
 
-      deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS,
-      failureGuidance: this.#config.controllerFailureGuidance,
-      request: devicesRequest,
-      signal,
-      store: this.#store
-    });
+      await this.#settleControllerSelection({ request: devicesRequest, signal, store: this.#store });
+    } else if(devicesRequest !== null) {
+
+      await settleControllerDevices({ deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS, failureGuidance: this.#config.controllerFailureGuidance, request: devicesRequest,
+        signal, store: this.#store });
+    }
 
     if(signal.aborted) {
 
@@ -1135,20 +1124,9 @@ export class webUiFeatureOptions {
       return;
     }
 
-    /* Complete the selection the pre-fire began. This boot's outcome applied, so the store holds the list it brought, and a controller whose list carries the row its
-     * `isController` names continues to that row - read through the derivation a sidebar click reads, which is what lands both paths on one row.
-     *
-     * Every other case already rests where a click would leave it: device-only and global-only on global, where the initial state points, and a controller whose
-     * list came back empty or carries no such row on the controller's own view - which is where a notice renders in place of that view's table. Nothing about the
-     * reveal below changes for those: the notice lives inside the config table's region, so it appears with the page rather than ahead of it, and the search
-     * panel's bars settled during the dispatch above.
-     */
-    if(applied && (initialController !== null)) {
-
-      completeControllerSelection({ controllerId: initialController.serialNumber, store: this.#store });
-    }
-
-    // Hand the frame from the boot affordance to the page itself, revealing the full region set the views render into.
+    // Hand the frame from the boot affordance to the page itself, revealing the full region set the views render into. A controller whose list came back empty
+    // or carries no row its `isController` names rests on its own view, where a notice stands in place of that view's table; the notice lives inside the config
+    // table's region, so it appears with the page rather than ahead of it, and the search panel's bars settled during the outcome's dispatch.
     this.#revealPage(REGION_IDS);
   }
 
@@ -1167,6 +1145,12 @@ export class webUiFeatureOptions {
    * devices refetched under the new key, without the call waiting on it; a refresh that moved no selection fetches nothing, and neither does one over a page
    * whose model never loaded, whose recovery belongs to its own retry.
    *
+   * A list that brings the first controller to a page whose model has loaded and whose own list held none moves the page onto that controller, as the boot does
+   * with a populated list: a value the user typed into a focused option is committed first, as a user's own click would commit it by moving focus, and then the
+   * page selects the controller and fetches its devices through the boot's own choreography, without the call waiting on the fetch. The move is the page's rather
+   * than a user's, so a takeover the plugin holds stands across it. A list arriving on a page that already lists a controller is reconciled and never moves the
+   * selection to its first entry.
+   *
    * This is the repaint for a plugin whose own action did not write the configuration's options. A plugin that WRITES the configuration calls
    * {@link webUiFeatureOptions#commitConfig} instead, which writes through the page's own session and re-establishes the entire model against what it wrote;
    * repainting a list over a page whose options array the plugin has changed behind it is the exact shape that leaves the page holding a stale configuration.
@@ -1184,15 +1168,18 @@ export class webUiFeatureOptions {
    *     asked: a framework-initiated fetch - show()'s boot path, the framework's own navigation fetches - fails to the framework's failure surface, while a
    *     plugin-initiated call reports to its caller. The caller needs no error relay from the framework because it authored the getControllers hook that produced
    *     the failure and can capture the error there.
-   *   - An empty resolved controller list, or a page with no getControllers hook, resolves false and leaves the store untouched - the consumer owns the messaging
-   *     for the no-controllers case, exactly as show()-time handles it through a direct message that bypasses the store. A list that is null or absent is a
-   *     wrong-shaped result and rejects with the TypeError described below.
+   *   - An empty resolved controller list, or a page with no getControllers hook, resolves false and leaves the store untouched. A plugin that discovers its
+   *     controllers can answer an empty list for a moment, so a populated page keeps the controllers it shows through one; taking a controller off the page is a
+   *     coordinated write's business, through {@link webUiFeatureOptions#commitConfig}. A list that is null or absent is a wrong-shaped result and rejects with the
+   *     TypeError described below.
    *   - An outcome that arrives after the session's platform entry has been replaced - by a coordinated write's commit, or by a later sync - resolves false
    *     without dispatching. The entry's identity is the staleness test, because every act that advances the replica replaces that object, so the list this hook
    *     read for is recognizable without any counter of this method's own.
-   *   - A non-empty list dispatches controllers:loaded and resolves true once the sidebar has transitioned to the new list.
+   *   - A non-empty list dispatches controllers:loaded and resolves true once the sidebar has transitioned to the new list, with the move onto a first controller
+   *     begun by then where the list brought one.
    *
-   * A false return, in every case, means the view was left as it was; the caller relies on that to decide whether to surface its own no-controllers messaging.
+   * A false return, in every case, means the view was left as it was, so a caller with messaging of its own for a refresh that changed nothing keys it on that
+   * answer.
    *
    * An outcome that is neither true nor false is a bug in the caller's own code, and rejects with a TypeError naming the contract it broke: a hook that answers in
    * the wrong shape, or a `rename` in the wrong shape, which is refused before anything else happens. Such a rejection is not a connection failure and must not be
@@ -1288,8 +1275,9 @@ export class webUiFeatureOptions {
       controllers = result.controllers;
     }
 
-    // A null stand-in or an empty list leaves the store untouched: the consumer owns the no-controllers messaging, so a refresh that finds none reports no change
-    // rather than dispatching an empty sidebar or a connection-error frame. Only a non-empty list transitions the view.
+    // A null stand-in or an empty list leaves the store untouched and reports no change rather than dispatching an empty sidebar or a connection-error frame. A
+    // plugin that discovers its controllers can answer an empty list for a moment, so a populated page keeps what it shows through one, and a page whose own list is
+    // empty already says so in its sidebar. Only a non-empty list transitions the view.
     if(!controllers || (controllers.length === 0)) {
 
       return false;
@@ -1298,27 +1286,46 @@ export class webUiFeatureOptions {
     // A non-empty list: dispatch the list arrival the nav view subscribes to. The reducer installs the list and reconciles every fact naming a controller against it,
     // honoring the declared rename, and the nav rebuilds the controllers container; the dispatch runs its subscribers synchronously, so the sidebar has transitioned
     // by the time we report success. The staleness guard owns the verdict: a refresh whose cycle was superseded while it waited dispatches nothing and reports no
-    // change.
+    // change. Whether the page listed no controller is read in the same turn as the dispatch, so arrivals racing each other agree about which of them brought the
+    // first one.
     const store = this.#store;
     const before = selectedControllerId(store.state);
+    const firstController = store.state.controllers.length === 0;
 
     if(!this.#unlessStale({ run: () => store.dispatch({ controllers, rename, type: "controllers:loaded" }), signal })) {
 
       return false;
     }
 
+    // Only a page whose model has loaded acts on the arrival beyond its sidebar. A page without one has no device view to refresh: a boot still in flight owns its
+    // own device fetch and selection, and a boot that ended before its model loaded owns the frame it left, where a clean outcome would lift a connection error over
+    // a page with nothing loaded under it.
+    if(!modelLoaded(store.state)) {
+
+      return true;
+    }
+
+    /* The list brought the first controller to a page that listed none, so the page moves onto it the way its boot would have landed on this list, and the call
+     * does not wait on the move's device fetch: what the caller asked about is the list, which has already landed. A value typed into a focused option is
+     * committed first, because the move re-renders the option table out from under the input, and a user's own click would have committed it by moving focus.
+     */
+    if(firstController) {
+
+      this.#commitFocusedValue();
+
+      void this.#settleControllerSelection({ request: this.#beginControllerSelection({ controller: controllers[0], store }), signal, store });
+
+      return true;
+    }
+
     /* A list arrival moves a selection onto another controller only through a rename the lists proved - every other move it makes is the fall back to global - so
      * a selection that now names a different controller is one the rename carried, standing on a device list fetched from the old identity. It is refetched under
      * the new key exactly as a coordinated write's establishment refetches, through the same refetch and the cycle's own signal, and not awaited: what the caller
      * asked about is the list, which has already landed.
-     *
-     * The refetch runs only on a page whose model has loaded, the same page the establishment's refetch is limited to. A page without one has no device view to
-     * refresh: a boot still in flight owns its own device fetch, and a boot that ended before its model loaded owns the frame it left, where a clean outcome would
-     * lift a connection error over a page with nothing loaded under it.
      */
     const after = selectedControllerId(store.state);
 
-    if(modelLoaded(store.state) && (after !== null) && (after !== before)) {
+    if((after !== null) && (after !== before)) {
 
       void this.#refetchSelection({ controllerId: after, signal, store });
     }
@@ -1375,6 +1382,9 @@ export class webUiFeatureOptions {
    *     that fails after the write, a page that has no loaded model, and a page standing on the connection-error frame all re-enter, because the boot owns every
    *     one of those surfaces and a write that changed the configuration those failures came from deserves an honest re-evaluation. A consumer's verdict card
    *     mounted on a frame that re-enters is cleared by the re-entry, and the page coming up is the visible verdict.
+   *   - A refetched list that is empty establishes in place like any other, leaving the page on its global options with the empty state said in its sidebar,
+   *     and a refetched list that brings the first controller to a page that listed none moves the page onto that controller and fetches its devices, the way a
+   *     boot onto that list would have landed. The move is the page's own rather than a user's, so a takeover the plugin holds stands across it.
    *   - An in-place establishment does not invoke `onLoaded`: that hook announces a show cycle, and this is not one.
    *   - A `rename` declares that the write replaced a controller's sidebar key. It travels with its own call through the queue, and an in-place establishment
    *     carries every settled fact naming the old key onto the new one once the controller lists before and after the write prove the rename: the selection
@@ -1386,8 +1396,8 @@ export class webUiFeatureOptions {
    *     already selected it, which it has once its controller list has arrived, and on the first controller when the boot failed before that, because the
    *     selection it hands over still names the old key. Wherever it lands, the persisted category expansion stays under the old key.
    *   - A call that is a caller bug rejects before anything else happens, ahead of the queue: a composer that is not a function, a `rename` in the wrong shape,
-   *     and a call made before the first `show()` has supplied a session. First-run code, which is the only code with nothing to call this on, writes through a
-   *     session of its own.
+   *     and a call made before the first `show()` has supplied a session. First-run code runs before that `show()` and writes through the page's session all the
+   *     same, by the `commit` the shell hands its `onSubmit` hook.
    *
    * One residual is worth naming rather than closing. A host stalled longer than the teardown's bounded wait can let an abandoned commit land after a successor
    * cycle's own write and put a whole stale configuration back; that residual already exists for option edits, and with this method it can reach whatever else a
@@ -1673,14 +1683,14 @@ export class webUiFeatureOptions {
     const aborted = observedSignal.aborted;
 
     /* Every way the fetch can end other than with a usable list is a surface the boot owns: the retry view for a rejection, an expiry, a wrong-shaped answer, or
-     * a reported failure, and the no-controllers message for a plugin whose last controller this write removed. The store's reachability is read AGAIN here
-     * because a sidebar click that failed while the fetch ran has moved it to the connection-error frame, and an establishment over that frame would leave the
-     * error standing beneath a page that looks loaded.
+     * a reported failure. An empty list is a usable one - a write that removed the last controller leaves the page on its global options, established in place
+     * with the empty state in its sidebar. The store's reachability is read AGAIN here because a sidebar click that failed while the fetch ran has moved it to
+     * the connection-error frame, and an establishment over that frame would leave the error standing beneath a page that looks loaded.
      *
      * An aborted cycle is none of those things and takes none of them: its page is gone, so there is nothing to re-enter on its behalf, and the fetch it was
      * waiting on rejects on the abort rather than on any failure of the plugin's. It falls through to the staleness guard below, which answers for it.
      */
-    if(!aborted && (!listing || listing.error.length || this.#noControllersConfigured(listing.controllers) || (observedStore.state.status.kind !== "ready"))) {
+    if(!aborted && (!listing || listing.error.length || (observedStore.state.status.kind !== "ready"))) {
 
       await this.#reshow({ rename });
 
@@ -1688,14 +1698,26 @@ export class webUiFeatureOptions {
     }
 
     // Establish the model on what was written: the standing catalog (fixed for a plugin version, so handing the same reference back keeps every catalog-keyed memo
-    // warm), the list just fetched, and the session's saved options read again once the write has landed. The boundary moves only when the write changed the
-    // options set, so a controllers-only write leaves the user's revert target exactly where it was. The dispatch ends the hold on its own terms.
+    // warm), the list just fetched with its empty-list sentence, and the session's saved options read again once the write has landed. The boundary moves only
+    // when the write changed the options set, so a controllers-only write leaves the user's revert target exactly where it was. The dispatch ends the hold on its
+    // own terms. Whether the page listed no controller is read in the same turn as the dispatch, which is the turn the list it replaces stops being the page's.
     const after = platformOptions(session);
+    const firstController = observedStore.state.controllers.length === 0;
 
     if(!this.#unlessStale({ run: () => this.#establishModel({ catalog: observedStore.state.catalog, controllers: listing.controllers,
-      moveBoundary: !sameOptionsSet(before, after), options: after, rename }), signal: observedSignal })) {
+      controllersEmptyMessage: listing.emptyMessage, moveBoundary: !sameOptionsSet(before, after), options: after, rename }), signal: observedSignal })) {
 
       releaseHold();
+
+      return result;
+    }
+
+    // The list brought the first controller to a page that listed none, so the page moves onto it the way a boot onto this list would have landed, and the result
+    // is not held for the move's device fetch, on the reasoning the refetch below gives. The page had no selection to refetch, so the move is the whole follow-up.
+    if(firstController && listing.controllers.length) {
+
+      void this.#settleControllerSelection({ request: this.#beginControllerSelection({ controller: listing.controllers[0], store: observedStore }),
+        signal: observedSignal, store: observedStore });
 
       return result;
     }
@@ -1712,6 +1734,66 @@ export class webUiFeatureOptions {
     }
 
     return result;
+  }
+
+  /**
+   * Begin the page's first selection of a controller: select it, record its device fetch at the store, and fire that fetch, answering with the recorded request
+   * for `#settleControllerSelection` to land. The boot begins where it chooses its controller and settles once its model has loaded, so the device fetch overlaps
+   * the catalog read; a list that gains its first controller after the load, through a refresh or a coordinated write's establishment, runs the begin and the
+   * settle back to back. The caller hands over the controller entry rather than an id, because the boot holds the list it arrived in before the store does.
+   *
+   * The move takes a click's shape exactly: select the controller, record the fetch at the store's chokepoint, then fire it. One operation, one choreography. The
+   * selection ahead of the fetch is what carries the controller through a failure - the connection-error view hands its plugin panel the selected controller
+   * entry, so a first selection that cannot reach its controller offers the same repair surface a click that cannot reach it offers. It departs from a click in
+   * the move's origin: the page selects for itself rather than for a user, so the move is tagged as the boot's own, and the reducer knows that no one has moved
+   * away from a takeover the plugin holds - one opened from `onLoaded`, or the card that added this very controller.
+   *
+   * The sequence, not the controller, is the fetch identity, so a controller click racing this fetch resolves last-request-wins at the reducer.
+   *
+   * @param {Object} args
+   * @param {Controller} args.controller - The controller to select, as the plugin's `getControllers` hook produced it.
+   * @param {import("./webUi-featureOptions/store.mjs").FeatureOptionsStore} args.store - The store of the cycle the selection belongs to.
+   * @returns {{ controllerId: string, fetch: Promise<DeviceListResult>, seq: number }} The recorded device fetch.
+   * @private
+   */
+  #beginControllerSelection({ controller, store }) {
+
+    store.dispatch({ origin: "boot", scope: { controllerId: controller.serialNumber, kind: "controller" }, type: "scope:changed" });
+
+    return requestControllerDevices({ controller, controllerId: controller.serialNumber, getDevices: (entry) => this.#devicesFor(entry), store });
+  }
+
+  /**
+   * Land the device fetch a first selection began, and complete the selection when its outcome applied: a controller whose list carries the row its
+   * `isController` names continues to that row, read through the derivation a sidebar click reads, which is what lands both paths on one row.
+   *
+   * Every other outcome leaves the selection where a click would leave it. A list that came back empty or carries no such row rests on the controller's own
+   * view, where a notice stands in place of that view's table; a failure is the reducer's connection-error transition; and a superseded outcome leaves the
+   * selection to the fetch that superseded it. A cycle torn down or superseded while the fetch is out takes its outcome with it: the settle drops an outcome
+   * whose signal has aborted, and the completion goes through the staleness guard, so a move never writes into a page that has gone.
+   *
+   * @param {Object} args
+   * @param {{ controllerId: string, fetch: Promise<DeviceListResult>, seq: number }} args.request - The fetch `#beginControllerSelection` recorded.
+   * @param {AbortSignal} args.signal - The signal of the cycle the selection belongs to.
+   * @param {import("./webUi-featureOptions/store.mjs").FeatureOptionsStore} args.store - The store the outcome lands at.
+   * @returns {Promise<void>}
+   * @private
+   */
+  async #settleControllerSelection({ request, signal, store }) {
+
+    const applied = await settleControllerDevices({
+
+      deadlineSeconds: BOOT_AWAIT_DEADLINE_SECONDS,
+      failureGuidance: this.#config.controllerFailureGuidance,
+      request,
+      signal,
+      store
+    });
+
+    if(applied) {
+
+      this.#unlessStale({ run: () => completeControllerSelection({ controllerId: request.controllerId, store }), signal });
+    }
   }
 
   /**
@@ -1779,6 +1861,8 @@ export class webUiFeatureOptions {
    * @param {Object} args
    * @param {Object} args.catalog - The catalog the model is installed against.
    * @param {Object[]} args.controllers - The controller list this model carries.
+   * @param {string} [args.controllersEmptyMessage] - The `emptyMessage` of the controllers result the list arrived on, which the reducer keeps only while that
+   *                                                  list is empty. Absent where the result carried none, and on a page with no `getControllers` hook.
    * @param {boolean} args.moveBoundary - Whether these options become the new revert-to-saved target.
    * @param {Object[]} args.options - The configured options this model carries.
    * @param {import("./webUi-featureOptions/state.mjs").ControllerRename} [args.rename] - The rename a coordinated write declared, carried on the load for the
@@ -1786,7 +1870,7 @@ export class webUiFeatureOptions {
    *                                                                                     commit's re-entry handed it over.
    * @private
    */
-  #establishModel({ catalog, controllers, moveBoundary, options, rename = undefined }) {
+  #establishModel({ catalog, controllers, controllersEmptyMessage = undefined, moveBoundary, options, rename = undefined }) {
 
     if(moveBoundary) {
 
@@ -1798,6 +1882,7 @@ export class webUiFeatureOptions {
       catalog,
       configuredOptions: options,
       controllers,
+      controllersEmptyMessage,
       initialOptions: this.#initialOptions,
       mode: this.#config.globalOnly ? "global-only" : (this.#config.getControllers ? "controller-based" : "device-only"),
       rename,
@@ -1851,18 +1936,6 @@ export class webUiFeatureOptions {
 
       control.dispatchEvent(new Event("change", { bubbles: true }));
     }
-  }
-
-  /**
-   * Whether this plugin is controller-based and has no controllers configured - the one case that gets the helper text instead of a page.
-   *
-   * @param {Object[]} controllers - The controller list just fetched.
-   * @returns {boolean} True when a controller-based plugin's list is empty, false in every other mode and for any non-empty list.
-   * @private
-   */
-  #noControllersConfigured(controllers) {
-
-    return Boolean(this.#config.getControllers) && (controllers.length === 0);
   }
 
   /**
@@ -2515,13 +2588,14 @@ const warnIfRegionNestedUnderHidden = (id, element) => {
 
 /* Enforce the getControllers hook contract at one site, mirroring the guard `#devicesFor` applies to getDevices: a result that is not a `{ controllers, error }`
  * object raises a TypeError naming the contract, and an accepted one is handed back so a call site can validate and assign in one step. The optional display copy
- * is held to the same string requirement the device contract holds its copy to, and for the same reason: both reach the connection-error view's DOM construction,
- * which passes each text slot straight to appendChild, so a non-string would surface as a corrupted render rather than as a mistake anyone could locate.
+ * is held to the same string requirement the device contract holds its copy to, and for the same reason: it reaches DOM construction - the connection-error
+ * view's text slots, and the notice under the sidebar's controllers heading - which passes each one straight to appendChild, so a non-string would surface as a
+ * corrupted render rather than as a mistake anyone could locate.
  *
- * The failure this catches is a hook that resolves a bare controller array. Unchecked, the array carries no `error` and no `controllers`, so the page reads it as "this
- * plugin has no controllers configured" and says so - advice that sends the user to a settings page which is already correct. Naming the contract instead puts the
- * mistake where it happened rather than three screens later, wearing a message about something else. One message states the whole shape rather than one per field,
- * on the reasoning `#devicesFor` gives: a plugin reading it wants the shape it should have resolved, not a fragment of it.
+ * The failure this catches is a hook that resolves a bare controller array. Unchecked, the array carries neither member the page reads, and an answer read as no
+ * controllers at all would tell the user that none is configured yet - advice that sends them to a settings page which is already correct. Naming the contract
+ * instead puts the mistake where it happened rather than three screens later, wearing a message about something else. One message states the whole shape rather
+ * than one per field, on the reasoning `#devicesFor` gives: a plugin reading it wants the shape it should have resolved, not a fragment of it.
  *
  * Each caller routes the failure differently, and deliberately: show() catches it into the connection-error view, because no plugin code is on its call stack to
  * receive it, while refreshControllers lets it reach the caller that asked for the refresh and wrote the hook. A wrong shape answering a coordinated write's own
@@ -2530,12 +2604,12 @@ const warnIfRegionNestedUnderHidden = (id, element) => {
  */
 const assertControllerListResult = (result) => {
 
-  const optionalCopy = [ result?.guidance, result?.headline ];
+  const optionalCopy = [ result?.emptyMessage, result?.guidance, result?.headline ];
 
   if(!result || !Array.isArray(result.controllers) || (typeof result.error !== "string") ||
     optionalCopy.some((copy) => (copy !== undefined) && (typeof copy !== "string"))) {
 
-    throw new TypeError("getControllers must resolve to { controllers, error } with optional string guidance and headline.");
+    throw new TypeError("getControllers must resolve to { controllers, error } with optional string emptyMessage, guidance, and headline.");
   }
 
   return result;
@@ -2575,18 +2649,4 @@ const sameOptionsSet = (a, b) => {
   }
 
   return new Set(a).symmetricDifference(new Set(b)).size === 0;
-};
-
-// Show the "no controllers configured" helper text when the plugin operates in controller-based mode but getControllers returns an empty result. Replaces the
-// header content in place; the orchestrator returns from show() without dispatching model:loaded, so the already-mounted views stay on their loading placeholder and
-// never render over this message.
-const showNoControllersMessage = () => {
-
-  const headerInfo = document.getElementById("headerInfo");
-
-  if(headerInfo) {
-
-    headerInfo.textContent = "Please configure a controller to access in the main settings tab before configuring feature options.";
-    headerInfo.style.display = "";
-  }
 };

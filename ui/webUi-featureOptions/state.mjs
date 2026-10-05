@@ -32,10 +32,11 @@ import { DeadlineExpiredError } from "../webUi-liveness.mjs";
  *     becomes ready; any other status keeps its reference, so an establishment over a standing page cannot take the frame from the view that owns it. Every fact
  *     naming a controller is reconciled against the list the load carries, so a controller that left it takes the selection, the loaded device list, and the
  *     pending fetch that named it along - and a {@link ControllerRename} the load declares, once the two lists prove it, first carries the settled facts that
- *     named the old key onto the new one.
+ *     named the old key onto the new one. A load whose list is empty also records the sentence its controllers result supplied for that state.
  *   - `controllers:loaded` - a controller list arriving without a model, dispatched through the facade's public `refreshControllers()` entry point; the retry path
  *     re-runs the full `model:loaded`. It answers for the facts that name a controller exactly as `model:loaded` does, declared rename included, because every
- *     list arrival runs the one reconciliation, and it leaves every other slice where it was.
+ *     list arrival runs the one reconciliation, and it clears the empty-list sentence, which describes no list this action installs. It leaves every other slice
+ *     where it was.
  *   - `devices:requested` - a device fetch is beginning: mints the next fetch sequence into state and records it as the pending request, so the outcome that
  *     eventually answers it can be told apart from a superseded one.
  *   - `devices:loaded` - a device fetch's outcome - its device list and connection error - stamped with the sequence its request minted. Applies only when it answers
@@ -44,8 +45,9 @@ import { DeadlineExpiredError } from "../webUi-liveness.mjs";
  *     field where it named any.
  *     A clean outcome makes the reverse trip, returning a standing connection-error status to ready - the only route back short of a full page re-entry. A clean outcome
  *     that carried no devices and an `emptyMessage` also records that message, which is how a plugin says its controller is reachable with nothing to list.
- *   - `scope:changed` - selection pointer moved (global / controller / device), tagged with the `origin` of the move: `user` for a sidebar click, `boot` for the page
- *     cycle's own first selection, and `continuation` for a selected controller carried onto the row that stands for it. An armed row stands down on every move. A
+ *   - `scope:changed` - selection pointer moved (global / controller / device), tagged with the `origin` of the move: `user` for a sidebar click, `boot` for the page's
+ *     own first selection of a controller, made by the boot or when a list that held none gains one, and `continuation` for a selected controller carried onto the
+ *     row that stands for it. An armed row stands down on every move. A
  *     plugin's hold on the main-content area belongs to the selection the user chose, so only a `user` move ends it.
  *   - `takeover:started` - a plugin took the page's main-content area: the framework's own regions step aside and the plugin's node stands in their place.
  *   - `takeover:released` - the plugin gave the main-content area back, and the framework's regions return to it - once the page has been revealed.
@@ -178,6 +180,10 @@ import { DeadlineExpiredError } from "../webUi-liveness.mjs";
  * @property {Catalog} catalog - Plugin-provided immutable configuration: catalog index + validators.
  * @property {readonly string[]} configuredOptions - The canonical user-state array. Mutations replace it via the pure transforms from featureOptions.ts.
  * @property {readonly Controller[]} controllers - Controllers list (empty in device-only mode or before resolution).
+ * @property {string | null} controllersEmptyMessage - The plugin's own sentence for a controller list with nothing in it, or null when the list holds a controller
+ *   or the plugin supplied none, where the sidebar reads {@link CONTROLLERS_EMPTY_NOTICE} instead. Page state like `devicesEmptyMessage`: the `model:loaded` that
+ *   installs an empty list sets it from the result that list arrived on, every other list arrival nulls it, and a fresh store starts without one, so a re-entered
+ *   page reads its own boot's answer and never inherits one.
  * @property {readonly Device[]} devices - Devices list for the active controller (or the cached-accessories list in device-only mode).
  * @property {number} devicesAppliedSeq - The sequence of the device-fetch outcome currently applied. The reducer's own verdict fact: a dispatcher reads it back to
  *   learn whether its outcome (the one carrying this sequence) is the one that landed, gating its follow-up work on one integer comparison rather than on the
@@ -395,6 +401,13 @@ export const connectionFailureKind = (err) => ((err instanceof DeadlineExpiredEr
 export const controllerNoticeCopy = ({ devicesListed }) => devicesListed ?
   "Select a device to configure its options." : "This controller has no devices to configure.";
 
+/**
+ * The sentence the sidebar shows under the controllers heading when a controller-based page lists no controller and the plugin's controllers result supplied no
+ * `emptyMessage` of its own. The page's global options stay editable in that state, so the sentence names what is missing and where it is added, and asks nothing
+ * else of the user.
+ */
+export const CONTROLLERS_EMPTY_NOTICE = "No controllers are configured yet. Add one in the main settings tab.";
+
 // The selection a fresh store starts from when it replaces another: a controller selection as it stood, a device selection as its controller's - the device list
 // it was made from is not inherited - and global for anything that names no controller, which is device-only mode's device selection as much as global itself.
 const inheritedScope = (scope) => {
@@ -447,6 +460,7 @@ export const initialState = (replaced = undefined) => {
     catalog: EMPTY_CATALOG,
     configuredOptions: empty,
     controllers: replaced?.controllers ?? [],
+    controllersEmptyMessage: null,
     devices: [],
     devicesAppliedSeq: 0,
     devicesControllerId: null,
@@ -686,6 +700,9 @@ export const reducer = (state, action) => {
        *
        * The write lifecycle returns to idle unconditionally: this load installs a fresh anchor, so whatever that lifecycle held describes an anchor that no longer
        * exists.
+       *
+       * The empty-list sentence is recorded under the one condition that makes it meaningful, the test the device outcome applies to its own: a list with nothing
+       * in it, from a result that supplied a sentence for that. Every other load writes null, so the field always describes the list this load installs.
        */
       const loaded = {
 
@@ -694,6 +711,7 @@ export const reducer = (state, action) => {
         catalog: action.catalog,
         configuredOptions: action.configuredOptions,
         controllers: action.controllers,
+        controllersEmptyMessage: (!action.controllers.length && action.controllersEmptyMessage) ? action.controllersEmptyMessage : null,
         initialOptions: action.initialOptions ?? action.configuredOptions,
         mode: action.mode,
         stagedAnchor: action.configuredOptions,
@@ -708,9 +726,10 @@ export const reducer = (state, action) => {
 
       // A controller list arriving without a model - the facade's `refreshControllers()` path, which the nav view rebuilds the sidebar on. It answers for the facts
       // that name a controller exactly as a model load does, declared rename included, through the one reconciliation every list arrival shares, so a list
-      // refreshed under a standing page can never leave a selection, a device list, or a pending fetch naming a key no sidebar row carries. Everything else keeps
-      // its reference.
-      return reconcileControllerFacts(state, { ...state, controllers: action.controllers }, action.rename);
+      // refreshed under a standing page can never leave a selection, a device list, or a pending fetch naming a key no sidebar row carries. The empty-list sentence
+      // is cleared, because the page dispatches this action for a list with controllers in it, which that sentence never describes. Everything else keeps its
+      // reference.
+      return reconcileControllerFacts(state, { ...state, controllers: action.controllers, controllersEmptyMessage: null }, action.rename);
     }
 
     case "devices:requested": {
@@ -795,10 +814,11 @@ export const reducer = (state, action) => {
        *
        * The main-content area belongs to the selection the user chose: a plugin holding it was showing the user something about where they were, so the user moving
        * the selection gives the area back exactly as an armed row stands down. Every plugin that takes the area over needs that rule, and owning it here is what
-       * spares each of them from writing it again. Only a move the user made does this, and `origin` is what says who made it. The boot's own first selection and a
-       * continuation onto a selected controller's row are the framework settling where the page rests rather than the user going somewhere else - and a plugin's
-       * `onLoaded` hook runs between the boot's selection and its continuation, so ending a takeover on either would close a card the plugin opened before anyone
-       * moved at all.
+       * spares each of them from writing it again. Only a move the user made does this, and `origin` is what says who made it. The page's own first selection of a
+       * controller and a continuation onto a selected controller's row are the framework settling where the page rests rather than the user going somewhere else.
+       * That first selection is the boot's, or the one a page makes when a list that held no controller gains one, and a plugin's card can be standing at each:
+       * `onLoaded` runs between the boot's selection and its continuation, and a card that adds the first controller is still open when the page moves onto it.
+       * Ending a takeover on a move the framework made would close a card the plugin opened before anyone moved at all.
        */
       return { ...state, armedOption: null, scope: action.scope, takeover: (action.origin === "user") ? false : state.takeover };
     }

@@ -11,14 +11,15 @@ import { effect } from "../store.mjs";
  * Mount the priority-chain header view.
  *
  * The header reads as the literal hierarchy users see in the UI: "Global options -> Controller options -> Device options," with the controller hop omitted in
- * device-only mode. Bold lead-in text frames it as a precedence statement; color-coded labels (warning / success / info) match the same scope-color convention the
- * row labels use, so users have one consistent visual lens for "where does a setting come from."
+ * device-only mode and on a controller-based page whose list holds no controller, where it would name a level the page has nothing at. Bold lead-in text frames
+ * it as a precedence statement; color-coded labels (warning / success / info) match the same scope-color convention the row labels use, so users have one
+ * consistent visual lens for "where does a setting come from."
  *
- * Runs on `model:loaded`, `connection:error`, and `devices:loaded`; other dispatches never invoke it because they are not subscribed, and a subscribed dispatch
- * that leaves the status reference unchanged skips via the memo below. `fn` returns early inside two `status.kind` checks: the loading check only defers
- * rendering until `model:loaded` fires, while the connection-error check is the only one that cedes the header's content to another view. In practice the header
- * content renders once, at `model:loaded`. The no-controllers scenario never dispatches `model:loaded` at all, so the loading-status check is what keeps this
- * view from rendering.
+ * Runs on `model:loaded`, `connection:error`, `controllers:loaded`, and `devices:loaded`; other dispatches never invoke it because they are not subscribed, and a
+ * subscribed dispatch that leaves the status reference and whether the controller list is empty where they were skips via the memo below. `fn` returns early
+ * inside two `status.kind` checks: the loading check only defers rendering until `model:loaded` fires, while the connection-error check is the only one that
+ * cedes the header's content to another view. In practice the header content renders at `model:loaded`, and again whenever a controller-based page's list
+ * gains its first controller or loses its last one.
  *
  * @param {Object} args
  * @param {HTMLElement} args.root - The `#headerInfo` container.
@@ -27,28 +28,33 @@ import { effect } from "../store.mjs";
  */
 export const mountHeaderView = ({ root, signal, store }) => {
 
-  // The last status object this view acted on. The reducer mints a new status object only on a genuine transition, so a `devices:loaded` that did not move the status
-  // (a successful fetch, or a dropped stale outcome that returns the identical state) leaves this reference unchanged and the effect below skips - the precedence
-  // chain is never rebuilt for a device-list change it does not depend on.
+  // The last status object this view acted on, and whether the controller list it acted on held a controller. The reducer mints a new status object only on a
+  // genuine transition, so a `devices:loaded` that did not move the status (a successful fetch, or a dropped stale outcome that returns the identical state)
+  // leaves this reference unchanged, and a list arrival that keeps a list populated leaves the second fact where it was - the precedence chain is never rebuilt
+  // for a change it does not depend on.
   let lastStatus;
+  let lastListed;
 
   effect({
 
-    events: [ "connection:error", "devices:loaded", "model:loaded" ],
+    events: [ "connection:error", "controllers:loaded", "devices:loaded", "model:loaded" ],
     fn: () => {
 
-      const { mode, status } = store.state;
+      const { controllers, mode, status } = store.state;
+      const listed = controllers.length > 0;
 
-      // Skip when the status is reference-identical to the one already acted on: this view renders from `mode` and `status`, and `mode` is fixed after model:loaded,
-      // so an unchanged status means nothing to redo. The subscription includes `devices:loaded` because the reducer folds its fetch-failure transition into that
-      // action - without the subscription the header would never yield to the connection-error view on a failed fetch - and this guard keeps every successful or
-      // dropped device outcome from needlessly rebuilding the chain.
-      if(status === lastStatus) {
+      // Skip when the status is reference-identical to the one already acted on and the list is as empty or as populated as it was: this view renders from `mode`,
+      // `status`, and whether a controller is listed, and `mode` is fixed after model:loaded, so neither moving means nothing to redo. The subscription includes
+      // `devices:loaded` because the reducer folds its fetch-failure transition into that action - without the subscription the header would never yield to the
+      // connection-error view on a failed fetch - and `controllers:loaded` because a refresh is one way a page's list gains its first controller. This guard keeps
+      // every successful or dropped device outcome, and every arrival that leaves a list populated, from needlessly rebuilding the chain.
+      if((status === lastStatus) && (listed === lastListed)) {
 
         return;
       }
 
       lastStatus = status;
+      lastListed = listed;
 
       // Yield to the connection-error view when an error is active - that view owns the header content in error states.
       if(status.kind === "connection-error") {
@@ -65,13 +71,12 @@ export const mountHeaderView = ({ root, signal, store }) => {
       }
 
       // Style the header text. The view never reveals its own region: the orchestrator owns region visibility, revealing every populated region together via
-      // revealRegions on the success path and the #headerInfo reveal on the no-controllers path. On the connection-error path the connection-error view owns the
-      // #headerInfo reveal (it alone has the error content to show). Either way the populated UI appears in one coordinated reveal rather than region-by-region as
-      // each view mounts.
+      // revealRegions at the end of a load. On the connection-error path the connection-error view owns the #headerInfo reveal (it alone has the error content to
+      // show). Either way the populated UI appears in one coordinated reveal rather than region-by-region as each view mounts.
       root.style.fontWeight = "bold";
 
-      // Build the precedence chain via DOM nodes rather than innerHTML. The controller hop is conditional, so we assemble children imperatively before handing
-      // them to replaceChildren in one mutation.
+      // Build the precedence chain via DOM nodes rather than innerHTML. The controller hop is conditional - a controller-based page that lists a controller - so we
+      // assemble children imperatively before handing them to replaceChildren in one mutation.
       const children = [
 
         "Feature options are applied in prioritized order, from global to device-specific options:",
@@ -80,7 +85,7 @@ export const mountHeaderView = ({ root, signal, store }) => {
         " (lowest priority) -> "
       ];
 
-      if(mode === "controller-based") {
+      if((mode === "controller-based") && listed) {
 
         children.push(createElement("i", { classList: ["text-success"] }, ["Controller options"]), " -> ");
       }

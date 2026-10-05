@@ -7,12 +7,12 @@
  */
 "use strict";
 
-import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, seedBootstrapProbeShim,
-  waitFor } from "./ui.helpers.mjs";
+import { CONTROLLERS_EMPTY_NOTICE, controllerNoticeCopy } from "./webUi-featureOptions/state.mjs";
+import { clickCategoryHeader, createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, readActiveSerial,
+  seedBootstrapProbeShim, waitFor } from "./ui.helpers.mjs";
 import { describe, mock, test } from "node:test";
 import { DeadlineExpiredError } from "./webUi-liveness.mjs";
 import assert from "node:assert/strict";
-import { controllerNoticeCopy } from "./webUi-featureOptions/state.mjs";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
 
@@ -787,8 +787,7 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
     (await waitFor(() => controllerLink("CTRL-B"), { message: "the nav must mount the CTRL-B link while the initial fetch is gated" })).click();
     await flush();
 
-    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-B",
-      "precondition: the click carried its selection onto CTRL-B's own row");
+    assert.equal(readActiveSerial(skeleton.devicesContainer), "CTRL-B", "precondition: the click carried its selection onto CTRL-B's own row");
 
     initialGate.resolve();
     await showPromise;
@@ -796,8 +795,7 @@ describe("webUiFeatureOptions.show - a controller click racing the initial devic
 
     assert.equal(controllerLink("CTRL-B").classList.contains("active"), true, "the click's controller keeps the selection");
     assert.equal(controllerLink("CTRL-A").classList.contains("active"), false, "and show()'s superseded continuation writes no selection of its own over it");
-    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-B",
-      "so the selection still rests on CTRL-B's own row");
+    assert.equal(readActiveSerial(skeleton.devicesContainer), "CTRL-B", "so the selection still rests on CTRL-B's own row");
 
     orchestrator.cleanup();
   });
@@ -974,7 +972,7 @@ describe("webUiFeatureOptions - the boot window", () => {
     orchestrator.cleanup();
   });
 
-  test("an empty controller list lands on the no-controllers helper with the affordance gone", async () => {
+  test("an empty controller list reveals the loaded page with the affordance gone and every region shown, a plugin's own among them", async () => {
 
     using dom = createTestDom();
 
@@ -982,13 +980,22 @@ describe("webUiFeatureOptions - the boot window", () => {
 
     using homebridgeInstall = homebridgeGuard;
 
+    // Attached before show(), the way a plugin's own chrome is - the column carrying its Add Controller control, which an empty list is the very reason to reach.
+    const { region } = attachPluginRegion();
     const orchestrator = new webUiFeatureOptions({ getControllers: async () => ({ controllers: [], error: "" }) });
 
     await orchestrator.show(await openTestSession());
     await flush();
 
-    assert.match(skeleton.headerInfo.textContent, /Please configure a controller/, "precondition: the empty list rendered the no-controllers helper");
-    assert.ok(bootAffordanceIn() === null, "the helper is a terminal state too - a page that is waiting for nothing must not say it is loading");
+    assert.ok(skeleton.controllersContainer.querySelector(".fo-controllers-notice"), "precondition: the empty list rendered its notice in the sidebar");
+    assert.ok(bootAffordanceIn() === null, "the loaded page takes the frame back - a page that is waiting for nothing must not say it is loading");
+
+    for(const id of [ "deviceStatsContainer", "headerInfo", "optionsContainer", "search", "sidebar" ]) {
+
+      assert.ok(isRegionVisible(id), "the region " + id + " is revealed with the page");
+    }
+
+    assert.equal(region.style.display, "", "and so is the plugin's own region, where its control to add a controller lives");
 
     orchestrator.cleanup();
   });
@@ -1549,13 +1556,12 @@ describe("webUiFeatureOptions.getHomebridgeDevices", () => {
   });
 });
 
-describe("webUiFeatureOptions - no-controllers short circuit", () => {
+describe("webUiFeatureOptions - an empty controller list", () => {
 
-  test("when getControllers is provided and returns empty, show() displays the no-controllers message and hides the spinner", async () => {
+  test("show() loads the page on its global options, says so under the controllers heading, asks for no devices, and announces the load", async () => {
 
-    // Controller-mode plugins cannot display any options without at least one controller - the error path must surface a message, hide the spinner, and NOT try to
-    // render a sidebar. We verify the orchestrator routes to that path when getControllers returns []. The sidebar region will contain a message element rather than
-    // controller / device links.
+    // A plugin that discovers its controllers starts here, and so does one whose user removed the last controller: the page is a loaded one with no controller
+    // yet, editable at global scope, and every region is up so the plugin's own control to add a controller is reachable.
     using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
@@ -1568,26 +1574,129 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     seedBootstrapProbeShim();
 
+    const deviceCalls = [];
+    let loaded = 0;
     const orchestrator = new webUiFeatureOptions({
 
-      getControllers: async () => ({ controllers: [], error: "" })
+      getControllers: async () => ({ controllers: [], error: "" }),
+      getDevices: async (controller) => {
+
+        deviceCalls.push(controller);
+
+        return { devices: [], error: "" };
+      },
+      onLoaded: () => { loaded += 1; }
     });
 
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // No config table rows and no sidebar nav links - the error path short-circuited before any rendering.
-    assert.equal(skeleton.configTable.querySelectorAll("details[data-category]").length, 0,
-      "the no-controllers path must not render any category tables");
+    const categories = [...skeleton.configTable.querySelectorAll("details[data-category]")].map((entry) => entry.getAttribute("data-category"));
+
+    assert.deepEqual(categories, [ "Motion", "Audio" ], "the model loaded, so the global options render in the catalog's order");
+    assert.equal(skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true, "and the page rests on global");
+    assert.equal(skeleton.controllersContainer.querySelector("h6.nav-header")?.textContent, "Controllers", "the controllers heading renders over the empty list");
+    assert.equal(skeleton.controllersContainer.querySelector(".fo-controllers-notice")?.textContent, CONTROLLERS_EMPTY_NOTICE, "with the page's own sentence beneath it");
+    assert.doesNotMatch(skeleton.headerInfo.textContent, /Controller options/, "the header names no controller level while there is no controller");
+    assert.deepEqual(deviceCalls, [], "the plugin's device hook is never asked about a controller that does not exist");
+    assert.equal(loaded, 1, "and the load is announced like any other");
 
     orchestrator.cleanup();
   });
 
-  test("a getControllers hook that reports a connection failure lands on the connection-error view, never the no-controllers message", async () => {
+  test("a string emptyMessage on the result is the sentence the sidebar shows", async () => {
 
-    // The two outcomes share an empty controller list and #headerInfo, and they are the whole reason the hook carries an error alongside its list: an unreachable
-    // controller told to "configure a controller in the main settings tab" sends the user to a settings page that is already correct. The reported failure must
-    // therefore reach the retry affordance the thrown-hook path already lands on.
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const sentence = "Gateways appear here once discovery finishes.";
+    const orchestrator = new webUiFeatureOptions({ getControllers: async () => ({ controllers: [], emptyMessage: sentence, error: "" }) });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.controllersContainer.querySelector(".fo-controllers-notice")?.textContent, sentence, "the plugin's words replace the page's own");
+
+    orchestrator.cleanup();
+  });
+
+  test("a non-string emptyMessage lands the contract's own message on the retry view", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions({ getControllers: async () => ({ controllers: [], emptyMessage: 42, error: "" }) });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent,
+      "getControllers must resolve to { controllers, error } with optional string emptyMessage, guidance, and headline.",
+      "the sentence reaches the sidebar's DOM construction, so a value that is not text is refused at the boundary and named");
+    assert.ok(skeleton.controllersContainer.querySelector(".fo-controllers-notice") === null, "and no notice renders from it");
+
+    orchestrator.cleanup();
+  });
+
+  test("a result reporting a failure beside a list of controllers lands on the connection-error view, with no sidebar built from that list", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+
+    using homebridgeInstall = installHomebridge(createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    }));
+
+    seedBootstrapProbeShim();
+
+    const deviceCalls = [];
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: async () => ({ controllers: [{ name: "Hub A", serialNumber: "CTRL-A" }], error: "Hub B did not answer." }),
+      getDevices: async (controller) => {
+
+        deviceCalls.push(controller);
+
+        return { devices: [], error: "" };
+      }
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, "Hub B did not answer.", "the reported failure is what the retry view names");
+    assert.equal(skeleton.controllersContainer.querySelectorAll(".nav-link").length, 0, "the list that came with it builds no sidebar");
+    assert.deepEqual(deviceCalls, [], "and no controller is selected out of it");
+
+    orchestrator.cleanup();
+  });
+
+  test("a getControllers hook that reports a connection failure lands on the connection-error view, never the empty-list notice", async () => {
+
+    // The two outcomes share an empty controller list, and they are the whole reason the hook carries an error alongside its list: an unreachable controller told
+    // that no controller is configured yet sends the user to a settings page that is already correct. The reported failure must therefore reach the retry
+    // affordance the thrown-hook path already lands on.
     using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
@@ -1614,8 +1723,8 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
     assert.equal(skeleton.headerInfo.querySelector("code")?.textContent, "Connection refused: 192.0.2.1:443",
       "the message the hook reported must render as the failure detail");
     assert.match(skeleton.headerInfo.textContent, /Unable to retrieve the controller list\./, "the controllers site's failure headline must render");
-    assert.doesNotMatch(skeleton.headerInfo.textContent, /Please configure a controller/,
-      "the no-controllers helper text must be unreachable when the hook reported a connection failure");
+    assert.ok(skeleton.controllersContainer.querySelector(".fo-controllers-notice") === null,
+      "the empty-list notice must be unreachable when the hook reported a connection failure");
     assert.equal(skeleton.configTable.querySelectorAll("details[data-category]").length, 0, "a reported controller failure must not render any category tables");
     assert.equal(fake.observed.toasts.length, toastsBefore, "the failure surfaces inline in the connection-error view, not as a toast");
 
@@ -1761,8 +1870,8 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     /* The hook reports a failure AND hands back a list - the partial result a multi-controller plugin produces when it reaches some controllers and not others. The
      * list is deliberately non-empty and longer than the rendered one, because that is the only shape where the error channel is observable: an error arriving with
-     * an empty list would leave the view standing anyway, through the no-controllers rule that predates this contract. A reported failure is authoritative over
-     * whatever list came back alongside it, so nothing here reaches the store.
+     * an empty list would leave the view standing anyway, through the rule that a refresh answering an empty list changes nothing. A reported failure is
+     * authoritative over whatever list came back alongside it, so nothing here reaches the store.
      */
     result = { controllers: [ { name: "Hub A", serialNumber: "CTRL-A" }, { name: "Hub B", serialNumber: "CTRL-B" } ], error: "the controller went away" };
 
@@ -1779,9 +1888,9 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
   test("a hook still on the bare-array contract lands show() on the connection-error view, naming the contract", async () => {
 
-    // The case of a plugin still on the bare-array contract. Such an array carries no error and no controllers, so without the guard it would read as "this plugin
-    // has no controllers configured" - the one message this whole channel exists to keep off a failure it does not describe. show() has no plugin code on its call
-    // stack to hand the TypeError to, so it lands where every other boot failure lands.
+    // The case of a plugin still on the bare-array contract. Such an array carries no error and no controllers, so without the guard it could read as a plugin
+    // with no controller configured yet - the one message this whole channel exists to keep off a failure it does not describe. show() has no plugin code on its
+    // call stack to hand the TypeError to, so it lands where every other boot failure lands.
     using dom = createTestDom();
 
     const skeleton = createSkeletonFeatureOptionsDom();
@@ -1804,9 +1913,10 @@ describe("webUiFeatureOptions - no-controllers short circuit", () => {
 
     assert.ok(skeleton.headerInfo.querySelector("button.btn-warning"), "a wrong-shaped result must render the connection-error view's retry affordance");
     assert.equal(skeleton.headerInfo.querySelector("code")?.textContent,
-      "getControllers must resolve to { controllers, error } with optional string guidance and headline.", "the failure detail must name the contract the hook broke");
-    assert.doesNotMatch(skeleton.headerInfo.textContent, /Please configure a controller/,
-      "the no-controllers helper text must be unreachable for a hook that never answered the question");
+      "getControllers must resolve to { controllers, error } with optional string emptyMessage, guidance, and headline.",
+      "the failure detail must name the contract the hook broke");
+    assert.ok(skeleton.controllersContainer.querySelector(".fo-controllers-notice") === null,
+      "the empty-list notice must be unreachable for a hook that never answered the question");
 
     orchestrator.cleanup();
   });
@@ -2355,7 +2465,7 @@ describe("webUiFeatureOptions - the boot selects its initial controller", () => 
     await orchestrator.show(await openTestSession());
     await flush();
 
-    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A",
+    assert.equal(readActiveSerial(skeleton.devicesContainer), "CTRL-A",
       "the boot's active selection is the controller-as-device row the plugin names, not the list's first row");
 
     orchestrator.cleanup();
@@ -4698,7 +4808,8 @@ describe("webUiFeatureOptions.refreshControllers", () => {
   // set, and it re-syncs the session then re-invokes getControllers, dispatching controllers:loaded so the nav sidebar repaints and every fact naming a controller is
   // reconciled against the new list. These tests prove its contract - the re-synced config reaches the hook and a non-empty list transitions the sidebar (resolves
   // true) and reconciles the selection; a null, empty, sync-failure, device-only, or pre-show() call each leaves the store untouched and resolves false; a malformed
-  // rename rejects. The caller owns the no-controllers messaging, and a sync failure never tears the working view down as show() does.
+  // rename rejects. A list that brings the first controller to a loaded page with none moves the page onto it, a populated page is reconciled and never moved, and
+  // a sync failure never tears the working view down as show() does.
 
   test("re-syncs the config, re-invokes getControllers, and repaints the sidebar with the new list (resolves true)", async () => {
 
@@ -4816,7 +4927,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     await orchestrator.show(await openTestSession());
     await flush();
 
-    // An empty list is the no-controllers case: like show()-time, it bypasses the store rather than repainting an empty sidebar, and the caller surfaces its own copy.
+    // An empty answer over a populated page is the one a discovering plugin gives for a moment, so it bypasses the store rather than repainting an empty sidebar.
     controllersToReturn = [];
 
     const result = await orchestrator.refreshControllers();
@@ -4972,8 +5083,7 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     await orchestrator.show(await openTestSession());
     await flush();
 
-    assert.equal(skeleton.controllersContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A",
-      "precondition: the boot selected controller A");
+    assert.equal(readActiveSerial(skeleton.controllersContainer), "CTRL-A", "precondition: the boot selected controller A");
     assert.ok(skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-CAM']"), "precondition: and its devices are listed");
 
     // The plugin removed controller A through its own affordance and declares no rename, so the refreshed list reads as exactly that: a departure.
@@ -5038,6 +5148,317 @@ describe("webUiFeatureOptions.refreshControllers", () => {
     assert.equal(calls, callsBefore, "the refusal comes before the hook is asked for anything");
 
     orchestrator.cleanup();
+  });
+});
+
+describe("webUiFeatureOptions.refreshControllers - a list that brings the first controller", () => {
+
+  const HUB_A = { name: "Hub A", serialNumber: "CTRL-A" };
+  const HUB_B = { name: "Hub B", serialNumber: "CTRL-B" };
+
+  const noticeIn = (skeleton) => skeleton.controllersContainer.querySelector(".fo-controllers-notice");
+
+  /* A controller-based page whose plugin answers with whatever `listing` holds, so a row changes what the next controller fetch answers by assigning to it. Its
+   * device hook answers a controller with the controller's own row and a camera beneath it, records every controller it is asked about, and defers to
+   * `hooks.onDevices` where a row needs to hold a fetch open. `plugin` adds options of the plugin's own on top.
+   */
+  const arrangeEmptyPage = ({ options = [], plugin = {} } = {}) => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: makePluginConfig({ options }), requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+    const homebridgeGuard = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const hooks = { deviceCalls: [], onDevices: null };
+    const listing = { controllers: [], emptyMessage: undefined };
+    const state = { loaded: 0 };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: () => ({ controllers: listing.controllers, emptyMessage: listing.emptyMessage, error: "" }),
+      getDevices: (controller) => {
+
+        hooks.deviceCalls.push(controller?.serialNumber ?? null);
+
+        const answer = { devices: controller ? [ { name: controller.name, serialNumber: controller.serialNumber },
+          { name: "Front Door", serialNumber: controller.serialNumber + "-CAM" } ] : [], error: "" };
+
+        return hooks.onDevices ? hooks.onDevices({ answer, controller }) : answer;
+      },
+      onLoaded: () => { state.loaded += 1; },
+      ui: { isController: (device) => !device.serialNumber.endsWith("-CAM") },
+      ...plugin
+    });
+
+    return { fake, homebridgeGuard, hooks, listing, orchestrator, skeleton, state };
+  };
+
+  test("moves a loaded page onto the first arriving controller, loads its devices, and gains the header's controller step (resolves true)", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(noticeIn(page.skeleton), "precondition: the page loaded on an empty list");
+    assert.doesNotMatch(page.skeleton.headerInfo.textContent, /Controller options/, "precondition: and its header names no controller level");
+
+    page.listing.controllers = [ HUB_A, HUB_B ];
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the arriving list lands");
+
+    await flush();
+
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "the first arriving controller's devices are fetched, and no fetch ever named a null controller");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "the selection moved onto the first controller");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A", "and continued onto the controller's own row once its devices landed");
+    assert.ok(noticeIn(page.skeleton) === null, "the notice left with the empty list");
+    assert.match(page.skeleton.headerInfo.textContent, /Controller options/, "and the header gained its controller step");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a takeover standing across the move keeps its node and its hold on the content area", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    // The plugin's add-a-controller card, open over the page while the controller it adds arrives.
+    const card = document.createElement("div");
+    const handle = page.orchestrator.takeover(card);
+
+    page.listing.controllers = [HUB_A];
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the arriving list lands");
+
+    await flush();
+
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "the page moved onto the controller underneath the card");
+    assert.equal(handle.signal.aborted, false, "the move is the page's own rather than a user's, so the plugin keeps the area");
+    assert.ok(card.isConnected, "its node stands where the plugin put it");
+    assert.equal(isRegionVisible("optionsContainer"), false, "and the main-content regions stay stepped aside for it");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("an option edit staged before the move is written as it would be on a user's click", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.skeleton.configTable.querySelector("details[data-category='Motion'] summary").click();
+
+    const motionCheckbox = page.skeleton.configTable.querySelector("[id='row-Motion.Detect'] input[type='checkbox']");
+
+    motionCheckbox.checked = false;
+    motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    assert.equal(page.fake.observed.updatedConfigs.length, 0, "precondition: the global edit is staged inside the debounce window and not yet written");
+
+    page.listing.controllers = [HUB_A];
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the arriving list lands");
+
+    await settleStaging();
+
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "the page moved onto the controller");
+    assert.ok(page.fake.observed.updatedConfigs.at(-1)?.[0]?.options.includes("Disable.Motion.Detect"), "and the edit staged before the move reached the host");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a value typed into a focused option is committed before the move re-renders the table out from under it", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage({ options: ["Enable.Audio.Volume=50"] });
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.skeleton.configTable.querySelector("details[data-category='Audio'] summary").click();
+
+    const valueInput = page.skeleton.configTable.querySelector("[id='row-Audio.Volume'] input.fo-option-value");
+
+    assert.ok(valueInput, "precondition: the value option renders its own input at global scope");
+
+    // The user is typing when the controller arrives: the input has fired no change, so only the page's own commit of the focused control can keep the value.
+    valueInput.focus();
+    valueInput.value = "75";
+    page.listing.controllers = [HUB_A];
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the arriving list lands");
+
+    await settleStaging();
+
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "the page moved onto the controller");
+    assert.ok(page.fake.observed.updatedConfigs.at(-1)?.[0]?.options.includes("Enable.Audio.Volume=75"), "and the typed value was committed and written");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh on a populated page at global scope reconciles the list and leaves the selection where the user put it", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    page.listing.controllers = [HUB_A];
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.skeleton.controllersContainer.querySelector("[data-navigation='global']").click();
+
+    await flush();
+
+    const fetchesBefore = page.hooks.deviceCalls.length;
+
+    page.listing.controllers = [ HUB_A, HUB_B ];
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the arriving list lands");
+
+    await flush();
+
+    assert.equal(page.skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true,
+      "a user who chose Global Options stays there");
+    assert.equal(page.hooks.deviceCalls.length, fetchesBefore, "and nothing is fetched on their behalf");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh inside the boot window lands its list and moves nothing", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    // Hold the catalog read, so the boot has answered its own empty list and is waiting with no model loaded when the refresh arrives.
+    const catalog = Promise.withResolvers();
+    let catalogAsked = false;
+
+    page.fake.request = (path) => {
+
+      if(path !== "/getOptions") {
+
+        return Promise.resolve(null);
+      }
+
+      catalogAsked = true;
+
+      return catalog.promise;
+    };
+
+    const showPromise = page.orchestrator.show(await openTestSession());
+
+    await waitFor(() => catalogAsked && bootAffordanceIn(), { message: "the boot must be waiting on its catalog read" });
+    await flush();
+
+    page.listing.controllers = [HUB_A];
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the list lands under the boot");
+    assert.deepEqual(page.hooks.deviceCalls, [], "and a page with no model takes no move and fires no device fetch");
+
+    catalog.resolve(FEATURES);
+
+    await showPromise;
+    await flush();
+
+    assert.equal(page.state.loaded, 1, "precondition: the boot finished");
+    assert.deepEqual(page.hooks.deviceCalls, [], "and finished on its own answer without a device fetch");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a page superseded while the move's device fetch is out discards that fetch's outcome", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    // Hold every device fetch, so the row decides when the move's outcome and the next cycle's own outcome land, and in which order.
+    const held = [];
+
+    page.hooks.onDevices = ({ answer }) => new Promise((resolve) => held.push({ answer, resolve }));
+    page.listing.controllers = [HUB_A];
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the arriving list lands");
+    assert.equal(held.length, 1, "precondition: the move's device fetch is out");
+
+    // A plugin's own show() supersedes the cycle, and its boot lands on the same controller with a fetch of its own.
+    const showing = page.orchestrator.show(await openTestSession());
+
+    await waitFor(() => held.length === 2, { message: "the next cycle's boot must fire its own device fetch" });
+
+    // The superseded move's outcome lands first, carrying a list the live page must never show, and the live cycle's own lands after it.
+    held[0].resolve({ devices: [{ name: "Stale Door", serialNumber: "STALE-CAM" }], error: "" });
+
+    await flush();
+
+    held[1].resolve(held[1].answer);
+
+    await showing;
+    await flush();
+
+    assert.ok(page.skeleton.devicesContainer.querySelector("[data-device-serial='STALE-CAM']") === null, "the superseded cycle's outcome lands nowhere");
+    assert.ok(page.skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-CAM']"), "and the live cycle shows its own");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a re-entry over an empty list comes up the way the first boot did, with the sentence its own boot answered", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrangeEmptyPage({ plugin: { sidebar: { refresh: { onRefresh: async () => {} } } } });
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    page.listing.emptyMessage = "Discovery is still running.";
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.equal(noticeIn(page.skeleton)?.textContent, "Discovery is still running.", "precondition: the first boot shows the plugin's own sentence");
+
+    // The plugin's next answer carries no sentence, and the refresh action docked on the empty list's heading is what re-enters the page.
+    page.listing.emptyMessage = undefined;
+    page.skeleton.controllersContainer.querySelector("h6.nav-header button.fo-action").click();
+
+    await waitFor(() => page.state.loaded === 2, { message: "the re-entered boot must finish" });
+    await flush();
+
+    assert.equal(noticeIn(page.skeleton)?.textContent, CONTROLLERS_EMPTY_NOTICE, "the re-entered page reads its own boot's answer, never the one it replaced");
+    assert.deepEqual(page.hooks.deviceCalls, [], "and neither boot asked the device hook about a controller that does not exist");
+
+    page.orchestrator.cleanup();
   });
 });
 
@@ -7244,8 +7665,7 @@ describe("webUiFeatureOptions - takeover", () => {
     await orchestrator.show(await openTestSession());
     await flush();
 
-    assert.equal(skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A",
-      "precondition: the boot continued its selection onto the controller's own row");
+    assert.equal(readActiveSerial(skeleton.devicesContainer), "CTRL-A", "precondition: the boot continued its selection onto the controller's own row");
     assert.equal(handle.signal.aborted, false, "the takeover is still standing when the load completes");
     assert.ok(document.querySelector("[data-fo-takeover]"), "with its card still on the page");
     assert.deepEqual(contentDisplays(), [ "none", "none", "none" ], "and the regions it holds still stepped aside");

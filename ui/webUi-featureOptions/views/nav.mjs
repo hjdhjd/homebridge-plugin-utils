@@ -5,6 +5,7 @@
 "use strict";
 
 import { completeControllerSelection, fetchControllerDevices } from "../effects/deviceFetch.mjs";
+import { CONTROLLERS_EMPTY_NOTICE } from "../state.mjs";
 import { createElement } from "../utils.mjs";
 import { createSvgElement } from "../../webUi-svg.mjs";
 import { effect } from "../store.mjs";
@@ -20,6 +21,9 @@ import { toastError } from "../../webUi-errors.mjs";
  *     `data-device-serial=<serial>`. Clicked -> dispatch `scope:changed` with `kind: "controller"` AND fire `getDevices` for the new controller.
  *   - **Device links** (one per device, in the devices container, when devices for the active controller are loaded): `data-navigation="device"` +
  *     `data-device-serial=<serial>`. Clicked -> dispatch `scope:changed` with `kind: "device"`.
+ *
+ * In controller-based mode the controllers section's heading renders whether or not the list has rows. A list with none carries a notice under that heading in
+ * place of the links, in the plugin's own words where its controllers result supplied them and in the page's own where it did not.
  *
  * Devices group themselves by an optional `sidebarGroup` property: ungrouped devices appear first under the device-label header, then groups appear with their own
  * headers, in the order the plugin's `groupOrder` comparator decides where it supplies one and in plain string order where it does not. The reserved group name
@@ -65,7 +69,7 @@ import { toastError } from "../../webUi-errors.mjs";
  * @param {(() => Promise<void>) | undefined} args.onReenter - The orchestrator's view re-entry, run after a successful refresh so the sidebar rebuilds against the
  *        plugin's freshly-invalidated data. Composed alongside `refresh`; the view itself owns no lifecycle.
  * @param {{ label?: string, onRefresh: Function }} [args.refresh] - The plugin's refresh action, docked on the mode's primary list heading: the controllers heading
- *        where controllers exist, the top-level devices heading where they do not. Absent renders no action, and so does a mode whose primary heading is itself
+ *        in controller-based mode, the top-level devices heading in device-only mode. Absent renders no action, and so does a mode whose primary heading is itself
  *        absent - a fully-grouped device list heads its groups only.
  * @param {HTMLElement} args.rootControllers - The `#controllersContainer` element.
  * @param {HTMLElement} args.rootDevices - The `#devicesContainer` element.
@@ -193,6 +197,10 @@ const navLink = ({ content, navigation, serial }) => createElement("a", {
 // The class set every section heading wears. A heading that docks an action adds the flex classes below to it.
 const HEADER_CLASSES = [ "nav-header", "text-muted", "text-uppercase", "small", "mb-1" ];
 
+// The marker class on the notice under an empty controllers heading, named after the options view's own nothing-to-list notice, so a test or a plugin's stylesheet
+// finds the element by what it is rather than by where it sits.
+const CONTROLLERS_NOTICE_CLASS = "fo-controllers-notice";
+
 /* Build a section header. The controllers section, the ungrouped-device list, and every device group share the same header markup, so one factory is the single
  * source of that shape. A header that docks an action wraps its label in a span so the two sit as siblings on the heading row; a header without one carries its
  * label as bare text, which is the shape every section that heads nothing but a list keeps.
@@ -302,14 +310,15 @@ const refreshAction = ({ onReenter, refresh, signal }) => {
   return button;
 };
 
-// Which list heading a refresh action docks on. The controllers heading is the mode's primary list where controllers exist, and the top-level devices heading is the
-// primary one where they do not; global-only mounts no navigation at all, so it never asks. One rule in one place, read by both list builders.
+// Which list heading a refresh action docks on. The controllers heading is the primary list in controller-based mode, whether or not it heads a controller yet, and
+// the top-level devices heading is the primary one in device-only mode; global-only mounts no navigation at all, so it never asks. One rule in one place, read by
+// each list builder.
 const refreshDock = (mode) => (mode === "controller-based") ? "controllers" : "devices";
 
 // Append a labeled section to a container: an optional header followed by one rendered node per item. The header renders only when the section has at least one item,
-// so a section that heads nothing emits no header. This is the single enforcement point for the "a header labels a non-empty section" rule - it makes an orphan
-// header (a label with no items beneath it) unrepresentable regardless of which list a caller renders, which is what keeps a fully-grouped device set from showing a
-// standalone top-level header that labels nothing.
+// so a section that heads nothing emits no header. This is where the "a header labels a non-empty section" rule is enforced for every section but the controllers
+// section, which states its own exception where it is built - it makes an orphan header (a label with no items beneath it) unrepresentable for every device list a
+// caller renders, which is what keeps a fully-grouped device set from showing a standalone top-level header that labels nothing.
 const appendSection = ({ action, items, label, render, root }) => {
 
   if(!items.length) {
@@ -352,7 +361,8 @@ const globeGlyph = () => {
   return svg;
 };
 
-/* Build the controllers container: the always-present Global Options row, then - in controller-based mode - the controllers section.
+/* Build the controllers container: the always-present Global Options row, then - in controller-based mode - the controllers section, headed whether or not it
+ * lists a controller.
  *
  * Global Options is the one categorically different entry in the list - a scope among things - and it wears that distinction as a quiet leading glyph rather than as
  * a different kind of element. Row anatomy says "clickable" and the glyph says "a different kind of thing", two layers doing one job each, which is why the entry is
@@ -370,17 +380,30 @@ const buildControllersList = ({ controllerLabel, globalGlyph, mode, onReenter, r
     return;
   }
 
-  // The controllers section. In controller-based mode there is always at least one controller by the time the sidebar builds (the orchestrator shows the
-  // no-controllers message and returns before model:loaded is ever dispatched, so this effect never fires with an empty list), so the non-empty guard is
-  // belt-and-suspenders here - but routing through appendSection keeps every section under one rule rather than special-casing this one.
-  appendSection({
+  /* The controllers section is the one exception to appendSection's rule that a heading labels a non-empty section, and it is built here rather than through
+   * that helper for the reason the exception exists: its heading is where the list will be and where the plugin's refresh action docks, so a plugin that lists no
+   * controller yet still shows the place its first one will appear, and keeps the action that may bring it. With no rows, a notice stands under the heading in
+   * the plugin's own words where its controllers result supplied them and in the page's own where it did not. The message is appended as a string child, which
+   * the element helper turns into a text node, so copy a plugin supplied is displayed and never parsed as markup.
+   */
+  root.appendChild(sectionHeader({
 
     action: (refresh && (refreshDock(mode) === "controllers")) ? refreshAction({ onReenter, refresh, signal }) : undefined,
-    items: state.controllers,
-    label: controllerLabel,
-    render: (controller) => navLink({ content: [controller.name], navigation: "controller", serial: controller.serialNumber }),
-    root
-  });
+    label: controllerLabel
+  }));
+
+  if(!state.controllers.length) {
+
+    root.appendChild(createElement("div", { classList: [ CONTROLLERS_NOTICE_CLASS, "small", "text-muted", "px-3", "py-2" ] },
+      [state.controllersEmptyMessage ?? CONTROLLERS_EMPTY_NOTICE]));
+
+    return;
+  }
+
+  for(const controller of state.controllers) {
+
+    root.appendChild(navLink({ content: [controller.name], navigation: "controller", serial: controller.serialNumber }));
+  }
 };
 
 // Build the devices container. The ungrouped devices form the top-level section under the device label; each sidebarGroup forms its own section, ordered by the

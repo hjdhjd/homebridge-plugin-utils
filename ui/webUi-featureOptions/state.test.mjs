@@ -4,8 +4,8 @@
  */
 "use strict";
 
-import { connectionFailureCopy, connectionFailureKind, controllerNoticeCopy, initialState, reconciledControllerId, reducer, renameHonored,
-  settledFactsMoved } from "./state.mjs";
+import { CONTROLLERS_EMPTY_NOTICE, connectionFailureCopy, connectionFailureKind, controllerNoticeCopy, initialState, reconciledControllerId, reducer,
+  renameHonored, settledFactsMoved } from "./state.mjs";
 import { describe, test } from "node:test";
 import { DeadlineExpiredError } from "../webUi-liveness.mjs";
 import assert from "node:assert/strict";
@@ -407,6 +407,46 @@ describe("reducer - controllers:loaded", () => {
 
       assert.equal(next[field], standing[field], field + " comes back by reference");
     }
+  });
+});
+
+describe("reducer - the empty-list sentence", () => {
+
+  const SENTENCE = "Your gateways appear here once discovery finishes.";
+
+  // A controller-based model load carrying the list and the sentence its controllers result supplied, the shape the page's own establishment dispatches.
+  const loadList = (state, { controllers = [], controllersEmptyMessage = undefined } = {}) => reducer(state, {
+
+    catalog: CATALOG, configuredOptions: [], controllers, controllersEmptyMessage, mode: "controller-based", type: "model:loaded"
+  });
+
+  test("a model:loaded records the sentence only for an empty list that came with one", () => {
+
+    assert.equal(loadList(initialState(), { controllersEmptyMessage: SENTENCE }).controllersEmptyMessage, SENTENCE,
+      "an empty list beside a sentence is the one shape that records");
+    assert.equal(loadList(initialState(), { controllers: [CONTROLLER_A], controllersEmptyMessage: SENTENCE }).controllersEmptyMessage, null,
+      "a list with a controller in it is not empty, whatever sentence came along");
+    assert.equal(loadList(initialState()).controllersEmptyMessage, null, "an empty list with no sentence leaves the sidebar to the page's own");
+    assert.equal(loadList(initialState(), { controllersEmptyMessage: "" }).controllersEmptyMessage, null,
+      "an empty-string sentence says nothing, so it records nothing rather than a blank notice");
+  });
+
+  test("a later load and a list arrival each clear it, so it describes the list currently in state", () => {
+
+    const empty = loadList(initialState(), { controllersEmptyMessage: SENTENCE });
+
+    assert.equal(empty.controllersEmptyMessage, SENTENCE, "precondition: the sentence is recorded");
+    assert.equal(loadList(empty).controllersEmptyMessage, null, "a reload whose result carried no sentence clears it, so an earlier answer never lingers");
+    assert.equal(loadList(empty, { controllers: [CONTROLLER_A] }).controllersEmptyMessage, null, "and so does one that installs a controller");
+    assert.equal(reducer(empty, { controllers: [CONTROLLER_A], type: "controllers:loaded" }).controllersEmptyMessage, null,
+      "a list arriving without a model clears it along with the empty list it replaces");
+  });
+
+  test("a fresh store starts without one, and a re-entry inherits none from the page it replaces", () => {
+
+    assert.equal(initialState().controllersEmptyMessage, null, "a fresh store carries no sentence");
+    assert.equal(initialState(loadList(initialState(), { controllersEmptyMessage: SENTENCE })).controllersEmptyMessage, null,
+      "a re-entered page reads its own boot's answer rather than the one the replaced page held");
   });
 });
 
@@ -816,6 +856,16 @@ describe("controllerNoticeCopy", () => {
       "a controller that listed nothing has nothing to configure at any level");
     assert.equal(controllerNoticeCopy({ devicesListed: true }), "Select a device to configure its options.",
       "a controller that listed devices needs one of them picked, and saying it has none would be false");
+  });
+});
+
+describe("CONTROLLERS_EMPTY_NOTICE", () => {
+
+  // The one place the page's own empty-list sentence is written out, on the discipline the row above keeps: every other suite reads it through the constant, so a
+  // reworded sentence changes this row and leaves no stale copy of itself in any other assertion.
+  test("says what is missing and where it is added, on a page whose global options stay editable", () => {
+
+    assert.equal(CONTROLLERS_EMPTY_NOTICE, "No controllers are configured yet. Add one in the main settings tab.");
   });
 });
 

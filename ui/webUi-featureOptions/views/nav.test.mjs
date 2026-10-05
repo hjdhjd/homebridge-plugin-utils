@@ -4,8 +4,8 @@
  */
 "use strict";
 
+import { CONTROLLERS_EMPTY_NOTICE, initialState, reducer } from "../state.mjs";
 import { describe, test } from "node:test";
-import { initialState, reducer } from "../state.mjs";
 import { FeatureOptionsStore } from "../store.mjs";
 import assert from "node:assert/strict";
 import { buildCatalogIndex } from "../../featureOptions.js";
@@ -33,8 +33,8 @@ const DEVICES = [
 
 // The deadline the view applies to a click's device fetch. The orchestrator owns the value in production; the suite supplies its own so a hang test can name a bound it
 // can advance a mock clock past without the other tests waiting on a production-sized one.
-const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent, devices = [], failureGuidance, getDevices, globalGlyph, groupOrder,
-  isController = () => false, mode = "controller-based", onReenter, refresh } = {}) => {
+const setup = ({ controllers = CONTROLLERS, controllersEmptyMessage, deadlineSeconds = 30, deviceContent, devices = [], failureGuidance, getDevices, globalGlyph,
+  groupOrder, isController = () => false, mode = "controller-based", onReenter, refresh } = {}) => {
 
   const store = new FeatureOptionsStore({ initialState: initialState(), reducer });
   const rootControllers = document.createElement("div");
@@ -42,7 +42,7 @@ const setup = ({ controllers = CONTROLLERS, deadlineSeconds = 30, deviceContent,
   const controller = new AbortController();
 
   document.body.append(rootControllers, rootDevices);
-  store.dispatch({ catalog: CATALOG(isController), configuredOptions: [], controllers, mode, type: "model:loaded" });
+  store.dispatch({ catalog: CATALOG(isController), configuredOptions: [], controllers, controllersEmptyMessage, mode, type: "model:loaded" });
 
   if(devices.length > 0) {
 
@@ -131,6 +131,76 @@ describe("mountNavView - controllers container", () => {
   });
 });
 
+// A controller-based page whose list holds no controller still heads the place the list will be, says why it is empty, and keeps the plugin's refresh action.
+describe("mountNavView - a controller-based list with no controller", () => {
+
+  const noticeIn = (root) => root.querySelector(".fo-controllers-notice");
+
+  test("heads the empty list with the controllers heading and the page's own sentence beneath it", () => {
+
+    using dom = createTestDom();
+
+    const { rootControllers } = setup({ controllers: [] });
+    const heading = rootControllers.querySelector("h6.nav-header");
+    const notice = noticeIn(rootControllers);
+
+    assert.equal(heading?.textContent, "Controllers", "the heading renders with no rows beneath it");
+    assert.ok(heading.nextElementSibling === notice, "and the notice stands directly under it, where the rows would be");
+    assert.equal(notice.textContent, CONTROLLERS_EMPTY_NOTICE, "in the page's own words when the plugin supplied none");
+    assert.equal(notice.classList.contains("text-muted"), true, "muted, as the options view's own notice is");
+    assert.equal(rootControllers.querySelectorAll(".nav-link[data-navigation='controller']").length, 0, "and no controller link renders");
+  });
+
+  test("the plugin's own sentence stands in for the page's, as text and never as markup", () => {
+
+    using dom = createTestDom();
+
+    const sentence = "Your <b>gateways</b> appear here once discovery finishes.";
+    const { rootControllers } = setup({ controllers: [], controllersEmptyMessage: sentence });
+
+    assert.equal(noticeIn(rootControllers).textContent, sentence, "the plugin's words are what the notice says");
+    assert.ok(noticeIn(rootControllers).querySelector("b") === null, "and copy a plugin supplied is displayed rather than parsed");
+  });
+
+  test("the refresh action docks on the empty list's heading, so the plugin's refresh stays reachable", () => {
+
+    using dom = createTestDom();
+
+    const { rootControllers } = setup({ controllers: [], refresh: { label: "Refresh controllers", onRefresh: () => {} } });
+
+    assert.equal(rootControllers.querySelector("h6.nav-header button.fo-action")?.getAttribute("aria-label"), "Refresh controllers",
+      "the action docks where it docks on a populated list");
+  });
+
+  test("a list with rows carries no notice", () => {
+
+    using dom = createTestDom();
+
+    const { rootControllers } = setup({ controllersEmptyMessage: "Never shown beside rows." });
+
+    assert.ok(noticeIn(rootControllers) === null, "a populated list heads its rows and nothing else");
+  });
+
+  test("the notice goes when an arrival brings the first controller, and returns when a load empties the list", () => {
+
+    using dom = createTestDom();
+
+    const { rootControllers, store } = setup({ controllers: [] });
+
+    assert.ok(noticeIn(rootControllers), "precondition: the empty list carries its notice");
+
+    store.dispatch({ controllers: CONTROLLERS, type: "controllers:loaded" });
+
+    assert.ok(noticeIn(rootControllers) === null, "the notice is rebuilt away with the container the arriving rows fill");
+    assert.equal(rootControllers.querySelectorAll(".nav-link[data-navigation='controller']").length, 2, "and the arriving controllers render beneath the heading");
+    assert.equal(rootControllers.querySelectorAll("h6.nav-header").length, 1, "under the one heading");
+
+    store.dispatch({ catalog: CATALOG(), configuredOptions: [], controllers: [], mode: "controller-based", type: "model:loaded" });
+
+    assert.equal(noticeIn(rootControllers)?.textContent, CONTROLLERS_EMPTY_NOTICE, "a load that empties the list brings the notice back");
+  });
+});
+
 describe("mountNavView - devices container", () => {
 
   test("renders devices in order", () => {
@@ -190,8 +260,8 @@ describe("mountNavView - devices container", () => {
 
     using dom = createTestDom();
 
-    // Every device carries a sidebarGroup, so the ungrouped section is empty; the device-label header must be suppressed since a label is only ever emitted when it
-    // heads a non-empty section.
+    // Every device carries a sidebarGroup, so the ungrouped section is empty; the device-label header must be suppressed, since the device label renders only when it
+    // heads at least one ungrouped device.
     const grouped = [
 
       { ...DEVICES[0], sidebarGroup: "Cameras" },
@@ -751,7 +821,7 @@ describe("mountNavView - the heading refresh action", () => {
 
     const { rootControllers, rootDevices } = setup({ devices: DEVICES, mode: "device-only", refresh: { onRefresh: () => {} } });
 
-    assert.ok(actionIn(rootDevices), "the top-level devices heading is the primary list where there are no controllers");
+    assert.ok(actionIn(rootDevices), "the top-level devices heading is the primary list in device-only mode");
     assert.ok(actionIn(rootControllers) === null, "and the controllers container heads nothing in this mode");
   });
 

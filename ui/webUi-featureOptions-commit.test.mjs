@@ -8,9 +8,10 @@
  */
 "use strict";
 
-import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, seedBootstrapProbeShim,
+import { createFakeHomebridge, createSkeletonFeatureOptionsDom, createTestDom, installHomebridge, openTestSession, readActiveSerial, seedBootstrapProbeShim,
   waitFor } from "./ui.helpers.mjs";
 import { describe, test } from "node:test";
+import { CONTROLLERS_EMPTY_NOTICE } from "./webUi-featureOptions/state.mjs";
 import assert from "node:assert/strict";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { webUiFeatureOptions } from "./webUi-featureOptions.mjs";
@@ -455,7 +456,7 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
 
       controllers: page.skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length,
       options: [...page.orchestrator.editedConfig[0].options],
-      selected: page.skeleton.sidebar.querySelector(".nav-link.active")?.getAttribute("data-device-serial")
+      selected: readActiveSerial(page.skeleton.sidebar)
     };
     const refusal = new Error("The host refused the write.");
 
@@ -470,7 +471,7 @@ describe("webUiFeatureOptions.commitConfig - the write", () => {
     assert.equal(tableHeld(page.skeleton), false, "the hold is released");
     assert.deepEqual(page.orchestrator.editedConfig[0].options, before.options, "the model is untouched");
     assert.equal(page.skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, before.controllers, "the sidebar is untouched");
-    assert.equal(page.skeleton.sidebar.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), before.selected, "and so is the selection");
+    assert.equal(readActiveSerial(page.skeleton.sidebar), before.selected, "and so is the selection");
   });
 
   test("a save that fails answers staged, and the page is established exactly as for a committed write", async () => {
@@ -773,7 +774,7 @@ describe("webUiFeatureOptions.commitConfig - the revert target", () => {
 
 describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards", () => {
 
-  test("removing the last controller lands on the no-controllers message and still answers committed", async () => {
+  test("removing the last controller establishes the page in place on its global options and still answers committed", async () => {
 
     using dom = createTestDom();
     using page = makePage();
@@ -781,12 +782,89 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     await page.orchestrator.show(await openTestSession());
     await flush();
 
+    assert.ok(page.skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-CAM']"), "precondition: the controller's devices are listed");
+    assert.match(page.skeleton.headerInfo.textContent, /Controller options/, "precondition: and the header names the controller level");
+
+    const fetchesBefore = page.hooks.deviceCalls.length;
     const result = await page.orchestrator.commitConfig(() => ({ controllers: [] }));
 
     await flush();
 
     assert.deepEqual(result, { kind: "committed" }, "the write landed, whatever the page has to say about the configuration it produced");
-    assert.match(page.skeleton.headerInfo.textContent, /configure a controller/, "a plugin with nothing left configured gets the helper text, not an empty page");
+    assert.equal(page.state.loaded, 1, "the page was established in place rather than re-entered, so no second load was announced");
+    assert.equal(page.skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true, "the page rests on global");
+    assert.equal(page.skeleton.controllersContainer.querySelector(".fo-controllers-notice")?.textContent, CONTROLLERS_EMPTY_NOTICE,
+      "under a controllers heading that says no controller is configured yet");
+    assert.equal(page.skeleton.devicesContainer.querySelectorAll(".nav-link").length, 0, "the departed controller's devices went with it");
+    assert.doesNotMatch(page.skeleton.headerInfo.textContent, /Controller options/, "and so did the header's controller step");
+    assert.deepEqual(page.hooks.deviceCalls.slice(fetchesBefore), [], "the device hook is never asked about a controller that does not exist");
+  });
+
+  test("a write that adds the first controller establishes in place, moves onto it, and leaves a standing takeover where it is", async () => {
+
+    using dom = createTestDom();
+    using page = makePage({ config: makePluginConfig({ controllers: [] }) });
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    assert.ok(page.skeleton.controllersContainer.querySelector(".fo-controllers-notice"), "precondition: the page loaded on an empty list");
+    assert.deepEqual(page.hooks.deviceCalls, [], "precondition: and asked for no devices");
+
+    // The plugin's add-a-controller card, whose save is this write.
+    const handle = page.orchestrator.takeover(document.createElement("div"));
+    const result = await page.orchestrator.commitConfig((platform) => ({ controllers: [ ...platform.controllers, CONTROLLER_A ] }));
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "committed" });
+    assert.equal(page.state.loaded, 1, "the page was established in place rather than re-entered");
+    assert.deepEqual(page.hooks.deviceCalls, ["CTRL-A"], "the page moved onto the first controller and fetched its devices");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "the controller is selected");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A", "and the selection continued onto its own row");
+    assert.match(page.skeleton.headerInfo.textContent, /Controller options/, "the header gained its controller step");
+    assert.equal(handle.signal.aborted, false, "and the card that added the controller still holds the area, for the plugin to release");
+  });
+
+  test("a write on a page with no controller that adds none establishes in place and moves nothing", async () => {
+
+    using dom = createTestDom();
+    using page = makePage({ config: makePluginConfig({ controllers: [] }) });
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    const result = await page.orchestrator.commitConfig(() => ({ options: ["Disable.Motion.Detect"] }));
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "committed" });
+    assert.equal(page.state.loaded, 1, "the page was established in place rather than re-entered");
+    assert.deepEqual(page.hooks.deviceCalls, [], "and with no controller to move onto, no device was asked for");
+    assert.equal(page.skeleton.controllersContainer.querySelector(".fo-controllers-notice")?.textContent, CONTROLLERS_EMPTY_NOTICE, "the empty state still stands");
+  });
+
+  test("a write on a populated page at global scope leaves the selection where the user put it", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    page.skeleton.controllersContainer.querySelector("[data-navigation='global']").click();
+
+    await flush();
+
+    const fetchesBefore = page.hooks.deviceCalls.length;
+    const result = await page.orchestrator.commitConfig(() => ({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }));
+
+    await flush();
+
+    assert.deepEqual(result, { kind: "committed" });
+    assert.equal(page.skeleton.controllersContainer.querySelector("[data-navigation='global']").classList.contains("active"), true,
+      "a user who chose Global Options stays there");
+    assert.deepEqual(page.hooks.deviceCalls.slice(fetchesBefore), [], "and nothing is fetched on their behalf");
   });
 
   test("removing the selected controller returns the selection to global and drops that controller's late device outcome", async () => {
@@ -797,7 +875,7 @@ describe("webUiFeatureOptions.commitConfig - what the page looks like afterwards
     await page.orchestrator.show(await openTestSession());
     await flush();
 
-    assert.equal(page.skeleton.sidebar.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A", "precondition: the first controller is selected");
+    assert.equal(readActiveSerial(page.skeleton.sidebar), "CTRL-A", "precondition: the first controller is selected");
 
     // Hold the click's device fetch open, so its outcome is still in flight when the write removes the controller it belongs to.
     let releaseDevices;
@@ -1192,8 +1270,7 @@ describe("webUiFeatureOptions.commitConfig - the selection after an establishmen
 
     page.skeleton.devicesContainer.querySelector(".nav-link[data-device-serial='CTRL-A-CAM']").click();
 
-    await waitFor(() => page.skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial") === "CTRL-A-CAM",
-      { message: "the device must be selected before the write" });
+    await waitFor(() => readActiveSerial(page.skeleton.devicesContainer) === "CTRL-A-CAM", { message: "the device must be selected before the write" });
 
     const fetchesBefore = page.hooks.deviceCalls.length;
 
@@ -1205,8 +1282,7 @@ describe("webUiFeatureOptions.commitConfig - the selection after an establishmen
 
     assert.deepEqual(result, { kind: "committed" });
     assert.equal(page.hooks.deviceCalls.length, fetchesBefore + 1, "the selected controller's devices are refetched, since a load reconciles controllers only");
-    assert.equal(page.skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A-CAM",
-      "a device still on the list keeps the selection");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A-CAM", "a device still on the list keeps the selection");
     assert.ok(page.panels.length > 0, "precondition: the plugin's panel rendered inside the window");
     assert.ok(page.panels.every((bag) => bag.device?.serialNumber === "CTRL-A-CAM"),
       "and every render inside the window carried the same device, so the card the plugin is rendering into is never torn down");
@@ -1222,8 +1298,7 @@ describe("webUiFeatureOptions.commitConfig - the selection after an establishmen
 
     page.skeleton.devicesContainer.querySelector(".nav-link[data-device-serial='CTRL-A-CAM']").click();
 
-    await waitFor(() => page.skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial") === "CTRL-A-CAM",
-      { message: "the device must be selected before the write" });
+    await waitFor(() => readActiveSerial(page.skeleton.devicesContainer) === "CTRL-A-CAM", { message: "the device must be selected before the write" });
 
     // The write takes the camera away, which only the refetch can discover: the model load that precedes it reconciles controllers and nothing else.
     page.hooks.onDevices = ({ answer }) => ({ ...answer, devices: answer.devices.filter((device) => !device.serialNumber.endsWith("-CAM")) });
@@ -1233,8 +1308,7 @@ describe("webUiFeatureOptions.commitConfig - the selection after an establishmen
     await flush();
 
     assert.equal(page.panels.filter((bag) => bag.device === undefined).length, 1, "the departure renders exactly once, at the outcome");
-    assert.equal(page.skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial"), "CTRL-A",
-      "and the selection comes to rest on the controller's own row");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A", "and the selection comes to rest on the controller's own row");
   });
 
   test("an establishment in place announces nothing, where a re-entering one announces once", async () => {
@@ -1297,8 +1371,6 @@ describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fe
   // A device the boot's own answer carries and the refetch's does not, so the sidebar says whose list the store holds.
   const STALE = { firmwareRevision: "2.0", manufacturer: "Acme", model: "Cam", name: "Garage", serialNumber: "CTRL-A-GARAGE-CAM" };
 
-  const activeDevice = (page) => page.skeleton.devicesContainer.querySelector(".nav-link.active")?.getAttribute("data-device-serial");
-
   test("the boot's superseded outcome reveals the page onto the refetch still in flight, and the refetch completes the selection when it lands", async () => {
 
     using dom = createTestDom();
@@ -1319,7 +1391,7 @@ describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fe
     assert.equal(tableHeld(page.skeleton), false, "the refetch landing settles the table");
     assert.ok(page.skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-CAM']"), "the sidebar carries the refetch's list");
     assert.ok(page.skeleton.devicesContainer.querySelector("[data-device-serial='CTRL-A-GARAGE-CAM']") === null, "and not the boot's superseded one");
-    assert.equal(activeDevice(page), "CTRL-A", "the refetch carries the selection onto the controller's own row");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A", "the refetch carries the selection onto the controller's own row");
     assert.ok(page.skeleton.pageFeatureOptions.querySelector(".progress-bar-striped") === null, "no boot affordance remains on the page");
 
     const handle = page.orchestrator.takeover(document.createElement("section"));
@@ -1383,7 +1455,7 @@ describe("webUiFeatureOptions.commitConfig - a write racing the boot's device fe
     assert.equal(page.skeleton.sidebar.style.display, "", "the boot's dropped failure reveals the page as a dropped success does");
     assert.doesNotMatch(page.skeleton.headerInfo.textContent, /The plugin failed while retrieving the device list\./,
       "with no failure shown, because the store holds the refetch's clean outcome");
-    assert.equal(activeDevice(page), "CTRL-A", "and the selection the refetch completed");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A", "and the selection the refetch completed");
   });
 });
 
@@ -1557,8 +1629,6 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
   // Answer for the re-addressed controller with the devices it always had: an address edit changes how the page reaches a controller, not the hardware behind it.
   const stableSerials = ({ answer, controller }) => (controller?.serialNumber === MOVED_A.serialNumber) ? { ...answer, devices: devicesOf(CONTROLLER_A) } : answer;
 
-  const activeIn = (container) => container.querySelector(".nav-link.active")?.getAttribute("data-device-serial") ?? null;
-
   const twoControllerPage = () => makePage({ config: makePluginConfig({ controllers: [ CONTROLLER_A, CONTROLLER_B ] }) });
 
   test("commitConfig carries the selection and its highlight onto the new key and refetches the devices against it", async () => {
@@ -1569,8 +1639,8 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
     await page.orchestrator.show(await openTestSession());
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A", "precondition: the boot selected controller A");
-    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-A", "precondition: and continued onto its own row");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "precondition: the boot selected controller A");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A", "precondition: and continued onto its own row");
 
     page.hooks.onDevices = stableSerials;
 
@@ -1580,9 +1650,9 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
     await flush();
 
     assert.deepEqual(result, { kind: "committed" });
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A9", "the selection and its highlight followed the controller onto its new key");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A9", "the selection and its highlight followed the controller onto its new key");
     assert.deepEqual(page.hooks.deviceCalls.slice(fetchesBefore), ["CTRL-A9"], "and the devices were refetched under the new key");
-    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-A", "the controller's own row is still the one selected");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A", "the controller's own row is still the one selected");
   });
 
   test("commitConfig leaves a user who moved to another controller while the write was pending where they went", async () => {
@@ -1604,7 +1674,7 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user moved while the write was pending");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user moved while the write was pending");
 
     writes.release();
 
@@ -1612,7 +1682,7 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the user's own choice stands: the rename carries only what still named the old key");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "the user's own choice stands: the rename carries only what still named the old key");
     assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A9']"), "while the renamed controller is listed under its new key");
     assert.ok(!page.hooks.deviceCalls.includes("CTRL-A9"), "and nothing was fetched for a controller the user is not looking at");
   });
@@ -1640,14 +1710,14 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
     assert.equal(await page.orchestrator.refreshControllers({ rename: RENAME }), true, "the refresh reports the transition");
     assert.equal(page.panels.length, 1, "the arrival rendered the plugin's panel once, so no second notification came with it");
     assert.equal(handle.signal.aborted, false, "and nothing it dispatched ended the plugin's takeover");
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A9", "the selection and its highlight followed the controller onto its new key");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A9", "the selection and its highlight followed the controller onto its new key");
     assert.deepEqual(page.hooks.deviceCalls.slice(fetchesBefore), ["CTRL-A9"], "and the devices are refetched under the new key");
 
     releaseDevices();
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-A", "the controller's own row is still the one selected once they land");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-A", "the controller's own row is still the one selected once they land");
   });
 
   test("refreshControllers leaves a selection on another controller where it is and fetches nothing", async () => {
@@ -1662,7 +1732,7 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user is on controller B");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user is on controller B");
 
     const fetchesBefore = page.hooks.deviceCalls.length;
 
@@ -1673,7 +1743,7 @@ describe("webUiFeatureOptions - a controller rename a write declares", () => {
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the user stays where they are");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "the user stays where they are");
     assert.ok(page.skeleton.controllersContainer.querySelector("[data-device-serial='CTRL-A9']"), "while the renamed controller is listed under its new key");
     assert.equal(page.hooks.deviceCalls.length, fetchesBefore, "a refresh that moved no selection fetches nothing");
     assert.equal(page.panels.length, 0, "and moved nothing the device information panel reads, so the panel did not render");
@@ -1731,8 +1801,6 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
 
   // Answer for the re-addressed controller with the devices it always had: an address edit changes how the page reaches a controller, not the hardware behind it.
   const stableSerials = ({ answer, controller }) => (controller?.serialNumber === MOVED_B.serialNumber) ? { ...answer, devices: devicesOf(CONTROLLER_B) } : answer;
-
-  const activeIn = (container) => container.querySelector(".nav-link.active")?.getAttribute("data-device-serial") ?? null;
 
   // A two-controller page whose connection-error panel records the controller it is handed, whose sidebar heading carries a refresh action, and whose retry arms
   // at once.
@@ -1827,8 +1895,8 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
 
     assert.deepEqual(result, { kind: "committed" });
     assert.equal(page.state.loaded, 1, "the write re-entered the page through a fresh boot");
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B8", "which came back on the renamed controller rather than the first one");
-    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-B", "and continued onto its own row");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B8", "which came back on the renamed controller rather than the first one");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-B", "and continued onto its own row");
     assert.equal(page.skeleton.configTable.querySelector("details[data-category='Audio']")?.open, true, "the expansion the user left is restored");
 
     const persisted = JSON.parse(window.localStorage.getItem(STORAGE_KEY));
@@ -1853,8 +1921,8 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await flush();
 
     assert.equal(page.state.loaded, 1, "the write re-entered the page");
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "onto the controller the user was on");
-    assert.equal(activeIn(page.skeleton.devicesContainer), "CTRL-B", "and onto its own row");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "onto the controller the user was on");
+    assert.equal(readActiveSerial(page.skeleton.devicesContainer), "CTRL-B", "and onto its own row");
   });
 
   test("a commit whose in-place controller fetch fails re-enters and still honors its rename", async () => {
@@ -1869,7 +1937,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: a ready page on controller B");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "precondition: a ready page on controller B");
 
     page.hooks.onDevices = stableSerials;
     failNextControllerFetch(page);
@@ -1879,7 +1947,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B8", "the re-entry the failed fetch took still carried the selection to the new key");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B8", "the re-entry the failed fetch took still carried the selection to the new key");
   });
 
   test("a re-entry whose inherited selection the new list cannot place, and one that inherits a global selection, select the first controller", async () => {
@@ -1894,13 +1962,13 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await page.orchestrator.commitConfig(() => ({ controllers: [ CONTROLLER_A, { address: "10.0.0.3", name: "Hub C", serialNumber: "CTRL-C" } ] }));
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A", "a selection whose controller the write removed lands on the first controller");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "a selection whose controller the write removed lands on the first controller");
 
     page.skeleton.controllersContainer.querySelector(".nav-link[data-navigation='global']").click();
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), null, "precondition: the user is on the global view");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), null, "precondition: the user is on the global view");
 
     page.state.loaded = 0;
     page.skeleton.controllersContainer.querySelector("button.fo-action").click();
@@ -1908,7 +1976,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 1, { message: "the sidebar refresh must re-enter the page" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A", "and an inherited global selection lands on the first controller too");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A", "and an inherited global selection lands on the first controller too");
   });
 
   test("the connection-error retry re-enters onto the controller that was selected", async () => {
@@ -1926,7 +1994,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 1, { message: "the retry must re-enter the page" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the retry came back on the controller that failed");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "the retry came back on the controller that failed");
     assert.ok(!page.skeleton.headerInfo.textContent.includes("Unable to retrieve the device list"), "which now answers, so the frame has cleared");
   });
 
@@ -1948,7 +2016,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 1, { message: "the sidebar refresh must re-enter the page" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the refresh came back on the controller the user was on");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "the refresh came back on the controller the user was on");
   });
 
   test("a plugin's own show() over a standing page selects the first controller", async () => {
@@ -1964,12 +2032,13 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
 
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user is on controller B");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "precondition: the user is on controller B");
 
     await page.orchestrator.show(session);
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A", "a show() is not a re-entry, so it inherits nothing and boots onto the first controller");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A",
+      "a show() is not a re-entry, so it inherits nothing and boots onto the first controller");
   });
 
   test("a plugin's own show() after a re-entry still selects the first controller", async () => {
@@ -1991,12 +2060,12 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 1, { message: "the sidebar refresh must re-enter the page" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "precondition: the re-entry came back on controller B");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "precondition: the re-entry came back on controller B");
 
     await page.orchestrator.show(session);
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A",
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A",
       "the re-entry left nothing for a later show() to inherit, so it boots onto the first controller");
   });
 
@@ -2095,7 +2164,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 1, { message: "the retry must re-enter the page" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "the failed re-entry handed its retry the selection it had inherited");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "the failed re-entry handed its retry the selection it had inherited");
   });
 
   test("a renaming commit whose re-entry fails before its controller list arrives hands its retry no rename, and the retry lands on the first controller", async () => {
@@ -2127,7 +2196,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 1, { message: "the retry must re-enter the page" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-A",
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-A",
       "the retry carried no rename, so the selection it inherited still names the old key and lands on the first controller");
 
     const persisted = JSON.parse(window.localStorage.getItem(STORAGE_KEY));
@@ -2162,7 +2231,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 1, { message: "the retry must re-enter the page" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B8",
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B8",
       "the retry inherited the selection the failed boot made, so it lands on the renamed controller");
 
     const persisted = JSON.parse(window.localStorage.getItem(STORAGE_KEY));
@@ -2228,7 +2297,7 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 2, { message: "the re-entered boot must finish" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "once the model loads, the page comes up on the controller it was on");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "once the model loads, the page comes up on the controller it was on");
   });
 
   test("no view paints the inherited list or the boot's own selection while the re-entered boot waits on its catalog", async () => {
@@ -2261,6 +2330,6 @@ describe("webUiFeatureOptions - a re-entered page keeps the controller it was on
     await waitFor(() => page.state.loaded === 1, { message: "the re-entered boot must finish" });
     await flush();
 
-    assert.equal(activeIn(page.skeleton.controllersContainer), "CTRL-B", "once the model loads, the page comes up on the controller it was on");
+    assert.equal(readActiveSerial(page.skeleton.controllersContainer), "CTRL-B", "once the model loads, the page comes up on the controller it was on");
   });
 });

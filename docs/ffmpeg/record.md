@@ -311,9 +311,9 @@ FFmpeg process specialization for fMP4 livestreaming from an RTSP source. Builds
 to [FfmpegFMp4Process](#abstract-ffmpegfmp4process).
 
 Used by HBUP as an alternative HKSV segment source when pulling directly from an RTSP URL (bypasses the Protect livestream API for debug and diagnostic scenarios).
-Matches the polymorphic `{ getInitSegment(): Promise<Buffer>; segments(): AsyncGenerator<Buffer> }` interface HBUP uses across the native Protect livestream and this
-class. Unlike recording, livestream does not enforce an inter-segment watchdog timeout: a live camera feed legitimately quiets down during low-motion periods and does
-not carry HKSV's 5-second hard timing contract. Callers that need a liveness cap can compose their own timeout via the process's `signal`.
+The class satisfies [LivestreamProcess](#livestreamprocess), and a consumer that substitutes it under test constructs it through a [LivestreamProcessFactory](#livestreamprocessfactory). Unlike
+recording, livestream does not enforce an inter-segment watchdog timeout: a live camera feed legitimately quiets down during low-motion periods and does not carry
+HKSV's 5-second hard timing contract. Callers that need a liveness cap can compose their own timeout via the process's `signal`.
 
 #### Example
 
@@ -342,6 +342,10 @@ for await (const segment of proc.segments()) {
 #### Extends
 
 - [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process)
+
+#### Implements
+
+- [`LivestreamProcess`](#livestreamprocess)
 
 #### Constructors
 
@@ -516,6 +520,12 @@ guaranteed the child has terminated by the time the block exits.
 
 A promise that resolves once the child has fully exited.
 
+###### Implementation of
+
+```ts
+LivestreamProcess.[asyncDispose]
+```
+
 ###### Inherited from
 
 [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`[asyncDispose]`](#asyncdispose)
@@ -560,6 +570,10 @@ the initialization segment completes.
 
 A promise resolving to the initialization segment bytes.
 
+###### Implementation of
+
+[`LivestreamProcess`](#livestreamprocess).[`getInitSegment`](#getinitsegment-3)
+
 ###### Inherited from
 
 [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`getInitSegment`](#getinitsegment)
@@ -585,6 +599,10 @@ signal aborts, or when the underlying stdout ends.
 `AsyncGenerator`\<`Buffer`\<`ArrayBufferLike`\>\>
 
 An async generator yielding media segment buffers in stream order.
+
+###### Implementation of
+
+[`LivestreamProcess`](#livestreamprocess).[`segments`](#segments-3)
 
 ###### Inherited from
 
@@ -612,6 +630,10 @@ kind `"media"` per completed media fragment. Delegates to [Mp4SegmentAssembler.s
 `AsyncGenerator`\<[`Mp4Segment`](mp4-assembler.md#mp4segment)\>
 
 An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+
+###### Implementation of
+
+[`LivestreamProcess`](#livestreamprocess).[`stream`](#stream-3)
 
 ###### Inherited from
 
@@ -733,7 +755,7 @@ reserve when the FFmpeg source stalls. Delegates to [Mp4SegmentAssembler.buffere
 
 The buffered-segment depth.
 
-The number of assembled media segments buffered but not yet pulled through [RecordingProcess.segments](#segments-3) - the consumer's catch-up reserve when the source
+The number of assembled media segments buffered but not yet pulled through [RecordingProcess.segments](#segments-4) - the consumer's catch-up reserve when the source
 stalls.
 
 ###### Implementation of
@@ -900,7 +922,7 @@ A promise resolving to the initialization segment bytes.
 
 ###### Implementation of
 
-[`RecordingProcess`](#recordingprocess).[`getInitSegment`](#getinitsegment-3)
+[`RecordingProcess`](#recordingprocess).[`getInitSegment`](#getinitsegment-4)
 
 ###### Inherited from
 
@@ -930,7 +952,7 @@ An async generator yielding media segment buffers in stream order.
 
 ###### Implementation of
 
-[`RecordingProcess`](#recordingprocess).[`segments`](#segments-3)
+[`RecordingProcess`](#recordingprocess).[`segments`](#segments-4)
 
 ###### Inherited from
 
@@ -961,7 +983,7 @@ An async generator yielding one `"init"` segment followed by `"media"` segments 
 
 ###### Implementation of
 
-[`RecordingProcess`](#recordingprocess).[`stream`](#stream-3)
+[`RecordingProcess`](#recordingprocess).[`stream`](#stream-4)
 
 ###### Inherited from
 
@@ -1148,6 +1170,128 @@ filters, the hardware-acceleration flags, and the audio transcode decision - liv
 
 ***
 
+### LivestreamProcess
+
+The minimal surface a livestream consumer reads off a livestream process. This is the product half of the livestream dependency-inversion boundary: a class that owns
+a livestream depends on this narrow interface rather than the concrete [FfmpegLivestreamProcess](#ffmpeglivestreamprocess), so a test (or any alternative segment source) can substitute
+a fake without dragging FFmpeg into the consumer's dependency graph. The interface is type-only, so importing it costs a consumer nothing at runtime.
+
+Every member here is defined on [FfmpegFMp4Process](#abstract-ffmpegfmp4process) (`getInitSegment`, `segments`, `stream`) or inherited from [FfmpegProcess](process.md#ffmpegprocess)
+(`[Symbol.asyncDispose]`), so the real [FfmpegLivestreamProcess](#ffmpeglivestreamprocess) satisfies it by inheritance and carries only an `implements` annotation. This is the
+consumer's minimal surface, not the class's full surface. The recording-only reads (`stdin`, `bufferedSegments`, `isTimedOut`, `stderrLog`) are not here because a
+livestream consumer does not read them, and neither are the direct `abort` and `signal`, because a livestream owner ends the process through the signal it passed in
+its init or through `[Symbol.asyncDispose]`.
+
+#### See
+
+ - FfmpegLivestreamProcess
+ - LivestreamProcessFactory
+
+#### Extends
+
+- [`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose)
+
+#### Methods
+
+##### getInitSegment()
+
+```ts
+getInitSegment(): Promise<Buffer<ArrayBufferLike>>;
+```
+
+Resolve with the fMP4 initialization segment (typically `ftyp` + `moov`). Rejects with the reason the process ended for if it ends before the initialization
+segment completes. Each call returns a promise of its own, so a caller that drops one meets an unhandled rejection when the process ends first.
+
+###### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Buffer`\<`ArrayBufferLike`\>\>
+
+A promise resolving to the initialization segment bytes.
+
+##### segments()
+
+```ts
+segments(init?): AsyncGenerator<Buffer<ArrayBufferLike>>;
+```
+
+Async generator yielding each completed media segment (a concatenated `moof` + `mdat` pair) as a single Buffer, in stream order. Terminates cleanly when the process
+or the caller's signal aborts, or when the underlying source ends.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
+
+###### Returns
+
+`AsyncGenerator`\<`Buffer`\<`ArrayBufferLike`\>\>
+
+An async generator yielding media segment buffers in stream order.
+
+##### stream()
+
+```ts
+stream(init?): AsyncGenerator<Mp4Segment>;
+```
+
+Async generator yielding the whole segment stream as a kind-tagged sequence: one [Mp4Segment](mp4-assembler.md#mp4segment) of kind `"init"` carrying the initialization bytes, then one of
+kind `"media"` per completed media fragment. A third view over the same pipeline as [LivestreamProcess.getInitSegment](#getinitsegment-3) / [LivestreamProcess.segments](#segments-3)
+that shares their single-consumer contract - a consumer uses this view or that pair, never both.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
+
+###### Returns
+
+`AsyncGenerator`\<[`Mp4Segment`](mp4-assembler.md#mp4segment)\>
+
+An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+
+***
+
+### LivestreamProcessFactory
+
+The creational half of the livestream dependency-inversion boundary: build a [LivestreamProcess](#livestreamprocess) from the shared options and the livestream init. A consumer
+holds this factory typed as the abstraction and constructs through it, so a test can substitute a factory that returns a fake livestream process. The production
+factory is [livestreamProcessFactory](#livestreamprocessfactory-1), whose `create` is exactly the [FfmpegLivestreamProcess](#ffmpeglivestreamprocess) constructor call - so routing construction through this
+boundary is behavior-neutral, and a consumer wires it as it wires [RecordingProcessFactory](#recordingprocessfactory).
+
+#### See
+
+ - livestreamProcessFactory
+ - LivestreamProcess
+
+#### Methods
+
+##### create()
+
+```ts
+create(options, init): LivestreamProcess;
+```
+
+Construct a livestream process for the supplied options and livestream init.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | Shared [FfmpegOptions](options.md#ffmpegoptions) configuration (codec support, logger, debug flag, name). |
+| `init` | [`FfmpegLivestreamInit`](#ffmpeglivestreaminit) | Livestream init options. See [FfmpegLivestreamInit](#ffmpeglivestreaminit). |
+
+###### Returns
+
+[`LivestreamProcess`](#livestreamprocess)
+
+A new [LivestreamProcess](#livestreamprocess).
+
+***
+
 ### RecordingProcess
 
 The minimal surface a recording consumer reads off a recording process. This is the product half of the recording dependency-inversion boundary: an HKSV recording
@@ -1168,7 +1312,7 @@ annotation - zero runtime behavior change. This is deliberately the consumer's m
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="bufferedsegments-3"></a> `bufferedSegments` | `readonly` | `number` | The number of assembled media segments buffered but not yet pulled through [RecordingProcess.segments](#segments-3) - the consumer's catch-up reserve when the source stalls. |
+| <a id="bufferedsegments-3"></a> `bufferedSegments` | `readonly` | `number` | The number of assembled media segments buffered but not yet pulled through [RecordingProcess.segments](#segments-4) - the consumer's catch-up reserve when the source stalls. |
 | <a id="istimedout-3"></a> `isTimedOut` | `readonly` | `boolean` | `true` when the abort reason indicates a timeout (the inter-segment watchdog fired or the platform `TimeoutError` was raised). |
 | <a id="signal-5"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing the recording process's lifetime. Aborts exactly once; the reason on `signal.reason` names the cause. |
 | <a id="stderrlog-3"></a> `stderrLog` | `readonly` | readonly `string`[] | The accumulated stderr lines the process produced, preserved across teardown for post-mortem inspection. A readonly view: callers read, they do not mutate. |
@@ -1238,7 +1382,7 @@ stream(init?): AsyncGenerator<Mp4Segment>;
 ```
 
 Async generator yielding the whole segment stream as a kind-tagged sequence: one [Mp4Segment](mp4-assembler.md#mp4segment) of kind `"init"` carrying the initialization bytes, then one of
-kind `"media"` per completed media fragment. A third view over the same pipeline as [RecordingProcess.getInitSegment](#getinitsegment-3) / [RecordingProcess.segments](#segments-3) that
+kind `"media"` per completed media fragment. A third view over the same pipeline as [RecordingProcess.getInitSegment](#getinitsegment-4) / [RecordingProcess.segments](#segments-4) that
 shares their single-consumer contract - a consumer uses this view or that pair, never both.
 
 ###### Parameters
@@ -1290,6 +1434,22 @@ Construct a recording process for the supplied options and recording init.
 [`RecordingProcess`](#recordingprocess)
 
 A new [RecordingProcess](#recordingprocess).
+
+***
+
+### livestreamProcessFactory
+
+```ts
+const livestreamProcessFactory: LivestreamProcessFactory;
+```
+
+The production [LivestreamProcessFactory](#livestreamprocessfactory): builds the concrete FFmpeg-backed livestream process. A consumer holds this typed as the abstraction; a test
+substitutes a fake factory. `create` is exactly the [FfmpegLivestreamProcess](#ffmpeglivestreamprocess) constructor call, so wiring construction through this boundary is
+behavior-neutral.
+
+#### See
+
+LivestreamProcessFactory
 
 ***
 

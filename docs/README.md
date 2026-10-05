@@ -43,6 +43,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [ffmpeg/fmp4](ffmpeg/fmp4.md) | ISO BMFF (fMP4) box parsing utilities for working with fragmented MP4 data. |
 | [ffmpeg/fmp4-builders](ffmpeg/fmp4-builders.md) | Shared ISO BMFF (fMP4) byte-level construction builders. |
 | [ffmpeg/hap-enums](ffmpeg/hap-enums.md) | Mirrors HAP protocol const enum values that HomeKit camera plugins need at value-side runtime. `verbatimModuleSyntax` disallows value imports of ambient const enums, so the numeric and string contracts from hap-nodejs must be re-declared at value-side. Centralizing the mirrors here gives every consumer a single import path and a single update point if upstream `hap-nodejs` ever changes a value. |
+| [ffmpeg/livestream-process-double](ffmpeg/livestream-process-double.md) | An FFmpeg-free [LivestreamProcess](ffmpeg/record.md#livestreamprocess) test double. |
 | [ffmpeg/mp4-assembler](ffmpeg/mp4-assembler.md) | AsyncDisposable fMP4 segment assembler. |
 | [ffmpeg/mp4-parser](ffmpeg/mp4-parser.md) | Pure stateful byte-to-record parser for ISO BMFF (fMP4) box streams. |
 | [ffmpeg/options](ffmpeg/options.md) | Homebridge FFmpeg transcoding, decoding, and encoding options, selecting codecs, pixel formats, and hardware acceleration for the host system. |

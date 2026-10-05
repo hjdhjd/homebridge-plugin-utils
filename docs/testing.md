@@ -949,6 +949,18 @@ Re-exports [TestHttpListenerRoute](http-listener-double.md#testhttplistenerroute
 
 ***
 
+### TestLivestreamProcess
+
+Re-exports [TestLivestreamProcess](ffmpeg/livestream-process-double.md#testlivestreamprocess)
+
+***
+
+### TestLivestreamProcessFactory
+
+Re-exports [TestLivestreamProcessFactory](ffmpeg/livestream-process-double.md#testlivestreamprocessfactory)
+
+***
+
 ### TestLogSocket
 
 Re-exports [TestLogSocket](logclient/socket-double.md#testlogsocket)

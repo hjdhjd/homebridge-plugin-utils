@@ -85,6 +85,7 @@ export class webUi {
 
   #chromeBound = false;
   #firstRun;
+  #firstRunInFlight = false;
   #name;
   #resumeDetector;
   #session;
@@ -280,12 +281,35 @@ export class webUi {
    * The spinner is raised here rather than inside the boundary's run, so the boundary's settle work is what brings it down: it then brackets the whole flow and
    * drains on every path, the early bail on a falsy submit answer included.
    *
+   * One press runs at a time. The submit hook reads the configuration as it stood at the press, and the session advances only once the hook's write resolves, so
+   * a second press while the first is unsettled would run the hook again against the configuration from before that write and stage over it. A press that arrives
+   * while one is in flight starts nothing, and the button is disabled for the press's duration and handed back in the state it was found. The in-flight flag is
+   * the guarantee and the disabled button a courtesy on top of it, because a plugin's own first-run page may enable or disable its button as the user types. The
+   * settle work clears the flag before it touches the button or the spinner, so a step there that throws cannot leave the page unable to submit.
+   *
    * @returns {Promise<void>}
    * @private
    */
   async #submitFirstRun() {
 
+    if(this.#firstRunInFlight) {
+
+      return;
+    }
+
     homebridge.showSpinner();
+
+    // The flag is set in the same turn as the check above, with no await between them, so no later press can pass that check while this one is unsettled. The
+    // button's state is read before it is disabled, so the settle work restores what the plugin's page had set rather than assuming the button was enabled.
+    const button = document.getElementById("firstRun");
+    const found = button?.disabled;
+
+    this.#firstRunInFlight = true;
+
+    if(button) {
+
+      button.disabled = true;
+    }
 
     return this.#runEntryPoint({
 
@@ -309,7 +333,17 @@ export class webUi {
 
         homebridge.enableSaveButton();
       },
-      settled: () => homebridge.hideSpinner()
+      settled: () => {
+
+        this.#firstRunInFlight = false;
+
+        if(button) {
+
+          button.disabled = found;
+        }
+
+        homebridge.hideSpinner();
+      }
     });
   }
 

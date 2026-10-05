@@ -940,6 +940,82 @@ describe("webUi - the entry-point boundary reports a failure and settles its chr
     assert.equal(submits, 1, "one click runs the submit hook exactly once however many launches preceded it");
   });
 
+  test("a second first-run press while the first is unsettled runs nothing, and the button stays disabled until the first settles", async () => {
+
+    const held = Promise.withResolvers();
+    let submits = 0;
+
+    const onSubmit = () => {
+
+      submits++;
+
+      return held.promise;
+    };
+
+    using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit } });
+
+    await harness.ui.show();
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    assert.equal(submits, 1, "precondition: the first press is running the submit hook");
+    assert.equal(harness.skeleton.firstRun.disabled, true, "the button is disabled while the press is unsettled");
+    assert.equal(harness.fake.observed.state.spinnerCount, 1, "precondition: the first press raised the spinner");
+
+    /* The second press is dispatched rather than clicked. The suite's DOM, like a browser, drops click() on a disabled button, so a click() would never reach the
+     * listener and this row would pass with the in-flight flag deleted. A dispatched event reaches the listener whatever the button's state, which is the case
+     * the flag exists for: a plugin's own page can re-enable its button while the press is still running.
+     */
+    harness.skeleton.firstRun.dispatchEvent(new Event("click"));
+    await drain();
+
+    assert.equal(submits, 1, "a press that arrives while one is in flight does not run the submit hook again");
+    assert.equal(harness.fake.observed.state.spinnerCount, 1, "and raises no second spinner");
+
+    held.resolve(false);
+    await drain();
+
+    assert.equal(harness.skeleton.firstRun.disabled, false, "the button is enabled again once the first press settles");
+    assert.equal(harness.fake.observed.state.spinnerCount, 0, "and the spinner comes down");
+
+    harness.skeleton.firstRun.click();
+    await drain();
+
+    assert.equal(submits, 2, "a press after the first has settled runs the submit hook again");
+  });
+
+  // Each way a held first-run submit can settle, so a row per settlement shows the button handed back enabled on that path.
+  const SUBMIT_SETTLEMENTS = [
+
+    { label: "a true answer", settle: (held) => held.resolve(true) },
+    { label: "a falsy answer", settle: (held) => held.resolve(false) },
+    { label: "a rejection", settle: (held) => held.reject(new Error("Login failed.")) }
+  ];
+
+  for(const { label, settle } of SUBMIT_SETTLEMENTS) {
+
+    test("the first-run button is enabled again after " + label + " from the submit hook", async () => {
+
+      const held = Promise.withResolvers();
+
+      using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => true, onStart: () => true, onSubmit: () => held.promise } });
+
+      await harness.ui.show();
+
+      harness.skeleton.firstRun.click();
+      await drain();
+
+      assert.equal(harness.skeleton.firstRun.disabled, true, "precondition: the button is disabled while the submit is held");
+
+      settle(held);
+      await drain();
+
+      assert.equal(harness.skeleton.firstRun.disabled, false, "the button is enabled again, so the user is never stranded on the first-run page");
+      assert.equal(harness.fake.observed.state.spinnerCount, 0, "and the spinner comes down");
+    });
+  }
+
   test("a flush that rejects toasts the failure, paints the tab, and drops the spinner", async () => {
 
     using harness = makeWebUiHarness({ config: CONFIG, firstRun: { isRequired: () => false } });

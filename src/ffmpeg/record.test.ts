@@ -1,12 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ffmpeg/record.test.ts: Unit tests for FfmpegRecordingProcess and FfmpegLivestreamProcess - composed Mp4SegmentAssembler, init / segment delegation, abort propagation
- * between the process and the assembler, known-HKSV-error friendly teardown message, and livestream segmentLength wiring.
+ * between the process and the assembler, known-HKSV-error friendly teardown message, livestream segmentLength wiring, and the livestream lifecycle run against the real
+ * process and against TestLivestreamProcess, so the double is held to what the real process does.
  */
 import { AudioRecordingCodecType, AudioRecordingSamplerate, H264Level, H264Profile } from "./hap-enums.ts";
-import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit } from "./record.ts";
-import { FfmpegLivestreamProcess, FfmpegRecordingProcess } from "./record.ts";
-import { capturingLog, waitUntil } from "../testing/index.ts";
+import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit, LivestreamProcess } from "./record.ts";
+import { FfmpegLivestreamProcess, FfmpegRecordingProcess, livestreamProcessFactory } from "./record.ts";
+import { TestLivestreamProcessFactory, capturingLog, expectAt, settle, waitUntil } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import type { CameraRecordingConfiguration } from "homebridge";
 import type { CapturingLog } from "../testing/index.ts";
@@ -14,6 +15,8 @@ import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { HKSV_TIMEOUT } from "./settings.ts";
 import { HbpuAbortError } from "../util.ts";
+import { Mp4BoxParser } from "./mp4-parser.ts";
+import type { Mp4Segment } from "./mp4-assembler.ts";
 import type { Readable } from "node:stream";
 import { TestClock } from "../clock-double.ts";
 import type { VideoEncoderOptions } from "./options.ts";
@@ -635,6 +638,376 @@ describe("FfmpegLivestreamProcess - audio target", () => {
 
     assert.ok(args.includes("-codec:a copy"), "an absent target copies the audio stream");
     assert.ok(!args.includes("-profile:a"), "an absent target must not invoke the audio encoder");
+  });
+});
+
+// What a lifecycle row reads off a subject: the surface a livestream consumer reads, plus the lifetime signal, which is the only way to see whether a process
+// lives on after something ended.
+type LivestreamUnderTest = LivestreamProcess & { readonly signal: AbortSignal };
+
+/* The point a lifecycle row starts from. `spawned` holds only until the event loop turns, because the real child writes as soon as it runs, so a row that starts
+ * there ends the lifetime before its first await. `initAndSegmentQueued` has the init segment resolved and one media segment queued unread.
+ * `sourceEndsAfterSegments` closes the source once media segments have been produced, and `sourceEndsBeforeInit` closes it before any init segment.
+ */
+type LivestreamStage = "initAndSegmentQueued" | "sourceEndsAfterSegments" | "sourceEndsBeforeInit" | "spawned";
+
+// Bring a subject to a stage, its lifetime composed with `signal`.
+type StartLivestream = (stage: LivestreamStage, signal: AbortSignal) => Promise<LivestreamUnderTest>;
+
+// The stand-in script that brings the real process to a stage. A source that ends before init is a child that exits with status 0 before it writes anything.
+function livestreamStageScript(stage: LivestreamStage): string[] {
+
+  switch(stage) {
+
+    case "initAndSegmentQueued":
+
+      return buildInitOnlyIdleScript();
+
+    case "sourceEndsAfterSegments":
+
+      return buildFMp4EmissionScript(2);
+
+    case "sourceEndsBeforeInit":
+
+      return [ "-e", "process.exit(0);" ];
+
+    case "spawned":
+
+      return buildInitOnlyIdleScript();
+  }
+}
+
+// The real subject: a process the production factory built, running the stage's script. For the queued stage it waits until the segment the script writes along
+// with the init segment is queued, which is what lets a row end the lifetime with that segment still unread.
+async function startRealLivestream(stage: LivestreamStage, signal: AbortSignal): Promise<LivestreamUnderTest> {
+
+  const proc = livestreamProcessFactory.create(makeOptions(), { args: livestreamStageScript(stage), livestream: { url: "rtsp://test/stream" }, signal });
+
+  // The factory answers the product interface. The instance is the real class, which carries the lifetime signal a row reads and the buffered depth staging waits on.
+  assert.ok(proc instanceof FfmpegLivestreamProcess, "the production factory must build an FfmpegLivestreamProcess");
+
+  if(stage === "initAndSegmentQueued") {
+
+    await proc.getInitSegment();
+    await waitUntil(() => proc.bufferedSegments === 1, { description: "the media segment the script writes with the init segment to be queued" });
+  }
+
+  return proc;
+}
+
+// The fMP4-shaped bytes the double is fed: an init segment and a media segment with the box types the stand-in scripts write, since a row compares box types.
+const doubleInitSegment = Buffer.concat([ box("ftyp"), box("moov") ]);
+const doubleMediaSegment = Buffer.concat([ box("moof"), box("mdat") ]);
+
+// The double subject: a process TestLivestreamProcessFactory built over the row's signal, driven to the stage the real script reaches on its own.
+async function startDoubleLivestream(stage: LivestreamStage, signal: AbortSignal): Promise<LivestreamUnderTest> {
+
+  const factory = new TestLivestreamProcessFactory();
+
+  factory.create(makeOptions(), { livestream: { url: "rtsp://test/stream" }, signal });
+
+  const proc = expectAt(factory.createCalls, 0, "the process the factory built").process;
+
+  switch(stage) {
+
+    case "initAndSegmentQueued":
+
+      proc.resolveInit(doubleInitSegment);
+      proc.feed(doubleMediaSegment);
+
+      break;
+
+    case "sourceEndsAfterSegments":
+
+      proc.resolveInit(doubleInitSegment);
+      proc.feed(doubleMediaSegment);
+      proc.feed(doubleMediaSegment);
+      proc.end();
+
+      break;
+
+    case "sourceEndsBeforeInit":
+
+      proc.end();
+
+      break;
+
+    case "spawned":
+
+      break;
+  }
+
+  return proc;
+}
+
+// The box types a segment carries, joined in order. A row compares these rather than raw bytes, because the real process's bytes come from a script and the double's
+// from this file, and the structure is what the two must agree on.
+function boxSequence(bytes: Buffer): string {
+
+  return Array.from(new Mp4BoxParser().consume(bytes), (parsed) => parsed.bytes.toString("latin1", 4, 8)).join("+");
+}
+
+// A stream item as a row compares it: its kind and the box types it carries.
+function streamItem(item: Mp4Segment): string {
+
+  return item.kind + " " + boxSequence(item.bytes);
+}
+
+// The name of an abort reason. A row compares names, because each subject constructs its own reason objects for the same cause.
+function reasonName(reason: unknown): string {
+
+  return (reason instanceof HbpuAbortError) ? reason.name : "a reason other than an HbpuAbortError";
+}
+
+// The state of a lifetime: "live", or the name of the reason it ended for.
+function lifetimeState(signal: AbortSignal): string {
+
+  return signal.aborted ? reasonName(signal.reason) : "live";
+}
+
+// How an init wait settled: the box types it resolved with, or the name of the reason it rejected with. Awaiting the wait here is also what observes it.
+async function initSettlement(initWait: Promise<Buffer>): Promise<string> {
+
+  try {
+
+    return boxSequence(await initWait);
+  } catch(error: unknown) {
+
+    return "rejected " + reasonName(error);
+  }
+}
+
+/* Hold Node's unhandled-rejection channel for the length of `body` and hand it back afterwards, giving the body the reasons the channel carried. The test runner keeps
+ * its own listener on that channel and fails the running test on anything it sees, so a row that counts the rejections a dropped promise raises has to own the channel
+ * while it counts.
+ */
+async function captureUnhandledRejections<T>(body: (captured: readonly unknown[]) => Promise<T>): Promise<T> {
+
+  const captured: unknown[] = [];
+  const runnerListeners = process.listeners("unhandledRejection");
+  const onUnhandled = (reason: unknown): void => {
+
+    captured.push(reason);
+  };
+
+  process.removeAllListeners("unhandledRejection");
+  process.on("unhandledRejection", onUnhandled);
+
+  try {
+
+    return await body(captured);
+  } finally {
+
+    process.off("unhandledRejection", onUnhandled);
+
+    for(const listener of runnerListeners) {
+
+      process.on("unhandledRejection", listener);
+    }
+  }
+}
+
+// Run one scenario against the double and against the real process, and assert each reported the expected reading. One assertion over the readings means a failure
+// shows which subject disagreed, and with what.
+async function assertEachSubject<T>(expected: T, scenario: (start: StartLivestream) => Promise<T>): Promise<void> {
+
+  assert.deepEqual({ double: await scenario(startDoubleLivestream), real: await scenario(startRealLivestream) }, { double: expected, real: expected });
+}
+
+describe("LivestreamProcess - the real process and TestLivestreamProcess agree on the lifecycle", () => {
+
+  // Every row ends a lifetime through the signal passed in the init, because that is the one lever a consumer holds over each subject: the interface carries no
+  // abort, and the double built by its factory composes that signal exactly as the real process composes its parent.
+
+  test("the signal passed in the init ends the process with its reason, and an init wait still pending rejects with that reason", async () => {
+
+    await assertEachSubject({ initWait: "rejected replaced", lifetime: "replaced" }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("spawned", controller.signal);
+
+      const initWait = initSettlement(proc.getInitSegment());
+
+      controller.abort(new HbpuAbortError("replaced"));
+
+      return { initWait: await initWait, lifetime: lifetimeState(proc.signal) };
+    });
+  });
+
+  test("each init wait dropped unobserved raises one unhandled rejection when the lifetime ends before the init segment", async () => {
+
+    await assertEachSubject({ unhandled: [ "replaced", "replaced" ] }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("spawned", controller.signal);
+
+      const unhandled = await captureUnhandledRejections(async (captured) => {
+
+        void proc.getInitSegment();
+        void proc.getInitSegment();
+        controller.abort(new HbpuAbortError("replaced"));
+
+        await settle();
+
+        return captured.map(reasonName);
+      });
+
+      return { unhandled };
+    });
+  });
+
+  test("a segment produced before the lifetime ended is handed over before the read returns", async () => {
+
+    await assertEachSubject({ segments: ["moof+mdat"] }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("initAndSegmentQueued", controller.signal);
+
+      controller.abort(new HbpuAbortError("replaced"));
+
+      return { segments: await Array.fromAsync(proc.segments(), boxSequence) };
+    });
+  });
+
+  test("a read parked on an empty queue returns when the lifetime ends", async () => {
+
+    await assertEachSubject({ parkedBeforeTheEnd: true, segments: ["moof+mdat"] }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("initAndSegmentQueued", controller.signal);
+
+      let returned = false;
+
+      const read = Array.fromAsync(proc.segments(), boxSequence).finally(() => {
+
+        returned = true;
+      });
+
+      // The read takes the queued segment and parks on the empty queue within this turn, so it is still waiting when the lifetime ends.
+      await settle();
+
+      const parkedBeforeTheEnd = !returned;
+
+      controller.abort(new HbpuAbortError("replaced"));
+
+      return { parkedBeforeTheEnd, segments: await read };
+    });
+  });
+
+  test("the caller's own signal ends that read alone, and the process lives on", async () => {
+
+    await assertEachSubject({ lifetime: "live", segments: ["moof+mdat"] }, async (start) => {
+
+      const controller = new AbortController();
+      const caller = new AbortController();
+
+      await using proc = await start("initAndSegmentQueued", controller.signal);
+
+      const read = Array.fromAsync(proc.segments({ signal: caller.signal }), boxSequence);
+
+      await settle();
+      caller.abort();
+
+      const segments = await read;
+
+      return { lifetime: lifetimeState(proc.signal), segments };
+    });
+  });
+
+  test("the source ending after init lets the read hand over the last segment and return, and the lifetime ends closed", async () => {
+
+    await assertEachSubject({ init: "ftyp+moov", lifetime: "closed", segments: [ "moof+mdat", "moof+mdat" ] }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("sourceEndsAfterSegments", controller.signal);
+
+      const init = await initSettlement(proc.getInitSegment());
+      const segments = await Array.fromAsync(proc.segments(), boxSequence);
+
+      // The real read returns when stdout ends, and the process's own lifetime ends on the child's exit a moment later.
+      await waitUntil(() => proc.signal.aborted, { description: "the lifetime to end once the source has ended" });
+
+      return { init, lifetime: lifetimeState(proc.signal), segments };
+    });
+  });
+
+  test("the source ending before init rejects the init wait with the closed reason", async () => {
+
+    await assertEachSubject({ initWait: "rejected closed", lifetime: "closed" }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("sourceEndsBeforeInit", controller.signal);
+
+      const initWait = await initSettlement(proc.getInitSegment());
+
+      await waitUntil(() => proc.signal.aborted, { description: "the lifetime to end once the source has ended" });
+
+      return { initWait, lifetime: lifetimeState(proc.signal) };
+    });
+  });
+
+  test("an init segment that resolved before the lifetime ended stays resolved", async () => {
+
+    await assertEachSubject({ initWait: "ftyp+moov", lifetime: "replaced" }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("initAndSegmentQueued", controller.signal);
+
+      controller.abort(new HbpuAbortError("replaced"));
+
+      return { initWait: await initSettlement(proc.getInitSegment()), lifetime: lifetimeState(proc.signal) };
+    });
+  });
+
+  test("stream() yields nothing when the lifetime ended before init", async () => {
+
+    await assertEachSubject({ items: [] }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("spawned", controller.signal);
+
+      controller.abort(new HbpuAbortError("replaced"));
+
+      return { items: await Array.fromAsync(proc.stream(), streamItem) };
+    });
+  });
+
+  test("stream() yields the init item and then what was queued when the lifetime ended after init", async () => {
+
+    await assertEachSubject({ items: [ "init ftyp+moov", "media moof+mdat" ] }, async (start) => {
+
+      const controller = new AbortController();
+
+      await using proc = await start("initAndSegmentQueued", controller.signal);
+
+      controller.abort(new HbpuAbortError("replaced"));
+
+      return { items: await Array.fromAsync(proc.stream(), streamItem) };
+    });
+  });
+
+  test("dispose ends the process with the shutdown reason, settles, and is safe to repeat", async () => {
+
+    await assertEachSubject({ afterFirst: "shutdown", afterSecond: "shutdown" }, async (start) => {
+
+      const proc = await start("initAndSegmentQueued", new AbortController().signal);
+
+      await proc[Symbol.asyncDispose]();
+
+      const afterFirst = lifetimeState(proc.signal);
+
+      await proc[Symbol.asyncDispose]();
+
+      return { afterFirst, afterSecond: lifetimeState(proc.signal) };
+    });
   });
 });
 

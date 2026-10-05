@@ -879,13 +879,85 @@ export const recordingProcessFactory: RecordingProcessFactory = {
 };
 
 /**
+ * The minimal surface a livestream consumer reads off a livestream process. This is the product half of the livestream dependency-inversion boundary: a class that owns
+ * a livestream depends on this narrow interface rather than the concrete {@link FfmpegLivestreamProcess}, so a test (or any alternative segment source) can substitute
+ * a fake without dragging FFmpeg into the consumer's dependency graph. The interface is type-only, so importing it costs a consumer nothing at runtime.
+ *
+ * Every member here is defined on {@link FfmpegFMp4Process} (`getInitSegment`, `segments`, `stream`) or inherited from {@link FfmpegProcess}
+ * (`[Symbol.asyncDispose]`), so the real {@link FfmpegLivestreamProcess} satisfies it by inheritance and carries only an `implements` annotation. This is the
+ * consumer's minimal surface, not the class's full surface. The recording-only reads (`stdin`, `bufferedSegments`, `isTimedOut`, `stderrLog`) are not here because a
+ * livestream consumer does not read them, and neither are the direct `abort` and `signal`, because a livestream owner ends the process through the signal it passed in
+ * its init or through `[Symbol.asyncDispose]`.
+ *
+ * @see FfmpegLivestreamProcess
+ * @see LivestreamProcessFactory
+ *
+ * @category FFmpeg
+ */
+export interface LivestreamProcess extends AsyncDisposable {
+
+  /**
+   * Resolve with the fMP4 initialization segment (typically `ftyp` + `moov`). Rejects with the reason the process ended for if it ends before the initialization
+   * segment completes. Each call returns a promise of its own, so a caller that drops one meets an unhandled rejection when the process ends first.
+   *
+   * @returns A promise resolving to the initialization segment bytes.
+   */
+  getInitSegment(): Promise<Buffer>;
+
+  /**
+   * Async generator yielding each completed media segment (a concatenated `moof` + `mdat` pair) as a single Buffer, in stream order. Terminates cleanly when the process
+   * or the caller's signal aborts, or when the underlying source ends.
+   *
+   * @param init - Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process.
+   *
+   * @returns An async generator yielding media segment buffers in stream order.
+   */
+  segments(init?: { signal?: AbortSignal }): AsyncGenerator<Buffer>;
+
+  /**
+   * Async generator yielding the whole segment stream as a kind-tagged sequence: one {@link Mp4Segment} of kind `"init"` carrying the initialization bytes, then one of
+   * kind `"media"` per completed media fragment. A third view over the same pipeline as {@link LivestreamProcess.getInitSegment} / {@link LivestreamProcess.segments}
+   * that shares their single-consumer contract - a consumer uses this view or that pair, never both.
+   *
+   * @param init - Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process.
+   *
+   * @returns An async generator yielding one `"init"` segment followed by `"media"` segments in stream order.
+   */
+  stream(init?: { signal?: AbortSignal }): AsyncGenerator<Mp4Segment>;
+}
+
+/**
+ * The creational half of the livestream dependency-inversion boundary: build a {@link LivestreamProcess} from the shared options and the livestream init. A consumer
+ * holds this factory typed as the abstraction and constructs through it, so a test can substitute a factory that returns a fake livestream process. The production
+ * factory is {@link livestreamProcessFactory}, whose `create` is exactly the {@link FfmpegLivestreamProcess} constructor call - so routing construction through this
+ * boundary is behavior-neutral, and a consumer wires it as it wires {@link RecordingProcessFactory}.
+ *
+ * @see livestreamProcessFactory
+ * @see LivestreamProcess
+ *
+ * @category FFmpeg
+ */
+export interface LivestreamProcessFactory {
+
+  /**
+   * Construct a livestream process for the supplied options and livestream init.
+   *
+   * @param options - Shared {@link FfmpegOptions} configuration (codec support, logger, debug flag, name).
+   * @param init    - Livestream init options. See {@link FfmpegLivestreamInit}.
+   *
+   * @returns A new {@link LivestreamProcess}.
+   */
+  create(options: FfmpegOptions, init: FfmpegLivestreamInit): LivestreamProcess;
+}
+
+/**
  * FFmpeg process specialization for fMP4 livestreaming from an RTSP source. Builds its command line from the provided livestream source and delegates segment production
  * to {@link FfmpegFMp4Process}.
  *
  * Used by HBUP as an alternative HKSV segment source when pulling directly from an RTSP URL (bypasses the Protect livestream API for debug and diagnostic scenarios).
- * Matches the polymorphic `{ getInitSegment(): Promise<Buffer>; segments(): AsyncGenerator<Buffer> }` interface HBUP uses across the native Protect livestream and this
- * class. Unlike recording, livestream does not enforce an inter-segment watchdog timeout: a live camera feed legitimately quiets down during low-motion periods and does
- * not carry HKSV's 5-second hard timing contract. Callers that need a liveness cap can compose their own timeout via the process's `signal`.
+ * The class satisfies {@link LivestreamProcess}, and a consumer that substitutes it under test constructs it through a {@link LivestreamProcessFactory}. Unlike
+ * recording, livestream does not enforce an inter-segment watchdog timeout: a live camera feed legitimately quiets down during low-motion periods and does not carry
+ * HKSV's 5-second hard timing contract. Callers that need a liveness cap can compose their own timeout via the process's `signal`.
  *
  * @example
  *
@@ -911,7 +983,7 @@ export const recordingProcessFactory: RecordingProcessFactory = {
  *
  * @category FFmpeg
  */
-export class FfmpegLivestreamProcess extends FfmpegFMp4Process {
+export class FfmpegLivestreamProcess extends FfmpegFMp4Process implements LivestreamProcess {
 
   /**
    * Construct and spawn a new fMP4 livestream process.
@@ -924,3 +996,17 @@ export class FfmpegLivestreamProcess extends FfmpegFMp4Process {
     super(options, { ...init, args: init.args ?? buildLivestreamCommandLine(options, init) });
   }
 }
+
+/**
+ * The production {@link LivestreamProcessFactory}: builds the concrete FFmpeg-backed livestream process. A consumer holds this typed as the abstraction; a test
+ * substitutes a fake factory. `create` is exactly the {@link FfmpegLivestreamProcess} constructor call, so wiring construction through this boundary is
+ * behavior-neutral.
+ *
+ * @see LivestreamProcessFactory
+ *
+ * @category FFmpeg
+ */
+export const livestreamProcessFactory: LivestreamProcessFactory = {
+
+  create: (options: FfmpegOptions, init: FfmpegLivestreamInit): LivestreamProcess => new FfmpegLivestreamProcess(options, init)
+};

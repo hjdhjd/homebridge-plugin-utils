@@ -41,6 +41,7 @@ import { once } from "node:events";
  */
 export * from "../clock-double.ts";
 export * from "../ffmpeg/fmp4-builders.ts";
+export * from "../ffmpeg/livestream-process-double.ts";
 export * from "../ffmpeg/recording-process-double.ts";
 export * from "../http-listener-double.ts";
 export * from "../logclient/socket-double.ts";

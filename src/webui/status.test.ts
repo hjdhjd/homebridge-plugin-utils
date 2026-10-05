@@ -26,10 +26,15 @@ const _protocolShapeExercises = (): void => {
   const _errored: StatusEvent = { kind: "error", reason: "auth-invalid", serialNumber: "abc", session: 6 };
 
   // Each word of the failure vocabulary constructs through the error arm, so a word dropped from the union fails the typecheck here rather than at a consuming plugin.
-  const _misconfigured: StatusEvent = { kind: "error", reason: "misconfigured", serialNumber: "abc", session: 7 };
-  const _notReady: StatusEvent = { kind: "error", reason: "not-ready", serialNumber: "abc", session: 8 };
-  const _throttled: StatusEvent = { kind: "error", reason: "throttled", serialNumber: "abc", session: 9 };
-  const _unsupported: StatusEvent = { kind: "error", reason: "unsupported", serialNumber: "abc", session: 10 };
+  const _authMissing: StatusEvent = { kind: "error", reason: "auth-missing", serialNumber: "abc", session: 7 };
+  const _faulted: StatusEvent = { kind: "error", reason: "faulted", serialNumber: "abc", session: 8 };
+  const _misconfigured: StatusEvent = { kind: "error", reason: "misconfigured", serialNumber: "abc", session: 9 };
+  const _notFound: StatusEvent = { kind: "error", reason: "not-found", serialNumber: "abc", session: 10 };
+  const _notReady: StatusEvent = { kind: "error", reason: "not-ready", serialNumber: "abc", session: 11 };
+  const _throttled: StatusEvent = { kind: "error", reason: "throttled", serialNumber: "abc", session: 12 };
+  const _timeout: StatusEvent = { kind: "error", reason: "timeout", serialNumber: "abc", session: 13 };
+  const _unreachable: StatusEvent = { kind: "error", reason: "unreachable", serialNumber: "abc", session: 14 };
+  const _unsupported: StatusEvent = { kind: "error", reason: "unsupported", serialNumber: "abc", session: 15 };
 
   // A template carries the static vocabulary; a row extends it with the live value. A latch row and a non-empty sizer tuple both type cleanly.
   const template: StatusRowTemplate = { id: "door", label: "Door", sizer: "Stopped (100%)" };

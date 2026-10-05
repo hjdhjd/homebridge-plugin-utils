@@ -197,13 +197,15 @@ export type StatusRowUpdate =
 
 /**
  * The classified reasons a status feed can fail to render, each mapping to distinct panel copy. Deliberately credential-neutral: `auth-invalid` / `auth-missing`
- * serve a PSK, a password, or a token equally. `misconfigured` (needing attention in its own app), `not-ready` (still starting), `throttled` (limiting its
- * requests), and `unsupported` (not one this plugin works with) each name what a device that answered is doing, as distinct from a device that did not answer or
- * refused a credential. The vocabulary grows additively in `homebridge-plugin-utils` when an adapter needs a new classification, never as a per-plugin fork.
+ * serve a PSK, a password, or a token equally. `faulted` (answering with an error, or with an answer that cannot be read), `misconfigured` (needing attention
+ * in its own app), `not-ready` (still starting), `throttled` (limiting its requests), and `unsupported` (not one this plugin works with) each name what a
+ * device that answered is doing, as distinct from a device that did not answer or refused a credential. The vocabulary grows additively in
+ * `homebridge-plugin-utils` when an adapter needs a new classification, never as a per-plugin fork.
  *
  * @category WebUI Status
  */
-export type StatusErrorReason = "auth-invalid" | "auth-missing" | "misconfigured" | "not-found" | "not-ready" | "throttled" | "timeout" | "unreachable" | "unsupported";
+export type StatusErrorReason =
+  "auth-invalid" | "auth-missing" | "faulted" | "misconfigured" | "not-found" | "not-ready" | "throttled" | "timeout" | "unreachable" | "unsupported";
 
 /**
  * The bridge event, a discriminated union tagged on `kind`. Every DEVICE event carries the device's `serialNumber` - the sidebar device model's universal identity, the

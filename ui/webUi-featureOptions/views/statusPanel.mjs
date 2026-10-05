@@ -80,7 +80,8 @@ import { selectedDevice } from "../selectors.mjs";
  * The classified feed-failure reasons. Mirrors `StatusErrorReason` from `src/webui/status.ts`; the component owns default copy for each and merges per-plugin
  * overrides on top.
  *
- * @typedef {"auth-invalid" | "auth-missing" | "misconfigured" | "not-found" | "not-ready" | "throttled" | "timeout" | "unreachable" | "unsupported"} StatusErrorReason
+ * @typedef {"auth-invalid" | "auth-missing" | "faulted" | "misconfigured" | "not-found" | "not-ready" | "throttled" | "timeout" | "unreachable" |
+ *   "unsupported"} StatusErrorReason
  */
 
 /**
@@ -160,12 +161,13 @@ const CHOICE_GLYPH_UNSELECTED = "\u{2610}\u{FE0E}";
 
 // The component's default error copy, one entry per classified reason. Deliberately credential-neutral - auth-invalid / auth-missing describe a rejected or absent
 // credential without naming a PSK, password, or token, and not-found says "on the network" rather than naming any one discovery mechanism - and equally neutral for a
-// device that answered but cannot be served, where misconfigured, not-ready, throttled, and unsupported name what that device is doing without naming the app, the
-// model, or the quota behind it, so the copy serves every adapter, and a plugin overrides any field it wants to specialize.
+// device that answered but cannot be served, where faulted, misconfigured, not-ready, throttled, and unsupported name what that device is doing without naming the
+// app, the model, the quota, or the protocol behind it, so the copy serves every adapter, and a plugin overrides any field it wants to specialize.
 const DEFAULT_ERROR_COPY = {
 
   "auth-invalid": { label: "Auth failed", message: "This device rejected the configured credentials." },
   "auth-missing": { label: "Auth required", message: "This device requires credentials that are not configured." },
+  "faulted": { label: "Device error", message: "This device responded with an error." },
   "misconfigured": { label: "Attention", message: "This device needs attention in its own app before it can be used." },
   "not-found": { label: "Not found", message: "This device was not discovered on the network." },
   "not-ready": { label: "Not ready", message: "This device is starting up and is not ready yet." },

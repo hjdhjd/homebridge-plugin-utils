@@ -787,6 +787,7 @@ describe("statusPanel - error copy", () => {
 
       [ "auth-invalid", "Auth failed", "This device rejected the configured credentials." ],
       [ "auth-missing", "Auth required", "This device requires credentials that are not configured." ],
+      [ "faulted", "Device error", "This device responded with an error." ],
       [ "misconfigured", "Attention", "This device needs attention in its own app before it can be used." ],
       [ "not-found", "Not found", "This device was not discovered on the network." ],
       [ "not-ready", "Not ready", "This device is starting up and is not ready yet." ],
@@ -825,6 +826,26 @@ describe("statusPanel - error copy", () => {
     fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 1, "throttled"));
     assert.equal(valueFor(root, "Status"), "Backing off", "the label override applies");
     assert.equal(messageText(root), "This device is limiting requests and will be retried.", "the untouched message keeps the default");
+  });
+
+  test("a message-only override replaces the message and keeps the default label", () => {
+
+    using dom = createTestDom();
+
+    const { fake } = fakeWithViewCapture();
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    const store = readyStore([DEVICE_A]);
+
+    // The merge is field by field, so an override that sets only the message keeps the default label, the mirror of a label-only override keeping the default message.
+    const { root } = mountPanel({ errorMessages: { faulted: { message: "The gateway answered with an error." } }, placeholderRows: PLACEHOLDER_ROWS }, store);
+
+    selectDevice(store, "AA");
+
+    fake.observed.emitPush(STATUS_EVENT, errorEvent("AA", 1, "faulted"));
+    assert.equal(valueFor(root, "Status"), "Device error", "the untouched label keeps the default");
+    assert.equal(messageText(root), "The gateway answered with an error.", "the message override applies");
   });
 });
 
@@ -926,8 +947,8 @@ describe("statusPanel - phantom reservations", () => {
     // The component-owned Status cell reserves every text it can render there - its waiting, offline, and connected texts, the link-lost label, the
     // unrecognized-reason fallback, and each default error label - because the reservation is derived from the copy tables rather than hand-kept beside them.
     assert.deepEqual(phantomsFor(root, "Status").map((el) => el.textContent),
-      [ "Connecting...", "Disconnected", "Connected", LOCKED_CONNECTED, "Link lost", "Unavailable", "Auth failed", "Auth required", "Attention", "Not found",
-        "Not ready", "Throttled", "No state", "Unreachable", "Unsupported" ], "the Status cell reserves every candidate");
+      [ "Connecting...", "Disconnected", "Connected", LOCKED_CONNECTED, "Link lost", "Unavailable", "Auth failed", "Auth required", "Device error", "Attention",
+        "Not found", "Not ready", "Throttled", "No state", "Unreachable", "Unsupported" ], "the Status cell reserves every candidate");
   });
 });
 

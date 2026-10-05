@@ -1281,7 +1281,7 @@ describe("TestMqttClient - teardown", () => {
     await owned();
 
     assert.equal(mqtt.aborted, true);
-    assert.ok(mqtt.signal.reason instanceof HbpuAbortError, "disposal defaults the abort reason exactly as a bare abort() does");
+    assert.throws(() => mqtt.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 });
 
@@ -1587,9 +1587,7 @@ describe("TestMqttClient - the unresolved-placeholder refusal", () => {
 
     mqtt.abort();
 
-    const reason = await mqtt.publish(UNRESOLVED, "on").then(() => null, (error: unknown) => error);
-
-    assert.ok(reason instanceof HbpuAbortError, "an aborted double rejects with its own abort reason rather than the refusal, observed: " + String(reason));
+    await assert.rejects(mqtt.publish(UNRESOLVED, "on"), { constructor: HbpuAbortError, name: "shutdown" });
     assert.doesNotThrow(() => mqtt.subscribe(UNRESOLVED, () => { /* Never reached. */ }), "subscribe on an aborted double stays a no-op");
     assert.doesNotThrow(() => mqtt.unsubscribe("device1", UNRESOLVED), "unsubscribe on an aborted double stays a no-op");
 

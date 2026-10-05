@@ -4,13 +4,13 @@
  * derived getters, startup timeout, and AsyncDisposable semantics.
  */
 import type { CapturingLog, TestLogEntry } from "../testing/index.ts";
-import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { capturingLog, errnoError } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessExitInfo } from "./process.ts";
+import { HbpuAbortError } from "../util.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
@@ -98,7 +98,7 @@ describe("FfmpegProcess - construction and readiness", () => {
     // After a natural clean exit, signal aborts with reason "closed" - hasError must be false.
     assert.equal(proc.aborted, true);
     assert.equal(proc.hasError, false);
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "closed"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "closed" });
   });
 
   test("exited resolves with non-zero code and signal.reason names the failure", async () => {
@@ -111,7 +111,7 @@ describe("FfmpegProcess - construction and readiness", () => {
     assert.equal(exit.exitSignal, null);
 
     assert.equal(proc.hasError, true);
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "failed"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
   });
 
   test("stderrLog accumulates lines across chunks and preserves them after exit", async () => {
@@ -165,7 +165,7 @@ describe("FfmpegProcess - abort paths", () => {
 
     await proc.exited;
 
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "shutdown"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 
   test("abort() passes explicit HbpuAbortError reasons through unchanged", async () => {
@@ -190,7 +190,7 @@ describe("FfmpegProcess - abort paths", () => {
       await proc.exited;
 
       assert.equal(proc.signal.reason, error, "reason should be the exact error instance passed to abort()");
-      assert.equal(isHbpuAbortReason(proc.signal.reason, reason), true);
+      assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: reason });
     }
   });
 
@@ -209,7 +209,7 @@ describe("FfmpegProcess - abort paths", () => {
     const exit = await proc.exited;
 
     assert.equal(proc.signal.reason, reason);
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "replaced"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "replaced" });
     assert.equal(proc.hasError, false, "hasError must not trigger just because the kill produced a nonzero exit");
 
     // The exit info itself still reflects what actually happened at the syscall level - the abort-guard preserves the reason, not the exit code.
@@ -231,7 +231,7 @@ describe("FfmpegProcess - abort paths", () => {
 
     // AbortSignal.any preserves the first-aborting source's reason, so the process's composed signal should carry exactly the parent's reason.
     assert.equal(proc.signal.reason, parentReason);
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "shutdown"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 
   test("a pre-aborted parent signal aborts the process immediately on construction", async () => {
@@ -265,7 +265,7 @@ describe("FfmpegProcess - abort paths", () => {
     await proc.exited;
 
     assert.equal(proc.signal.reason, first, "the first abort reason must persist through subsequent abort() calls");
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "replaced"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "replaced" });
   });
 });
 
@@ -420,7 +420,7 @@ describe("FfmpegProcess - asyncDispose", () => {
     await proc[Symbol.asyncDispose]();
 
     assert.equal(proc.aborted, true);
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "shutdown"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 });
 

@@ -245,7 +245,7 @@ describe("discoverServices - lifetime", () => {
       await reading;
       assert.deepEqual(seen, ["found"]);
       assert.equal(browser.aborted, true);
-      assert.ok(browser.signal.reason instanceof HbpuAbortError);
+      assert.throws(() => browser.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
     });
   });
 

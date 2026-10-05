@@ -8,9 +8,9 @@
  * the handlers directly. The retry arms are the exception in one respect only: their waits run on a TestClock, so a schedule is asserted rather than waited out.
  */
 import { HTTP_LISTENER_ANY_PATH, HttpListener } from "./http-listener.ts";
-import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { assertNoUnhandledRejections, capturingLog, expectAt, logCount, loggedAt, settle, stopListening, waitUntil } from "./testing/index.ts";
 import { createServer, request as httpRequest } from "node:http";
+import { HbpuAbortError } from "./util.ts";
 import type { IncomingHttpHeaders } from "node:http";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
@@ -413,7 +413,7 @@ test("a bind failure that is not a port conflict ends the listener and reports i
     return;
   }
 
-  assert.ok(isHbpuAbortReason(outcome, "failed"), "a fatal bind failure ends the lifetime as a failure, carrying the kernel's error");
+  await assert.rejects(listener.ready, { constructor: HbpuAbortError, name: "failed" });
   assert.equal(listener.aborted, true);
   assert.equal(logCount(log.entries, "error", "could not start"), 1, "the fault must be reported exactly once");
   assert.ok(loggedAt(log.entries, "error", LABEL));

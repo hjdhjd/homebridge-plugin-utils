@@ -6,7 +6,6 @@
 import { AudioRecordingCodecType, AudioRecordingSamplerate, H264Level, H264Profile } from "./hap-enums.ts";
 import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit } from "./record.ts";
 import { FfmpegLivestreamProcess, FfmpegRecordingProcess } from "./record.ts";
-import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { capturingLog, waitUntil } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import type { CameraRecordingConfiguration } from "homebridge";
@@ -14,6 +13,7 @@ import type { CapturingLog } from "../testing/index.ts";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { HKSV_TIMEOUT } from "./settings.ts";
+import { HbpuAbortError } from "../util.ts";
 import type { Readable } from "node:stream";
 import { TestClock } from "../clock-double.ts";
 import type { VideoEncoderOptions } from "./options.ts";
@@ -309,7 +309,7 @@ describe("FfmpegRecordingProcess - abort propagation between assembler and proce
     await proc.exited;
 
     assert.equal(proc.isTimedOut, true);
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "timeout" });
   });
 
   test("a clock carried on the options reaches the assembler's inter-segment window", async () => {
@@ -334,7 +334,7 @@ describe("FfmpegRecordingProcess - abort propagation between assembler and proce
     await proc.exited;
 
     assert.equal(proc.isTimedOut, true, "the full window elapsing on the injected clock aborts the recording");
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), true, "and it aborts with the timeout reason, not some other cause");
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "timeout" });
   });
 
   test("a recording timeout teardown logs the reap at debug, not warn", async () => {
@@ -966,8 +966,7 @@ describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
 
     await proc.exited.catch(() => { /* Nonzero exit resolves with the exit info; catch in case of spawn error. */ });
 
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "failed"), true,
-      "process's own nonzero-exit reason must survive the assembler's \"closed\" abort - bridge must defer on \"closed\"");
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
     assert.equal(proc.hasError, true);
   });
 
@@ -996,8 +995,7 @@ describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
 
     await proc.exited.catch(() => { /* The process exits as a consequence of the bridge-driven abort; exit outcome is not the subject. */ });
 
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "failed"), true,
-      "the bridge must forward the assembler's \"failed\" reason onto the process signal when the stdout source errors");
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
 
     // The assertion above already establishes, at runtime, that signal.reason is a failed HbpuAbortError; the assembler classification described above attaches
     // the synthetic stream error as its cause. signal.reason itself stays typed unknown at the AbortSignal boundary, so this cast narrows only for the type
@@ -1025,7 +1023,6 @@ describe("FfmpegFMp4Process - assembler-to-process bridge", () => {
 
     await proc.exited;
 
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "replaced"), true,
-      "an externally-supplied abort reason must survive the assembler's consequent signal abort - the bridge must not overwrite it");
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "replaced" });
   });
 });

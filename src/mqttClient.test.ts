@@ -11,7 +11,6 @@
  */
 import type { Assert, CapturingLog, Equal } from "./testing/index.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
-import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC } from "./mqtt-topics.ts";
 import { MqttClient, brokerErrorReason, createMqttClient, logGetterPublishOutcome, mqttConnectionSettings, mqttFeatureOptions, redactBrokerUrl,
   redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
@@ -21,6 +20,7 @@ import { awaitClientConnected, awaitConnect, firstRendered, logContains, recordC
   recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { describe, test } from "node:test";
 import { FeatureOptions } from "./featureOptions.ts";
+import { HbpuAbortError } from "./util.ts";
 import { MqttOfflineError } from "./mqtt-publish.ts";
 import assert from "node:assert/strict";
 import { connect } from "mqtt";
@@ -170,7 +170,7 @@ describe("MqttClient - abort and teardown", () => {
     client.abort();
 
     assert.equal(client.aborted, true);
-    assert.equal(isHbpuAbortReason(client.signal.reason, "shutdown"), true);
+    assert.throws(() => client.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 
   test("abort propagates an explicit reason", async () => {
@@ -763,10 +763,7 @@ describe("MqttClient - change-gated publish", () => {
 
       client.abort();
 
-      const reason = await client.publish(TOPIC, "on", { ifChanged: true }).then(() => null, (error: unknown) => error);
-
-      assert.ok(isHbpuAbortReason(reason, "shutdown"), "an aborted client rejects a change-gated publish with its own reason rather than resolving it, observed: " +
-        String(reason));
+      await assert.rejects(client.publish(TOPIC, "on", { ifChanged: true }), { constructor: HbpuAbortError, name: "shutdown" });
 
       client.publishGuarded(TOPIC, "on", { ifChanged: true });
 
@@ -3090,9 +3087,7 @@ describe("MqttClient - the unresolved-placeholder refusal", () => {
 
     client.abort();
 
-    const reason = await client.publish(UNRESOLVED, "on").then(() => null, (error: unknown) => error);
-
-    assert.ok(isHbpuAbortReason(reason, "shutdown"), "an aborted client rejects with its own abort reason rather than the refusal, observed: " + String(reason));
+    await assert.rejects(client.publish(UNRESOLVED, "on"), { constructor: HbpuAbortError, name: "shutdown" });
     assert.doesNotThrow(() => client.subscribe(UNRESOLVED, () => { /* Never reached. */ }), "subscribe on an aborted client stays a no-op");
     assert.doesNotThrow(() => client.unsubscribe("device1", UNRESOLVED), "unsubscribe on an aborted client stays a no-op");
 

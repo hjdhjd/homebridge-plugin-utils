@@ -3,8 +3,8 @@
  * ffmpeg/mp4-assembler.test.ts: Unit tests for the Mp4SegmentAssembler - init/segment split contract, timeout semantics, signal-aware termination,
  * AsyncDisposable teardown, the permanent source-error absorber, and the kind-tagged stream() view, driven by in-memory fixture Readables.
  */
-import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
+import { HbpuAbortError } from "../util.ts";
 import type { Mp4Segment } from "./mp4-assembler.ts";
 import { Mp4SegmentAssembler } from "./mp4-assembler.ts";
 import { PassThrough } from "node:stream";
@@ -154,8 +154,7 @@ describe("Mp4SegmentAssembler - media segments generator", () => {
     }
 
     assert.equal(segments.length, 1, "queued segment must be surfaced even though the source has already ended");
-    assert.equal(isHbpuAbortReason(assembler.signal.reason, "closed"), true,
-      "natural source end should abort the assembler's signal with reason \"closed\"");
+    assert.throws(() => assembler.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "closed" });
   });
 });
 
@@ -241,7 +240,7 @@ describe("Mp4SegmentAssembler - signal-aware termination", () => {
 
     // The lifetime ended with the source, so a fresh call meets an empty queue and a signal that has already aborted.
     await assertDone(assembler.segments(), "a second segments() call after the first has returned must end at once");
-    assert.equal(isHbpuAbortReason(assembler.signal.reason, "closed"), true, "a natural source end must abort the assembler's signal with reason \"closed\"");
+    assert.throws(() => assembler.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "closed" });
   });
 
   test("a per-call abort while the generator is parked between segments ends that generator alone", async () => {
@@ -421,7 +420,7 @@ describe("Mp4SegmentAssembler - watchdog timeout", () => {
     await assertDone(iter, "generator must terminate when the watchdog fires");
 
     assert.equal(assembler.isTimedOut, true, "isTimedOut must be true for an HbpuAbortError(\"timeout\") reason");
-    assert.equal(isHbpuAbortReason(assembler.signal.reason, "timeout"), true);
+    assert.throws(() => assembler.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "timeout" });
   });
 
   test("an injected clock drives the inter-segment window in virtual time, in both directions", async () => {
@@ -450,7 +449,7 @@ describe("Mp4SegmentAssembler - watchdog timeout", () => {
     await assertDone(iter, "the full window elapsing on the injected clock ends the generator");
 
     assert.equal(assembler.isTimedOut, true, "and aborts the assembler with a timeout reason");
-    assert.equal(isHbpuAbortReason(assembler.signal.reason, "timeout"), true);
+    assert.throws(() => assembler.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "timeout" });
   });
 
   test("is disabled by default (no timeout option means no watchdog)", async () => {
@@ -502,8 +501,7 @@ describe("Mp4SegmentAssembler - AsyncDisposable", () => {
 
     assert.ok(capturedSignal, "the source must have observed the assembler's abort signal during init");
     assert.equal(capturedSignal.aborted, true, "await using must have aborted the signal by the time the block exits");
-    assert.equal(isHbpuAbortReason(capturedSignal.reason, "shutdown"), true,
-      "default disposal reason is \"shutdown\" per the class contract");
+    assert.throws(() => capturedSignal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 
   test("explicit [Symbol.asyncDispose] aborts and awaits drain completion", async () => {
@@ -520,7 +518,7 @@ describe("Mp4SegmentAssembler - AsyncDisposable", () => {
     await assembler[Symbol.asyncDispose]();
 
     assert.equal(assembler.aborted, true);
-    assert.equal(isHbpuAbortReason(assembler.signal.reason, "shutdown"), true);
+    assert.throws(() => assembler.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 });
 
@@ -569,7 +567,7 @@ describe("Mp4SegmentAssembler - source error absorber", () => {
       return true;
     });
 
-    assert.equal(isHbpuAbortReason(assembler.signal.reason, "failed"), true);
+    assert.throws(() => assembler.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
   });
 });
 
@@ -636,7 +634,7 @@ describe("Mp4SegmentAssembler - kind-tagged stream", () => {
 
     // Exactly one init item then the single queued media item, both surfaced before the generator returns on the natural source end - no assembled segment is lost.
     assert.deepEqual(collected, [ { bytes: Buffer.concat([ ftyp, moov ]), kind: "init" }, { bytes: pair, kind: "media" } ]);
-    assert.equal(isHbpuAbortReason(assembler.signal.reason, "closed"), true, "natural source end aborts the assembler's signal with reason \"closed\"");
+    assert.throws(() => assembler.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "closed" });
   });
 
   test("stream() returns cleanly when the assembler aborts mid-stream, without hanging on the parked waiter", async () => {

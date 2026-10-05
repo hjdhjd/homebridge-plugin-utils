@@ -386,7 +386,7 @@ describe("LogSocket - permanent auth failure veto", () => {
 
     assert.equal(socket.aborted, true, "a permanent auth failure must abort the socket rather than loop forever");
     assert.equal(factory.sockets.length, 0, "a token failure must short-circuit before any WebSocket is constructed");
-    assert.ok(isHbpuAbortReason(socket.signal.reason, "failed"), "the socket must abort with a failed reason carrying the permanent auth cause");
+    assert.throws(() => socket.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
 
     await socket[Symbol.asyncDispose]();
   });
@@ -554,7 +554,7 @@ describe("LogSocket - CONNECT_ERROR", () => {
 
     assert.equal(socket.aborted, true, "a CONNECT_ERROR with a static token must abort the socket rather than retry forever");
     assert.equal(factory.sockets.length, 1, "a permanent handshake rejection must not construct a second WebSocket");
-    assert.ok(isHbpuAbortReason(socket.signal.reason, "failed"), "the socket must abort with a failed reason carrying the permanent auth cause");
+    assert.throws(() => socket.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
 
     // The terminal cause must be the actionable, refresh-aware permanent LogAuthError so the CLI can surface a clear message and exit non-zero.
     const { LogAuthError } = await import("./auth.ts");

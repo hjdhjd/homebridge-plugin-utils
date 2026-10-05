@@ -2,11 +2,11 @@
  *
  * ffmpeg/exec.test.ts: Unit tests for FfmpegExec - canned stdin, stdout collection, bundled result, abort cancellation.
  */
-import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
 import type { ExecResult } from "./exec.ts";
 import { FfmpegExec } from "./exec.ts";
 import { FfmpegOptions } from "./options.ts";
+import { HbpuAbortError } from "../util.ts";
 import type { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
@@ -140,7 +140,7 @@ describe("FfmpegExec - abort cancellation", () => {
 
     // 2. The lifetime signal carries the caller's abort reason verbatim. This is the SSOT for "why did this end" - any caller that needs to distinguish disposition
     //    consults `signal.reason`, not the byte content of stdout.
-    assert.equal(isHbpuAbortReason(exec.signal.reason, "shutdown"), true);
+    assert.throws(() => exec.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
 
     // 3. The OS-level exit info is populated. Kill-driven exit surfaces either a signal or a non-zero code; this is the second SSOT for disposition, complementing
     //    `signal.reason` with the syscall-level facts.

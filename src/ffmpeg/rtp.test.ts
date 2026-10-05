@@ -4,11 +4,11 @@
  * always-on RTCP-replay heartbeat, signal-driven socket lifetime, two-tier readiness milestones, scope-bound port reservation handles, and concurrent
  * allocator behavior.
  */
-import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import type { PortReservation, RtpProbeSocket } from "./rtp.ts";
 import { RtpDemuxer, RtpPortAllocator } from "./rtp.ts";
 import { bindReceiver, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
 import { describe, test } from "node:test";
+import { HbpuAbortError } from "../util.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
 import { TestClock } from "../clock-double.ts";
 import { TestProbeSocketFactory } from "./rtp.helpers.ts";
@@ -393,7 +393,7 @@ describe("RtpDemuxer - inactivity watchdog", () => {
       await delay(200);
 
       assert.equal(demuxer.isTimedOut, true, "inactivity watchdog must abort the demuxer with a timeout reason");
-      assert.equal(isHbpuAbortReason(demuxer.signal.reason, "timeout"), true);
+      assert.throws(() => demuxer.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "timeout" });
     } finally {
 
       await demuxer[Symbol.asyncDispose]();
@@ -425,7 +425,7 @@ describe("RtpDemuxer - inactivity watchdog", () => {
       clock.advance(1);
 
       assert.equal(demuxer.isTimedOut, true, "the full window elapsing on the injected clock aborts the demuxer");
-      assert.equal(isHbpuAbortReason(demuxer.signal.reason, "timeout"), true, "and it aborts with the timeout reason, not some other cause");
+      assert.throws(() => demuxer.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "timeout" });
     } finally {
 
       await demuxer[Symbol.asyncDispose]();
@@ -490,7 +490,7 @@ describe("RtpDemuxer - socket errors", () => {
       await delay(50);
 
       assert.equal(collider.aborted, true, "collider must have aborted after failing to bind to a port held by another demuxer");
-      assert.equal(isHbpuAbortReason(collider.signal.reason, "failed"), true, "bind failure must surface as HbpuAbortError(\"failed\")");
+      assert.throws(() => collider.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
 
       // The assertion above already establishes, at runtime, that signal.reason is a failed HbpuAbortError carrying the kernel error as its cause. signal.reason
       // itself stays typed unknown at the AbortSignal boundary, so this cast narrows only for the type checker, not for a fact TypeScript could otherwise see.
@@ -580,7 +580,7 @@ describe("RtpDemuxer - signal-driven teardown", () => {
     await probePortAvailable(boundPort);
 
     assert.equal(demuxer.aborted, true);
-    assert.equal(isHbpuAbortReason(demuxer.signal.reason, "shutdown"), true);
+    assert.throws(() => demuxer.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 
   test("await using aborts with shutdown reason by the time the block exits", async () => {
@@ -601,7 +601,7 @@ describe("RtpDemuxer - signal-driven teardown", () => {
 
     assert.ok(capturedSignal, "the demuxer must have observed an abort signal during ready resolution");
     assert.equal(capturedSignal.aborted, true);
-    assert.equal(isHbpuAbortReason(capturedSignal.reason, "shutdown"), true);
+    assert.throws(() => capturedSignal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 });
 

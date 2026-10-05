@@ -529,7 +529,8 @@ describe("HomebridgeLogClient - token lifecycle", () => {
     await waitUntil(() => outcome !== undefined, { description: "the history call to end once the client is torn down", timeoutMs: 500 });
     await drained;
 
-    assert.ok((outcome instanceof HbpuAbortError) && (outcome.name === "shutdown"), "the call ends with the client's own shutdown reason");
+    assert.ok(outcome instanceof HbpuAbortError);
+    assert.equal(outcome.name, "shutdown");
     assert.equal(open, 0, "no login request outlives the teardown");
   });
 
@@ -816,8 +817,8 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
     const reason = download.downloadAbortReason();
 
-    assert.ok((reason instanceof HbpuAbortError) && (reason.name === "replaced"),
-      "the seed-covers decision must abort the speculative download with the supersession reason, not merely tear it down at the end");
+    assert.ok(reason instanceof HbpuAbortError);
+    assert.equal(reason.name, "replaced");
   });
 
   test("a completed download before any seed decision is used (no spin, no hang)", async () => {

@@ -5,10 +5,10 @@
  * dual-signal segment termination, the recording stdin sink, and the factory's create-call recording).
  */
 import type { FfmpegRecordingInit, FfmpegRecordingProcess, RecordingProcess, RecordingProcessFactory } from "./record.ts";
-import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { TestRecordingProcess, TestRecordingProcessFactory } from "./recording-process-double.ts";
 import { describe, test } from "node:test";
 import type { FfmpegOptions } from "./options.ts";
+import { HbpuAbortError } from "../util.ts";
 import assert from "node:assert/strict";
 import { recordingProcessFactory } from "./record.ts";
 
@@ -162,7 +162,7 @@ describe("TestRecordingProcess - abort and the pre-init init reject", () => {
     proc.abort();
 
     assert.equal(proc.signal.aborted, true, "abort() must abort the process signal");
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "shutdown"), true, "the default abort reason must be a real HbpuAbortError('shutdown')");
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
     assert.equal(proc.abortCalls.length, 1, "abort() must record exactly one call");
     assert.equal(proc.abortCalls[0], proc.signal.reason, "the recorded reason must be the same reason the signal carries");
   });

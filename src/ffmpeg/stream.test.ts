@@ -2,13 +2,13 @@
  *
  * ffmpeg/stream.test.ts: Unit tests for FfmpegStreamingProcess - signal-driven internal health socket, liveness watchdog, abort propagation, externally readable stdout.
  */
-import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { describe, test } from "node:test";
 import { holdPort, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
 import { silentLog, waitUntil } from "../testing/index.ts";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { FfmpegStreamingProcess } from "./stream.ts";
+import { HbpuAbortError } from "../util.ts";
 import type { HomebridgePluginLogging } from "../util.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
@@ -97,7 +97,7 @@ describe("FfmpegStreamingProcess - health socket watchdog", () => {
     await delay(250);
 
     assert.equal(proc.isTimedOut, false, "with no inbound packet the watchdog must never arm, so a cold-start stream must not be aborted with a timeout reason");
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), false, "the signal must not carry a timeout reason when no packet ever arrived");
+    assert.equal(proc.signal.reason, undefined);
 
     // Tear down explicitly so the still-idling child is reaped. `await using` would also dispose at scope exit, but aborting here makes the cleanup intent obvious and
     // settles the process deterministically before the assertions' scope ends.
@@ -151,7 +151,7 @@ describe("FfmpegStreamingProcess - health socket watchdog", () => {
     await delay(250);
 
     assert.equal(proc.isTimedOut, true, "after the first packet arms the watchdog, a gap longer than the window with no further packets must abort with a timeout");
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "timeout" });
   });
 
   test("a clock carried on the options drives the health window in virtual time, in both directions", async () => {
@@ -178,7 +178,7 @@ describe("FfmpegStreamingProcess - health socket watchdog", () => {
     clock.advance(1);
 
     assert.equal(proc.isTimedOut, true, "the full window elapsing on the injected clock aborts the process");
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "timeout"), true, "and it aborts with the timeout reason, not some other cause");
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "timeout" });
   });
 });
 
@@ -222,7 +222,7 @@ describe("FfmpegStreamingProcess - teardown propagation", () => {
 
     await proc.exited;
 
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "shutdown"), true);
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 });
 
@@ -305,7 +305,7 @@ describe("FfmpegStreamingProcess - health socket error path", () => {
     await delay(50);
 
     assert.equal(proc.aborted, true, "a bind failure on the return port must abort the streaming process");
-    assert.equal(isHbpuAbortReason(proc.signal.reason, "failed"), true, "the abort reason must be \"failed\" carrying the underlying socket error");
+    assert.throws(() => proc.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
 
     // Narrows to the `{ cause }` shape `HbpuAbortError("failed", { cause: error })` attaches via the standard Error `cause` option, which the assertion below
     // then verifies.

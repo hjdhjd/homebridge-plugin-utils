@@ -4,8 +4,8 @@
  * highWaterMark overflow behavior, and null-provider drop semantics.
  */
 import { BackpressureClosedStreamError, BackpressureOverflowError, BackpressureWriter } from "./backpressure.ts";
-import { HbpuAbortError, isHbpuAbortReason } from "./util.ts";
 import { describe, test } from "node:test";
+import { HbpuAbortError } from "./util.ts";
 import type { Nullable } from "./util.ts";
 import { PassThrough } from "node:stream";
 import type { Writable } from "node:stream";
@@ -245,7 +245,7 @@ describe("BackpressureWriter - abort and teardown", () => {
     writer.abort();
 
     assert.equal(writer.aborted, true);
-    assert.equal(isHbpuAbortReason(writer.signal.reason, "shutdown"), true);
+    assert.throws(() => writer.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
   });
 
   test("abort is safe to call more than once", async () => {
@@ -308,7 +308,7 @@ describe("BackpressureWriter - abort and teardown", () => {
     await assert.rejects(writer.write(Buffer.from("x")), (error: unknown) => error === streamError);
 
     assert.equal(writer.aborted, true);
-    assert.equal(isHbpuAbortReason(writer.signal.reason, "failed"), true);
+    assert.throws(() => writer.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "failed" });
   });
 
   test("stream-error escalation rejects every queued resolver, not just the in-flight one", async () => {

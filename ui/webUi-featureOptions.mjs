@@ -1196,6 +1196,10 @@ export class webUiFeatureOptions {
    *   - A call made while the page is loading waits until the page's model has loaded or its load has failed, and then runs as it would on the page it finds, so
    *     the list it brings lands after the load's own rather than under it. It must not be awaited from inside the plugin's own getControllers hook, where the
    *     load would wait on the call that waits on it until the load's deadline fails the page.
+   *   - A call made while an edit is unwritten or its write is in flight waits for that write, cutting its debounce short, and then runs on what the host holds.
+   *     A write the host refuses rolls the edit back and the call goes on; a write that does not settle within the deadline, or a cycle that ends meanwhile,
+   *     resolves false. A caller that refreshes on every edit therefore has each edit written at once. An edit made after the wait, while the plugin's hook is
+   *     answering, still replaces the entry, so that call resolves false and the caller's next call waits for it.
    *   - A config re-sync failure resolves false and leaves the rendered view exactly as it was. This is a deliberate divergence from show(), which routes a sync
    *     failure into the connection-error view: an explicit refresh must never tear down a working sidebar over a failed config read. A controller hook that fails or
    *     never answers resolves false on the same reasoning - both awaits are bounded, so neither can leave the caller waiting on a dead bridge.
@@ -1208,9 +1212,9 @@ export class webUiFeatureOptions {
    *     controllers can answer an empty list for a moment, so a populated page keeps the controllers it shows through one; taking a controller off the page is a
    *     coordinated write's business, through {@link webUiFeatureOptions#commitConfig}. A list that is null or absent is a wrong-shaped result and rejects with the
    *     TypeError described below.
-   *   - An outcome that arrives after the session's platform entry has been replaced - by a coordinated write's commit, or by a later sync - resolves false
-   *     without dispatching. The entry's identity is the staleness test, because every act that advances the replica replaces that object, so the list this hook
-   *     read for is recognizable without any counter of this method's own.
+   *   - An outcome that arrives after the session's platform entry has been replaced - by a coordinated write's commit, a staged edit's write, or a later sync -
+   *     resolves false without dispatching. The entry's identity is the staleness test, because every act that advances the replica replaces that object, so
+   *     the list this hook read for is recognizable without any counter of this method's own.
    *   - A non-empty list dispatches controllers:loaded and resolves true once the sidebar has transitioned to the new list, with the move onto a first controller
    *     begun by then where the list brought one.
    *
@@ -1269,6 +1273,32 @@ export class webUiFeatureOptions {
       return false;
     }
 
+    /* An edit the user staged and the host has not yet answered for is written before the config read below. Read without it, the list answers for a
+     * configuration that lacks the edit; read while its write is still out, the write's commit replaces the platform entry under the hook and the identity test
+     * drops the list. The wait forces the write through the cycle's own flush, cutting the debounce short and sharing a drain already under way, so the page keeps
+     * one writer and one way to wait for it. It is bounded where the model decision's wait is not, because a host write is a call the page cannot cancel and may
+     * never be answered, and the cycle's signal releases it as it releases every await here. A drain that rolls the edit back after a host refusal resolves, and
+     * its own toast reports it, so the refresh goes on against what the host holds. The handle and the store are read here rather than at entry because the boot
+     * registers its staging effect after its own config read, so a refresh made in the boot window finds the handle only once the decision above has settled.
+     */
+    const flush = this.#flushStaging;
+
+    if(flush && stagingPending(this.#store.state)) {
+
+      try {
+
+        await withDeadline({ promise: flush(), seconds: BOOT_AWAIT_DEADLINE_SECONDS, signal });
+      } catch {
+
+        return false;
+      }
+
+      if(signal.aborted) {
+
+        return false;
+      }
+    }
+
     // Re-read the host config into the session before we read controllers, exactly as show() does at its entry, so a refresh after a Settings-tab edit acts on the
     // current config rather than a frozen snapshot. Unlike show(), a read failure here does NOT route into the connection-error view: an explicit refresh must never
     // replace a working sidebar with the error frame over a failed config read, so we leave the store untouched and report that the refresh made no change.
@@ -1280,9 +1310,9 @@ export class webUiFeatureOptions {
       return false;
     }
 
-    // The platform entry this refresh reads its controllers for. Every act that advances the session's replica - a coordinated write's commit, a later sync -
-    // builds a new entry object rather than mutating this one, so holding the reference is all that is needed to recognize an outcome that answers for a
-    // configuration the page has already moved off, and no counter of this method's own has to be kept in step with the session's.
+    // The platform entry this refresh reads its controllers for. Every act that advances the session's replica - a coordinated write's commit, a staged edit's
+    // write, a later sync - builds a new entry object rather than mutating this one, so holding the reference is all that is needed to recognize an outcome that
+    // answers for a configuration the page has already moved off, and no counter of this method's own has to be kept in step with the session's.
     const platform = this.#session.platform;
 
     // Re-invoke the configured getControllers hook with the same injected-config shape show() uses, bounded on the same reasoning as the sync above. A device-only

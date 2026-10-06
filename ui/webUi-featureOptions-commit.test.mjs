@@ -1580,6 +1580,40 @@ describe("webUiFeatureOptions.commitConfig - the caller's own bugs and the page'
 
     assert.equal(page.skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 2, "and the sidebar it would have repainted is untouched");
   });
+
+  /* A composer runs inside the write's hold, where nothing the user edited is pending, so a refresh it starts must neither wait on a drain nor cause a write of
+   * its own. The host calls and the answer asserted here are those of a refresh whose path holds no drain at all, and a refresh that waited inside the hold or
+   * wrote from it would move them.
+   */
+  test("a refresh a composer starts inside the write's hold waits for nothing and adds no write", async () => {
+
+    using dom = createTestDom();
+    using page = makePage();
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+
+    const callsBefore = page.fake.observed.calls.length;
+    let refreshing;
+
+    const result = await page.orchestrator.commitConfig(() => {
+
+      refreshing = page.orchestrator.refreshControllers();
+
+      return { controllers: [ CONTROLLER_A, CONTROLLER_B ] };
+    });
+
+    assert.equal(result.kind, "committed", "precondition: the write landed");
+    assert.equal(await refreshing, true, "the refresh answers as it does with nothing pending");
+
+    await flush();
+
+    assert.deepEqual(page.fake.observed.calls.slice(callsBefore), [ "updatePluginConfig", "getPluginConfig", "savePluginConfig" ],
+      "the host saw the write's own calls and nothing more");
+    assert.deepEqual(page.fake.observed.updatedConfigs.map((entry) => entry[0].controllers.map((controller) => controller.serialNumber)), [[ "CTRL-A", "CTRL-B" ]],
+      "one write went out, and it was the composer's");
+    assert.equal(page.skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length, 2, "and the sidebar shows the list the write established");
+  });
 });
 
 describe("webUiFeatureOptions - the teardown's own edges", () => {

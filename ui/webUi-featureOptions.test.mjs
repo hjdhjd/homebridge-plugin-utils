@@ -5914,6 +5914,386 @@ describe("webUiFeatureOptions.refreshControllers - a list that brings the first 
   });
 });
 
+describe("webUiFeatureOptions.refreshControllers - an edit being staged", () => {
+
+  const HUB_A = { name: "Hub A", serialNumber: "CTRL-A" };
+  const HUB_B = { name: "Hub B", serialNumber: "CTRL-B" };
+  const BOOT_DEADLINE_MS = 30000;
+  const TEARDOWN_FLUSH_CAP_MS = 2000;
+
+  /* A controller-based page whose hook answers the controllers its injected configuration holds, so the configuration a refresh hands it is readable from the
+   * answer. Every row reads order from `log`, which this page keeps itself: the fake host records its own calls but never the plugin's hooks, so the host's reads
+   * and writes and the controller hook each append their name here as they are called. `hooks.seen` holds the options each controller call was handed, and
+   * `hooks.onControllers` and `onLoaded` are where a row holds a call open or acts inside the load.
+   */
+  const arrange = ({ onLoaded = undefined } = {}) => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({ config: [{ controllers: [HUB_A], name: "TestPlugin", options: [], platform: "TestPlugin" }],
+      requestResponses: new Map([[ "/getOptions", FEATURES ]]) });
+    const homebridgeGuard = installHomebridge(fake);
+    const log = [];
+    const read = fake.getPluginConfig;
+    const write = fake.updatePluginConfig;
+
+    fake.getPluginConfig = (...args) => {
+
+      log.push("getPluginConfig");
+
+      return read(...args);
+    };
+
+    fake.updatePluginConfig = (...args) => {
+
+      log.push("updatePluginConfig");
+
+      return write(...args);
+    };
+
+    seedBootstrapProbeShim();
+
+    const hooks = { onControllers: null, seen: [] };
+    const orchestrator = new webUiFeatureOptions({
+
+      getControllers: ({ config: platform }) => {
+
+        log.push("getControllers");
+        hooks.seen.push([...platform.options]);
+
+        const answer = { controllers: platform.controllers, error: "" };
+
+        return hooks.onControllers ? hooks.onControllers({ answer, call: hooks.seen.length }) : answer;
+      },
+      getDevices: (controller) => ({ devices: controller ? [ { name: controller.name, serialNumber: controller.serialNumber },
+        { name: "Front Door", serialNumber: controller.serialNumber + "-CAM" } ] : [], error: "" }),
+      onLoaded: () => onLoaded?.(),
+      ui: { isController: (device) => !device.serialNumber.endsWith("-CAM") }
+    });
+
+    return { fake, homebridgeGuard, hooks, log, orchestrator, skeleton };
+  };
+
+  // Toggle a catalog option at the scope the page is on, which stages it: the staging effect's debounce starts, and no write goes out until it ends or a flush
+  // cuts it short.
+  const edit = (page, category, name, checked) => {
+
+    clickCategoryHeader(page.skeleton.configTable.querySelector("details[data-category='" + category + "']"));
+
+    const checkbox = page.skeleton.configTable.querySelector("[id='" + category + "." + name + "']");
+
+    checkbox.checked = checked;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+
+  /* Hold the host's configuration writes open after the fake has recorded them, so the host already holds what each write carries while the page waits on its
+   * answer. `count` bounds how many are held, so the writes past it settle on their own; `hang` holds them forever, for the rows whose write never answers.
+   */
+  const holdWrites = (page, { count = Infinity, hang = false } = {}) => {
+
+    const settlers = [];
+    const original = page.fake.updatePluginConfig;
+    let taken = 0;
+
+    page.fake.updatePluginConfig = async (next) => {
+
+      await original(next);
+
+      if(taken >= count) {
+
+        return;
+      }
+
+      taken += 1;
+
+      return new Promise((resolve, reject) => hang || settlers.push({ reject, resolve }));
+    };
+
+    return { fail: (error) => settlers.shift().reject(error), get pending() {
+
+      return settlers.length;
+    }, release: () => settlers.shift().resolve() };
+  };
+
+  const sidebarCount = (page) => page.skeleton.controllersContainer.querySelectorAll("[data-navigation='controller']").length;
+
+  // A page booted and settled, with its boot's own host calls and hook call cleared from the log so a row reads only what follows.
+  const bootedPage = async (options) => {
+
+    const page = arrange(options);
+
+    await page.orchestrator.show(await openTestSession());
+    await flush();
+    page.log.length = 0;
+
+    return page;
+  };
+
+  test("a refresh inside an edit's debounce writes the edit before it reads the configuration and asks the hook", async () => {
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    edit(page, "Motion", "Detect", false);
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the refresh lands its list");
+    assert.deepEqual(page.log, [ "updatePluginConfig", "getPluginConfig", "getControllers" ], "the edit's write came first, then the read and the hook");
+    assert.deepEqual(page.hooks.seen.at(-1), ["Disable.Motion.Detect.CTRL-A"], "and the hook was handed a configuration carrying the edit");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh made while the staged write is held at the host asks the hook only once the write resolves, then applies its list", async () => {
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    const writes = holdWrites(page);
+
+    edit(page, "Motion", "Detect", false);
+    await waitFor(() => writes.pending === 1, { message: "the staged write must be out and held" });
+
+    page.hooks.onControllers = ({ answer }) => ({ ...answer, controllers: [ HUB_A, HUB_B ] });
+
+    const refreshing = page.orchestrator.refreshControllers();
+
+    await flush();
+    assert.deepEqual(page.log, ["updatePluginConfig"], "nothing is read and the hook is not asked while the write is held");
+
+    writes.release();
+
+    assert.equal(await refreshing, true, "the list built after the write is not dropped by it");
+    assert.deepEqual(page.log, [ "updatePluginConfig", "getPluginConfig", "getControllers" ], "the read and the hook followed the write");
+    await flush();
+    assert.equal(sidebarCount(page), 2, "and the sidebar shows the refreshed list");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh after back-to-back edits, the later one unwritten, hands the hook both", async () => {
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    const writes = holdWrites(page, { count: 1 });
+
+    edit(page, "Motion", "Detect", false);
+    await waitFor(() => writes.pending === 1, { message: "the staged write must be out and held" });
+    edit(page, "Audio", "Volume", true);
+
+    const refreshing = page.orchestrator.refreshControllers();
+
+    await flush();
+    writes.release();
+
+    assert.equal(await refreshing, true, "the refresh lands its list");
+    assert.deepEqual(page.hooks.seen.at(-1)?.toSorted(), [ "Disable.Motion.Detect.CTRL-A", "Enable.Audio.Volume.CTRL-A=50" ], "the hook saw both edits");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh whose staged write the host refuses goes on against what the host holds, and the rollback raises one error toast", async () => {
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    const writes = holdWrites(page);
+
+    edit(page, "Motion", "Detect", false);
+    await waitFor(() => writes.pending === 1, { message: "the staged write must be out and held" });
+
+    const refreshing = page.orchestrator.refreshControllers();
+
+    await flush();
+    page.fake.config = [{ controllers: [HUB_A], name: "TestPlugin", options: [], platform: "TestPlugin" }];
+    writes.fail(new Error("host refused the write"));
+
+    assert.equal(await refreshing, true, "a non-empty list still lands, as on any other call");
+    await flush();
+    assert.deepEqual(page.hooks.seen.at(-1), [], "the hook was handed the configuration the host holds, without the refused edit");
+    assert.equal(page.fake.observed.toasts.filter((toast) => toast.variant === "error").length, 1, "the drain's own toast reports the rollback, once");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh whose staged write never settles is released false by the deadline, having asked no hook", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    holdWrites(page, { hang: true });
+    edit(page, "Motion", "Detect", false);
+
+    const refreshing = page.orchestrator.refreshControllers();
+
+    await flush();
+    t.mock.timers.tick(BOOT_DEADLINE_MS + 1);
+
+    assert.equal(await refreshing, false, "the deadline releases the wait");
+    assert.ok(!page.log.includes("getControllers"), "and the hook was never asked");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh whose staged write never settles is released false by a superseding show, having asked no hook", async (t) => {
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    holdWrites(page, { hang: true });
+    edit(page, "Motion", "Detect", false);
+
+    const refreshing = page.orchestrator.refreshControllers();
+    let answer;
+
+    void refreshing.then((value) => { answer = value; });
+    await flush();
+
+    // The superseding show's teardown races its own flush of the same drain against its cap, so the old cycle ends just past that cap and well short of the
+    // refresh's deadline: the release this row reads is the cycle's end.
+    void page.orchestrator.show(await openTestSession());
+    await flush();
+    t.mock.timers.tick(TEARDOWN_FLUSH_CAP_MS + 1);
+    await flush();
+
+    assert.equal(answer, false, "the cycle's end released the refresh before its deadline");
+    assert.equal(page.log.filter((call) => call === "getControllers").length, 1, "and the only hook call since is the new boot's own");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("two refreshes waiting on one drain share one write, and the later list stands", async () => {
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    const writes = holdWrites(page);
+
+    edit(page, "Motion", "Detect", false);
+    await waitFor(() => writes.pending === 1, { message: "the staged write must be out and held" });
+
+    const first = page.orchestrator.refreshControllers();
+
+    page.hooks.onControllers = ({ answer }) => ({ ...answer, controllers: [ HUB_A, HUB_B ] });
+
+    const second = page.orchestrator.refreshControllers();
+
+    await flush();
+    writes.release();
+    await Promise.all([ first, second ]);
+    await flush();
+
+    assert.equal(page.log.filter((call) => call === "updatePluginConfig").length, 1, "one write went out for both");
+    assert.equal(sidebarCount(page), 2, "and the later list is the one the sidebar shows");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh on a clean store makes only its read and its hook call", async () => {
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    assert.equal(await page.orchestrator.refreshControllers(), true, "the refresh lands its list");
+    assert.deepEqual(page.log, [ "getPluginConfig", "getControllers" ], "no write, and today's order");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a refresh made in the boot window, before the handle exists, still writes an edit made inside the load ahead of its hook", async () => {
+
+    using dom = createTestDom();
+
+    const page = arrange({ onLoaded: () => edit(page, "Motion", "Detect", false) });
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    const session = await openTestSession();
+
+    // Hold the boot's own configuration read, ahead of the point where the boot registers the staging effect, so the refresh starts while no handle exists.
+    const bootRead = Promise.withResolvers();
+    const read = page.fake.getPluginConfig;
+
+    page.fake.getPluginConfig = () => {
+
+      page.fake.getPluginConfig = read;
+
+      return bootRead.promise.then(() => read());
+    };
+
+    const showPromise = page.orchestrator.show(session);
+
+    await flush();
+
+    const refreshing = page.orchestrator.refreshControllers();
+
+    await flush();
+    bootRead.resolve();
+    await showPromise;
+
+    assert.equal(await refreshing, true, "the refresh lands its list after the load");
+
+    const refreshLog = page.log.slice(page.log.indexOf("getControllers") + 1);
+
+    assert.deepEqual(refreshLog, [ "updatePluginConfig", "getPluginConfig", "getControllers" ], "the edit made inside the load was written before the refresh's hook");
+    assert.deepEqual(page.hooks.seen.at(-1), ["Disable.Motion.Detect"], "and the hook was handed it, at the global scope the load starts on");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("an edit made while the refresh's hook is answering replaces the entry, and that refresh resolves false", async () => {
+
+    using dom = createTestDom();
+
+    const page = await bootedPage();
+
+    using homebridgeInstall = page.homebridgeGuard;
+
+    const answered = Promise.withResolvers();
+
+    page.hooks.onControllers = ({ answer }) => answered.promise.then(() => answer);
+
+    const refreshing = page.orchestrator.refreshControllers();
+
+    await flush();
+    edit(page, "Motion", "Detect", false);
+    await waitFor(() => page.log.includes("updatePluginConfig"), { message: "the edit's write must reach the host" });
+    await flush();
+    answered.resolve();
+
+    assert.equal(await refreshing, false, "the list read for the entry the write replaced is dropped; the caller's next call waits for the edit");
+
+    page.orchestrator.cleanup();
+  });
+});
+
 describe("webUiFeatureOptions - status panel selection", () => {
 
   test("the constructor accepts infoPanel alone, statusPanel alone, or neither, and rejects both together", () => {

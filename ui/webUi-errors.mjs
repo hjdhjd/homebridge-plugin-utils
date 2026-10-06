@@ -18,7 +18,8 @@
  * Extract a user-facing message from an arbitrary thrown value. The webUI's extension points - caller-supplied first-run hooks, plugin device fetchers, the
  * connection-error retry callback, the config re-sync - can reject with any shape (an Error, a string, a plain object, a primitive), so the message is extracted
  * defensively: `err?.message` when the value carries one, a string coercion of the whole value otherwise. This is the single error-to-text truth the webUI shares,
- * so a toast, a nav-view connection-error message, and the sync-failure copy all read the same thrown value the same way.
+ * so a toast, a nav-view connection-error message, and the sync-failure copy all read the same thrown value the same way. The boot monitor the loader stamps
+ * restates this rule inline, because it runs before any module loads, and the loader's suite holds that text equal to this function.
  *
  * @param {*} err - The thrown value to describe.
  * @returns {string} The extracted message.

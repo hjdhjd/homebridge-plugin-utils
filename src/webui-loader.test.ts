@@ -7,6 +7,7 @@ import { createFakeHomebridge, createTestDom, installHomebridge } from "../ui/ui
 import { describe, test } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { errorMessage } from "../ui/webUi-errors.mjs";
 import { runInThisContext } from "node:vm";
 
 // A well-formed config comment placed outside a marker pair, the shape a plugin's index.html carries. Built as a helper so each test varies only the config JSON it
@@ -407,6 +408,24 @@ describe("boot monitor behavior", () => {
     assert.ok(text.includes("Error: undefined"), "an undefined reason coerces to the string undefined rather than throwing");
   });
 
+  test("an unhandled rejection carrying a plain object with a message reads that message on the error line", (t) => {
+
+    using dom = createTestDom();
+    const { fake } = spinnerSpyHomebridge();
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    startMonitor(t);
+
+    const event = Object.assign(new Event("unhandledrejection"), { reason: { message: "Request failed." } });
+
+    window.dispatchEvent(event);
+
+    const details = document.getElementById("bootErrorDetails");
+
+    assert.equal(details?.children.item(1)?.textContent, "Error: Request failed.", "a plain-object rejection reads by its message, never its string form");
+  });
+
   test("neither handler calls preventDefault, so the browser console keeps every error", (t) => {
 
     using dom = createTestDom();
@@ -556,4 +575,37 @@ describe("boot monitor behavior", () => {
     assert.match(text, /Browser: \S/, "the browser line carries the user agent");
     assert.ok(details?.querySelector("img") === null, "the untrusted error text is assigned via textContent, never parsed as markup");
   });
+
+  // The monitor restates errorMessage's rule inline because it runs before any module loads, so every value here goes to a running monitor and to the helper,
+  // and the error line must read the helper's answer. The empty and zero messages tell the helper's nullish operator apart from a looser falsy one.
+  const errorLineValues: readonly { label: string; value: unknown }[] = [
+
+    { label: "an Error", value: new Error("Kaboom.") },
+    { label: "an Error with an empty message", value: new Error("") },
+    { label: "a string", value: "Request failed." },
+    { label: "a plain object with a string message", value: { message: "Request failed." } },
+    { label: "a plain object whose message is the empty string", value: { message: "" } },
+    { label: "a plain object whose message is the number 0", value: { message: 0 } },
+    { label: "a plain object with no message", value: { code: 500 } },
+    { label: "null", value: null },
+    { label: "undefined", value: undefined }
+  ];
+
+  for(const { label, value } of errorLineValues) {
+
+    test("the error line for " + label + " reads as errorMessage reads it", (t) => {
+
+      using dom = createTestDom();
+      const { fake } = spinnerSpyHomebridge();
+
+      using homebridgeInstall = installHomebridge(fake);
+
+      startMonitor(t);
+      bootMonitor().fail("manifest", value);
+
+      const details = document.getElementById("bootErrorDetails");
+
+      assert.equal(details?.children.item(1)?.textContent, "Error: " + errorMessage(value), "the monitor's copy of the rule answers as the helper does");
+    });
+  }
 });

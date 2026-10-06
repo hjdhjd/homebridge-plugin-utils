@@ -4,6 +4,7 @@
  * contract modules and never a module that touches the document: importing the package in Node evaluates every module named here, and a module that reaches for
  * the document fails there.
  */
+export * from "./address.ts";
 export * from "./commit.ts";
 export * from "./saveflow.ts";
 export * from "./status.ts";

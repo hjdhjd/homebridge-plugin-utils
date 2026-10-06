@@ -21,11 +21,29 @@ read.
 Construction costs nothing on the wire. The pool connects lazily, on the first request through it, so a dispatcher may be built during startup without any host
 being reachable yet.
 
-Teardown has an upper bound rather than an instant. Abort your in-flight signals first, then destroy the dispatcher. A retry backoff pending at that moment is a
-plain timer the retry interceptor owns, so a request waiting on one settles against the destroyed pool - as an error whose code is `UND_ERR_DESTROYED` - no later
-than when that backoff elapses, and sooner when the destroy interrupts the exchange before a backoff is even scheduled. A request still waiting on a connection
-settles no later than the configured `connectTimeout`, which is where the transport abandons the attempt. A shutdown budget is therefore sized against
-`maxTimeout` and `connectTimeout` together.
+A request's own signal is answered for as long as its response has not started. An abort in that window settles the caller at once with the signal's reason, or
+with the transport's request-aborted error when that reason is null or undefined, whether the request is waiting in the pool's queue, waiting on a connection, or
+waiting out a retry backoff, and a request that aborted while it waited in the pool's queue costs no dial when the queue reaches it. Once the response has started,
+an abort is the transport's to handle. The transport's queue never looks at a signal, so the composition answers it where the transport offers a hook: the pool
+builds its connections from a client that drops a request whose signal has aborted, and a gate composed as the outermost layer releases the caller at the abort.
+A dial already running at an abort still runs on to the configured `connectTimeout`, its caller already released. A released request's entry leaves the pool's
+queue at the pool's next drain, so until then the pool's `queued` and `pending` figures count callers that have already been answered.
+
+Some requests stay outside that reach. `fetch` puts no signal on its dispatch, so a `fetch` waiting in the pool's queue still dials when the queue reaches it,
+though `fetch` releases its own caller at the abort. A signal that is an event emitter rather than an `AbortSignal` takes the transport's own path. A request the
+transport's connection recycling has already moved to a connection's own queue still costs that connection, and an aborted request already written to a connection
+still triggers one more dial.
+
+Teardown has an upper bound rather than an instant. Abort your in-flight signals first, then destroy the dispatcher. The abort settles every caller whose response
+has not started, at once and with its reason. A retry backoff pending at that moment is a plain timer the retry interceptor owns: while the pool is open, a backoff
+whose attempt never reached a connection fires once into the client that drops the request and dials nothing, and one whose attempt was on a connection is cleared
+by the abort of that attempt's controller. After `destroy()`, the pool refuses the backoff's re-dispatch with its destroyed error before any client sees it, and
+the gate drops that error, since its caller has already been answered. A request that was not aborted first settles with that destroyed error, whose code is
+`UND_ERR_DESTROYED`, no later than when its backoff elapses, and sooner when the destroy interrupts the exchange before a backoff is even scheduled.
+
+While the pool is open, a request waiting on a connection waits out every dial queued ahead of it, each bounded by `connectTimeout`, so its own wait grows with its
+place in line until its signal ends it. `destroy()` settles every request still waiting at once, and only a dial already running goes on to `connectTimeout`, which
+is where the transport abandons the attempt. A shutdown budget is therefore sized against `maxTimeout` and `connectTimeout` together.
 
 ## Utilities
 
@@ -40,7 +58,7 @@ Construction options for [createApiDispatcher](#createapidispatcher), and for th
 | <a id="allowh2"></a> `allowH2?` | `boolean` | Whether to offer HTTP/2 during connection negotiation. Defaults to `true`; a server that does not speak it simply stays on HTTP/1.1. |
 | <a id="clientttl"></a> `clientTtl?` | `number` \| `null` | How long, in milliseconds, a pooled connection may live before it is recycled. Defaults to `60000`, which bounds how long a keepalive socket to a host that has since rebooted can linger. Pass `null` to disable recycling entirely, which is what a plugin holding long-lived connections to a local gateway wants. |
 | <a id="connections"></a> `connections?` | `number` | How many connections the pool may open to the origin. Defaults to `1`, which is what an API client issuing one request at a time needs. |
-| <a id="connecttimeout"></a> `connectTimeout?` | `number` | How long, in milliseconds, a connection attempt may take before it fails. Defaults to `5000`. The bound sits here rather than on the request because the transport attaches a request's abort signal only once a connection exists...without it, an attempt to a host that never answers runs to the transport's own ten-second default and no signal can end it. `5000` is the default because a local API answers a connect in milliseconds, and the value matches the retry ladder's `maxTimeout`, so the bounds a shutdown budget includes sit in the same size class. |
+| <a id="connecttimeout"></a> `connectTimeout?` | `number` | How long, in milliseconds, a connection attempt may take before it fails. Defaults to `5000`. The bound sits here rather than on the request because no signal can end a dial already running: the transport attaches a request's signal only once a connection exists, and the gate that releases a caller at its abort leaves the dial itself to run...without this bound, an attempt to a host that never answers runs on to the transport's own ten-second default, holding its socket long after its caller has been released. `5000` is the default because a local API answers a connect in milliseconds, and the value matches the retry ladder's `maxTimeout`, so the bounds a shutdown budget includes sit in the same size class. |
 | <a id="origin"></a> `origin` | `string` \| `URL` | The origin every request through this dispatcher is sent to. |
 | <a id="rejectunauthorized"></a> `rejectUnauthorized?` | `boolean` | Whether to require a valid TLS certificate chain. Omitted, the dispatcher sets nothing and the platform decides: Node verifies the chain by default, and a process started with `NODE_TLS_REJECT_UNAUTHORIZED=0` does not. `true` requires a chain the platform accepts, which no environment setting can relax. `false` verifies nothing, which is occasionally the only way to reach a device shipping a certificate it generated for itself, and a plugin that does relax it owns that decision. |
 | <a id="retry"></a> `retry?` | `false` \| `RetryOptions` | The retry policy. Defaults to `{ maxRetries: 3, maxTimeout: 5000, minTimeout: 1000, statusCodes: API_RETRY_STATUS_CODES, timeoutFactor: 2 }`. An object supplied here merges OVER those defaults field by field, so overriding `maxRetries` alone keeps the vetted status list. Pass `false` to compose no retry interceptor at all, which is what a protocol that answers with a retryable-looking status to MEAN something - a 503 that says "not ready yet" rather than "try again" - needs, since a retry would swallow the answer. **Remarks** These fields are the whole of what this module sets. Every other member of the transport's retry vocabulary keeps the transport's own default, including the list of methods eligible for retry and the connection-fault `errorCodes` axis, which means resets, refusals, and unresolvable names are retried underneath this policy whether or not any status is. |
@@ -78,6 +96,11 @@ Derive the pool construction options from [ApiDispatcherOptions](#apidispatchero
 
 Exported because it is the testable core of [createApiDispatcher](#createapidispatcher) and because a plugin that needs a pool option this module does not surface can start from
 the vetted base rather than from nothing.
+
+These options carry neither part of the answer to a request's own signal: [createApiDispatcher](#createapidispatcher) supplies the client that drops an aborted request
+where it builds the pool and composes the gate above it, so a pool built from these options alone keeps the transport's own handling, in which an aborted request
+waits in the pool's queue until a connection takes it. The gate is the outermost layer of this module's composition alone, so a layer a plugin composes above the
+returned dispatcher sits above it.
 
 #### Parameters
 
@@ -127,6 +150,10 @@ Build a pooled dispatcher for an HTTP API, with retries and a user-agent already
 The dispatcher is returned, not installed: a plugin holds it in a field, hands it to its own client, or installs it globally, as it prefers. Its lifetime is the
 plugin's too - it is an ordinary transport dispatcher, so `destroy()` goes on whatever teardown stack the plugin already keeps, and rebuilding a wedged one is
 another call to this function.
+
+The composition also answers a request's own signal while its response has not started, through the client the pool builds and a gate composed outermost, and
+the options carry neither. The gate is the outermost layer of this module's composition alone, so a layer a plugin composes above the returned dispatcher - its
+own retry interceptor among them - sits above the gate and sees a request the gate released as an aborted one.
 
 #### Parameters
 

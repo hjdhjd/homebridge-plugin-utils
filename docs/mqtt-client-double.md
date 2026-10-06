@@ -536,6 +536,6 @@ One recorded subscription registration.
 | ------ | ------ | ------ |
 | <a id="handler"></a> `handler` | \| [`MqttHandler`](mqttClient.md#mqtthandler) \| [`MqttGetHandler`](mqttClient.md#mqttgethandler) \| [`MqttSetHandler`](mqttClient.md#mqttsethandler) | The callback exactly as the caller registered it - the raw handler, the getter, or the setter itself rather than a wrapper around it - so a driver can run it directly. Which of those it is follows from `kind`. |
 | <a id="init"></a> `init` | \| [`MqttSubscribeInit`](mqttClient.md#mqttsubscribeinit) \| [`MqttSubscribeSetInit`](mqttClient.md#mqttsubscribesetinit) | The init the caller passed, verbatim, so a test can assert which signal (and, for a set registration, which timeout) governs the entry. |
-| <a id="kind"></a> `kind` | `"get"` \| `"set"` \| `"raw"` | Which registration verb produced the entry. |
+| <a id="kind"></a> `kind` | `"raw"` \| `"get"` \| `"set"` | Which registration verb produced the entry. |
 | <a id="topic-1"></a> `topic` | `string` | The topic the entry is registered on: the tail the caller passed, carrying the `/get` or `/set` suffix exactly as the client appends it. |
 | <a id="type"></a> `type` | `string` \| `undefined` | The human-readable label a get or set registration carries, and `undefined` for a raw registration, which has none. |

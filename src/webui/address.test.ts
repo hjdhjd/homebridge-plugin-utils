@@ -1,11 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * webui/address.test.ts: Contract tests for the listed-address rule - the literal listing form of each spelling the rule folds or refuses, and the
- * listed-elsewhere answer for adds, edits, the exact-self exemption, values with no form, and lists holding values that are not strings.
+ * webui/address.test.ts: Contract tests for the listed-address rule - the literal listing form of each spelling the rule folds or refuses, the default port it
+ * folds under each scheme, and the listed-elsewhere answer for adds, edits, the exact-self exemption, values with no form, lists holding values that are not
+ * strings, and a plugin dialing `http`.
  */
+import type { AddressFormOptions, AddressListedOptions } from "./address.ts";
 import { addressListedElsewhere, addressListingForm } from "./address.ts";
 import { describe, test } from "node:test";
-import type { AddressListedOptions } from "./address.ts";
 import type { Nullable } from "../util.ts";
 import assert from "node:assert/strict";
 
@@ -15,6 +16,7 @@ interface FormRow {
   readonly answer: Nullable<string>;
   readonly input: unknown;
   readonly label: string;
+  readonly options?: AddressFormOptions;
 }
 
 interface ListedRow {
@@ -41,6 +43,11 @@ describe("addressListingForm", () => {
     { answer: "[fe80::1]:8443", input: "[fe80::1]:8443", label: "a bracketed IPv6 literal keeps a port other than the default" },
     { answer: "10.0.0.1", input: "10.1", label: "IPv4 shorthand folds to the dotted quad" },
     { answer: "10.0.0.1", input: "0x0a.0.0.1", label: "a hexadecimal IPv4 part folds to the dotted quad" },
+    { answer: "gw.local", input: "gw.local:80", label: "a host written with the HTTP default port folds to the bare host under http", options: { scheme: "http" } },
+    { answer: "gw.local:443", input: "gw.local:443", label: "a host written with the HTTPS default port keeps that port under http", options: { scheme: "http" } },
+    { answer: "gw.local:8080", input: "gw.local:8080", label: "a port other than the HTTP default stays in the form under http", options: { scheme: "http" } },
+    { answer: "[fe80::1]", input: "[fe80::1]:80", label: "a bracketed IPv6 literal on the HTTP default port drops the port under http", options: { scheme: "http" } },
+    { answer: "10.0.0.1", input: "10.1:80", label: "IPv4 shorthand on the HTTP default port folds to the dotted quad under http", options: { scheme: "http" } },
     { answer: null, input: 42, label: "a number has no form" },
     { answer: null, input: null, label: "null has no form" },
     { answer: null, input: undefined, label: "undefined has no form" },
@@ -68,7 +75,7 @@ describe("addressListingForm", () => {
 
     test(row.label, () => {
 
-      assert.equal(addressListingForm(row.input), row.answer);
+      assert.equal(addressListingForm(row.input, row.options), row.answer);
     });
   }
 });
@@ -83,6 +90,14 @@ describe("addressListedElsewhere", () => {
       options: { address: "[fe80::1]", addresses: [ "unifi.local", "fe80::1" ], index: -1 } },
     { answer: false, label: "an add of a free address is not listed elsewhere", options: { address: "10.0.0.9", addresses: ["10.0.0.1"], index: -1 } },
     { answer: false, label: "a kept port is listed apart from the same host bare", options: { address: "unifi.local:8443", addresses: ["unifi.local"], index: -1 } },
+    { answer: true, label: "an add of a host written with the HTTPS default port beside the same host bare is listed elsewhere",
+      options: { address: "unifi.local:443", addresses: ["unifi.local"], index: -1 } },
+    { answer: true, label: "an add of a host written with the HTTP default port beside the same host bare is listed elsewhere under http",
+      options: { address: "gw.local:80", addresses: ["gw.local"], index: -1, scheme: "http" } },
+    { answer: false, label: "an add of a host written with the HTTPS default port beside the same host bare is not listed elsewhere under http",
+      options: { address: "gw.local:443", addresses: ["gw.local"], index: -1, scheme: "http" } },
+    { answer: true, label: "an add of a bare host beside the same host written with the HTTP default port is listed elsewhere under http",
+      options: { address: "gw.local", addresses: ["gw.local:80"], index: -1, scheme: "http" } },
     { answer: false, label: "the exact value at the target is exempt beside its twin",
       options: { address: "10.0.0.1", addresses: [ "10.0.0.1", "10.0.0.1" ], index: 0 } },
     { answer: true, label: "a case-only edit of the target beside a twin in that spelling is listed elsewhere",

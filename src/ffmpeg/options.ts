@@ -50,12 +50,11 @@ const H264_PROFILE_NAMES = {
  * Configuration options for `FfmpegOptions`, defining transcoding, decoding, logging, and hardware acceleration settings.
  *
  * @property clock                - Optional time source for the callback timers every process built from these options, and every resource those processes compose,
- *                                  arm: the streaming health watchdog and the segment assembler's inter-segment watchdog. Left undefined, each of those falls back to
- *                                  `systemClock` on its own, so the options object carries the choice unresolved exactly as any other composer does. The clock lives
- *                                  here, beside `log` and `debug`, because these options ARE the per-session substrate a consumer configures once and every process,
- *                                  recording, and livestream is then built from, where an init carries per-construction lifetimes instead. The startup timeout and
- *                                  the codec probe are deadline signals rather than callback timers, and they draw those signals from this same clock, so a
- *                                  consumer's virtual clock drives every shape of time the process family arms.
+ *                                  arm: the startup watchdog, the streaming health watchdog, and the segment assembler's inter-segment watchdog. Left undefined, each
+ *                                  of those falls back to `systemClock` on its own, so the options object carries the choice unresolved exactly as any other composer
+ *                                  does. The clock lives here, beside `log` and `debug`, because these options ARE the per-session substrate a consumer configures
+ *                                  once and every process, recording, and livestream is then built from, where an init carries per-construction lifetimes instead.
+ *                                  A consumer's virtual clock therefore drives every window the process family arms.
  * @property codecSupport         - FFmpeg codec capabilities and hardware support.
  * @property crop                 - Optional. Cropping rectangle for output video. Each of `width`, `height`, `x`, and `y` is a fraction of the source frame's
  *                                  corresponding dimension (0 to 1), not a pixel count or a percentage - `{ width: 1, height: 1, x: 0, y: 0 }` selects the full

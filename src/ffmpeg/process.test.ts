@@ -71,6 +71,12 @@ function silentIdle(): string[] {
   return [ "-e", "setInterval(() => {}, 100000);" ];
 }
 
+// Inline Node script - writes NOTHING to stderr and exits at once with code 0. Stands in for a silent child that ends inside its startup window.
+function silentExit(): string[] {
+
+  return [ "-e", "process.exit(0);" ];
+}
+
 describe("FfmpegProcess - construction and readiness", () => {
 
   test("spawns on construction and resolves ready on first stderr output", async () => {
@@ -379,6 +385,81 @@ describe("FfmpegProcess - startup timeout", () => {
 
     assert.equal(proc.aborted, false, "watchdog must not fire once we are already past the first-stderr milestone");
     assert.equal(proc.isTimedOut, false);
+  });
+
+  test("the first stderr byte clears the window from the clock, so crossing it afterwards aborts nothing", async () => {
+
+    const clock = new TestClock();
+
+    await using proc = new FfmpegProcess(makeOptions(capturingLog(), { clock }), { args: stderrThenIdle(), startupTimeout: 50 });
+
+    assert.equal(clock.pending, 1, "the startup window is armed before the child has written anything");
+
+    await proc.ready;
+
+    assert.equal(clock.pending, 0, "the first stderr byte clears it from the clock");
+
+    clock.advance(50);
+
+    assert.equal(proc.aborted, false, "so crossing the window leaves the process running");
+  });
+
+  test("a parent signal aborting inside the window clears it from the clock", async () => {
+
+    const clock = new TestClock();
+    const parent = new AbortController();
+
+    await using proc = new FfmpegProcess(makeOptions(capturingLog(), { clock }), { args: silentIdle(), signal: parent.signal, startupTimeout: 50 });
+
+    assert.equal(clock.pending, 1, "the startup window is armed");
+
+    parent.abort(new HbpuAbortError("shutdown"));
+
+    assert.equal(clock.pending, 0, "the parent's abort clears it at once, through the watchdog's own listener on the process signal");
+
+    await proc.exited;
+
+    assert.equal(proc.isTimedOut, false, "and the process ends on the parent's reason rather than a timeout");
+  });
+
+  test("a parent signal already aborted at construction leaves the window unarmed", async () => {
+
+    const clock = new TestClock();
+    const parent = new AbortController();
+
+    parent.abort(new HbpuAbortError("shutdown"));
+
+    await using proc = new FfmpegProcess(makeOptions(capturingLog(), { clock }), { args: silentIdle(), signal: parent.signal, startupTimeout: 50 });
+
+    assert.equal(proc.aborted, true, "the process is aborted the moment the constructor returns");
+    assert.equal(clock.pending, 0, "and nothing is on the clock");
+    assert.deepEqual(clock.requested, [], "because the window was never armed");
+  });
+
+  test("a silent child that exits inside the window leaves nothing on the clock", async () => {
+
+    const clock = new TestClock();
+
+    await using proc = new FfmpegProcess(makeOptions(capturingLog(), { clock }), { args: silentExit(), startupTimeout: 50 });
+
+    assert.equal(clock.pending, 1, "the startup window is armed while the child runs");
+
+    await proc.exited;
+
+    assert.equal(clock.pending, 0, "the child's exit aborts the process signal, which clears the window");
+    assert.equal(proc.isTimedOut, false, "so the process ends on its exit rather than a timeout");
+  });
+
+  test("an injected clock with no startup timeout is asked for no window", async () => {
+
+    const clock = new TestClock();
+
+    await using proc = new FfmpegProcess(makeOptions(capturingLog(), { clock }), { args: stderrThenIdle() });
+
+    assert.deepEqual(clock.requested, [], "no window is asked of the clock");
+    assert.equal(clock.pending, 0, "and nothing is on it");
+
+    await proc.ready;
   });
 });
 

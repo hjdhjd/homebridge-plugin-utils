@@ -100,10 +100,11 @@ export type MqttGetHandler = () => string;
  *
  * - `value`    - the lowercased normalized form, convenient for comparisons against fixtures like `"true"` / `"on"`.
  * - `rawValue` - the raw message string, for cases where case or surrounding whitespace matters.
- * - `signal`   - an {@link AbortSignal} that aborts when the subscription's connection-level signal fires or (if configured) the per-invocation timeout elapses.
- *                Signal-aware setters forward this to any cancellation-capable API they call (`fetch`, `events.once`, `node:timers/promises`, etc.) so the setter's work
- *                actually stops when the wrapper times out. Setters that ignore the signal continue to run after timeout, but the subscription slot is released either
- *                way; nothing is structurally blocked by a hanging setter.
+ * - `signal`   - an {@link AbortSignal} that aborts when the subscription's connection-level signal fires or (if configured) the per-invocation timeout elapses
+ *                before the setter settles. Signal-aware setters forward this to any cancellation-capable API they call (`fetch`, `events.once`, `node:timers/promises`,
+ *                etc.) so the setter's work actually stops when the wrapper times out. The timeout bounds the setter's own promise and is released once it settles, so
+ *                work a setter leaves running after it returns is bounded by the connection-level signal alone. Setters that ignore the signal continue to run after
+ *                timeout, but the subscription slot is released either way; nothing is structurally blocked by a hanging setter.
  *
  * **Log-routing contract.** How the setter settles determines which log line `subscribeSet` emits:
  *
@@ -573,9 +574,9 @@ export interface MqttSubscribeInit {
  * Per-subscription options accepted by {@link MqttClient.subscribeSet}.
  *
  * @property signal  - Optional {@link AbortSignal} that auto-unsubscribes this handler. See {@link MqttSubscribeInit}.
- * @property timeout - Optional timeout, in milliseconds, applied to each invocation of the user-supplied setter. When the setter takes longer than this, the
- *                    invocation is cancelled and a warning is logged. Omit for no timeout - the setter still unwinds if the connection-level signal aborts, via
- *                    {@link runWithAbort}.
+ * @property timeout - Optional timeout, in milliseconds, applied to each invocation of the user-supplied setter: it bounds the setter's promise and is released
+ *                    once that promise settles. When the setter takes longer than this, the invocation is cancelled and a warning is logged. Omit for no timeout -
+ *                    the setter still unwinds if the connection-level signal aborts, via {@link runWithAbort}.
  *
  * @category Utilities
  */

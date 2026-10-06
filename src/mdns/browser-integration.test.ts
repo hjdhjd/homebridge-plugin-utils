@@ -10,12 +10,12 @@ import { dnsNameKey, txtEntries } from "./message.ts";
 import { silentLog, waitUntil } from "../testing/index.ts";
 import type { CiaoService } from "@homebridge/ciao";
 import type { MdnsService } from "./browser.ts";
+import { armDeadline } from "../clock.ts";
 import assert from "node:assert/strict";
 import ciao from "@homebridge/ciao";
 import { discoverServices } from "./discovery.ts";
 import { mdnsIntegrationEnabled } from "./integration.helpers.ts";
 import { pid } from "node:process";
-import { systemClock } from "../clock.ts";
 import { waitWithSignal } from "../util.ts";
 
 // The type this suite advertises under, which no real device answers for.
@@ -44,11 +44,15 @@ async function awaitAnnounced(service: CiaoService): Promise<void> {
   await waitUntil(() => service.serviceState === ANNOUNCED, { description: "the responder to finish announcing", pollMs: 50, timeoutMs: ANNOUNCE_TIMEOUT_MS });
 }
 
-// The next event the consumer's loop would be given, bounded so a network that says nothing fails the row rather than hanging it.
+// The next event the consumer's loop would be given, bounded so a network that says nothing fails the row rather than hanging it. The deadline is released as
+// soon as the event arrives, so a row that reads several events leaves no timer behind for each one.
 async function nextEvent(discovery: MdnsDiscovery<MdnsService>, description: string): Promise<MdnsDiscoveryEvent<MdnsService>> {
 
   const iterator = discovery[Symbol.asyncIterator]();
-  const result = await waitWithSignal(iterator.next(), systemClock.timeout(EVENT_TIMEOUT_MS));
+
+  using deadline = armDeadline(EVENT_TIMEOUT_MS);
+
+  const result = await waitWithSignal(iterator.next(), deadline.signal);
 
   assert.ok(!result.done, "the discovery ended while waiting for " + description);
 

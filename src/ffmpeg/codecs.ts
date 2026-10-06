@@ -24,6 +24,7 @@
  * @module
  */
 import { EOL, cpus } from "node:os";
+import { armDeadline, systemClock } from "../clock.ts";
 import { env, platform } from "node:process";
 import type { Clock } from "../clock.ts";
 import type { ExecException } from "node:child_process";
@@ -32,7 +33,6 @@ import { composeSignals } from "../util.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFileSync } from "node:fs";
-import { systemClock } from "../clock.ts";
 
 // Promisified execFile, created once at module level rather than per-invocation.
 const execFileAsync = promisify(execFile);
@@ -287,9 +287,9 @@ export function parseAppleSiliconGeneration(model: string): number {
 export interface FOptions {
 
   /**
-   * Optional. The time source each probe's per-command deadline is armed on. Defaults to {@link systemClock}, whose `timeout` IS `AbortSignal.timeout`, so the
-   * default path is that same platform call with one indirection in front of it and no behavior change. Supplying a controllable clock (`TestClock`) puts every
-   * probe deadline on virtual time, so a suite drives a hung binary's timeout instead of waiting it out.
+   * Optional. The time source each probe's per-command deadline is armed on, through {@link armDeadline}. Defaults to {@link systemClock}, on whose callback timer the
+   * deadline then runs. Supplying a controllable clock (`TestClock`) puts every probe deadline on virtual time, so a suite drives a hung binary's timeout instead of
+   * waiting it out.
    */
   clock?: Clock;
 
@@ -865,10 +865,13 @@ async function probeCmd(command: string, commandLineArgs: string[], processOutpu
 
   const { clock, log, quietRunErrors = false, signal: callerSignal } = options;
 
-  // Always compose with a per-probe watchdog timeout so the worst-case outcome is bounded. The deadline comes from the context's clock, so a consumer that wired one
-  // drives this window on virtual time. When the caller also supplies a signal, `composeSignals` falls through to `AbortSignal.any()`; when no caller signal is
-  // supplied, the timeout alone governs (composeSignals returns it unwrapped).
-  const composed = composeSignals(callerSignal, clock.timeout(PROBE_DEFAULT_TIMEOUT_MS));
+  // Always compose with a per-probe deadline so the worst-case outcome is bounded. The deadline is armed on the context's clock, so a consumer that wired one drives
+  // this window on virtual time, and it is released when the probe settles, whichever way it settles, so no timer outlives a command that already answered. When the
+  // caller also supplies a signal, `composeSignals` falls through to `AbortSignal.any()`; when no caller signal is supplied, the deadline alone governs
+  // (composeSignals returns it unwrapped).
+  using deadline = armDeadline(PROBE_DEFAULT_TIMEOUT_MS, { clock });
+
+  const composed = composeSignals(callerSignal, deadline.signal);
 
   try {
 

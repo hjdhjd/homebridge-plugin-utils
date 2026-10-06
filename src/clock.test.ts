@@ -2,26 +2,43 @@
  *
  * clock.test.ts: Unit tests for the injectable Clock contract - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
  * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, its schedule() IS the global callback timers read at call time and
- * forwards an unref to the platform handle's own unref(), its timeout() IS AbortSignal.timeout, and past the platform timer's ceiling each of the three carries the
- * delay as a chain of arms that fires at the requested moment without the platform's overflow warning), plus the shipped controllable TestClock double (advanceable
- * virtual time, deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on
- * both resolution paths, the requested history across every settlement path, the earliest-pending-deadline read, the step that lands on that deadline, the callback
- * timers that share that one timeline with the delays, the deadline signals whose reason a consumer cannot tell apart from the platform's, the unref it accepts
- * and ignores because a virtual timeline has no process to hold open, and the window past the ceiling that is an ordinary entry on a timeline with none).
+ * forwards an unref to the platform handle's own unref(), and past the platform timer's ceiling every member that arms time carries the delay as a chain of arms
+ * that fires at the requested moment without the platform's overflow warning), plus the shipped controllable TestClock double (advanceable virtual time,
+ * deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on both
+ * resolution paths, the requested history across every settlement path, the earliest-pending-deadline read, the step that lands on that deadline, the callback
+ * timers that share that one timeline with the delays, the unref it accepts and ignores because a virtual timeline has no process to hold open, and the window past
+ * the ceiling that is an ordinary entry on a timeline with none), plus the cancellable deadline armDeadline builds on a clock's own timer (its reason a consumer
+ * cannot tell apart from the platform's, its release on disposal on each clock, its span carried past the ceiling, and its unreferenced timer that lets a process
+ * exit with a deadline still armed).
  */
-import { TIMER_DELAY_MAX_MS, systemClock } from "./clock.ts";
+import { TIMER_DELAY_MAX_MS, armDeadline, systemClock } from "./clock.ts";
 import { describe, test } from "node:test";
-import { getEventListeners, once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { settle, waitUntil } from "./testing/index.ts";
 import type { Clock } from "./clock.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { getEventListeners } from "node:events";
 import { isTimeoutReason } from "./util.ts";
 import { join } from "node:path";
-import { settle } from "./testing/index.ts";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
+
+// This repo's own clock module by absolute path, the specifier a child process imports it through.
+const CLOCK_PATH = fileURLToPath(new URL("./clock.ts", import.meta.url));
+
+// How long a child process may take to reach its own exit before its spawn's deadline kills it. Generous enough for a cold type-stripping start on a slow CI host,
+// and short enough that the kill lands well inside the runner's own per-test timeout.
+const CHILD_EXIT_BOUND_MS = 10000;
+
+// What a child process answered: its exit code, null when the spawn's deadline killed it, beside everything it wrote.
+interface ChildOutcome {
+
+  readonly code: number | null;
+  readonly stderr: string;
+  readonly stdout: string;
+}
 
 // Flush the microtask queue so a delay that became due during a synchronous `advance` has run its `resolve`/`reject` continuation before the test inspects the outcome.
 // `advance` settles each due entry synchronously, but the awaiting code runs on a later microtask; a bare `await Promise.resolve()` yields long enough for those to run.
@@ -42,9 +59,9 @@ function assertAbortError(thrown: unknown, message: string): void {
 }
 
 // Assert that `reason` is the deadline shape `AbortSignal.timeout` aborts with: a DOMException named "TimeoutError" that the library's own predicate accepts. This is
-// the fidelity anchor for the third time shape - systemClock (the platform call itself) and TestClock (the fabricated double) must both satisfy it, because a consumer
-// branching on a deadline reason must not be able to tell which clock produced it. Unlike the AbortError shape above, the constructor identity IS assertable here:
-// DOMException is a constructable global, so the double reproduces the real class rather than only its observable fields.
+// the fidelity anchor for armDeadline's reason - a deadline on systemClock and one on TestClock must each satisfy it, because a consumer branching on a deadline
+// reason must not be able to tell which clock, or the platform itself, produced it. Unlike the AbortError shape above, the constructor identity IS assertable here:
+// DOMException is a constructable global, so the deadline reproduces the real class rather than only its observable fields.
 function assertTimeoutReason(reason: unknown, message: string): void {
 
   assert.ok(reason instanceof DOMException, message + " - the reason must be a DOMException");
@@ -54,8 +71,8 @@ function assertTimeoutReason(reason: unknown, message: string): void {
 
 /**
  * Allocate a per-test tmpdir scratch root and answer an AsyncDisposable handle that removes it on scope exit, so the `await using` at the call site cleans up even
- * when the row throws. The CLI suite carries a helper of the same shape; each suite keeps its own rather than sharing one, so this suite's single filesystem row
- * does not reach across into another suite's file for a utility this small.
+ * when the row throws. The CLI suite carries a helper of the same shape; each suite keeps its own rather than sharing one, so this suite's filesystem rows do not
+ * reach across into another suite's file for a utility this small.
  *
  * @returns An AsyncDisposable carrying the scratch root's path.
  */
@@ -71,6 +88,48 @@ async function makeScratchRoot(): Promise<AsyncDisposable & { path: string }> {
       await rm(path, { force: true, recursive: true });
     }
   };
+}
+
+/**
+ * Write `source` to a file named `name` under `root` and run it as a child Node process, answering its exit code and everything it wrote. The process-lifetime
+ * property the child rows read cannot be read from inside this suite, because the runner holds the event loop open on its own account, so a child is the smallest
+ * arrangement that shows it.
+ *
+ * The child carries a type-stripping flag, and only that flag, when the runner carries one, so it can execute a .ts entry; never the --test, --import, or coverage
+ * flags, which would derail it into a second test run. On a runtime that strips types by default the flag is absent and the child runs flagless. The spawn is bounded
+ * by a deadline, which is what makes a child row a proof: a child that fails to reach its own exit is killed there and answers a null code, which fails the row's
+ * assertion rather than hanging the suite.
+ *
+ * @param root   - The scratch directory the child's entry file is written into.
+ * @param name   - The entry file's name.
+ * @param source - The child's source text.
+ *
+ * @returns The child's exit code, or null when the deadline killed it, beside its stdout and stderr.
+ */
+async function runChild(root: string, name: string, source: string): Promise<ChildOutcome> {
+
+  const childPath = join(root, name);
+
+  await writeFile(childPath, source, "utf8");
+
+  const stripFlag = process.execArgv.find((arg) => (arg === "--strip-types") || (arg === "--experimental-strip-types"));
+  const childArgs = stripFlag ? [ stripFlag, childPath ] : [childPath];
+
+  using deadline = armDeadline(CHILD_EXIT_BOUND_MS);
+
+  return await new Promise<ChildOutcome>((resolveOutcome) => {
+
+    const stderrChunks: Buffer[] = [];
+    const stdoutChunks: Buffer[] = [];
+    const child = spawn(process.execPath, childArgs, { signal: deadline.signal, stdio: [ "ignore", "pipe", "pipe" ] });
+
+    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+    // A child killed at the deadline surfaces here as an error rather than as a clean close, so this listener is what turns a hung child into a failed assertion.
+    child.on("error", (error: Error) => resolveOutcome({ code: null, stderr: error.message, stdout: "" }));
+    child.on("close", (code) => resolveOutcome({ code, stderr: Buffer.concat(stderrChunks).toString("utf8"), stdout: Buffer.concat(stdoutChunks).toString("utf8") }));
+  });
 }
 
 describe("systemClock - conformance and behavior-neutrality", () => {
@@ -204,58 +263,19 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
   test("a process whose only pending work is unreferenced timers exits on its own", async () => {
 
-    /* The process-lifetime property cannot be read from inside this suite, because the runner holds the event loop open on its own account. A child whose entire
-     * pending workload is two unreferenced timers is the smallest arrangement that shows it: the child has to reach its own exit while both timers are still an
-     * hour from firing. The deadline on the spawn is what makes this a proof - a child that instead held its timers would be killed and answer a null code, which
-     * fails the assertion rather than hanging the suite. The deadline is generous enough for a cold type-stripping start on a slow CI host, and short enough that the
-     * kill lands well inside the runner's own per-test timeout.
-     */
+    // A child whose entire pending workload is unreferenced timers has to reach its own exit while each of them is still an hour from firing, inside the bound
+    // `runChild` puts on its spawn.
     await using scratch = await makeScratchRoot();
-
-    const childPath = join(scratch.path, "unreferenced-timers.ts");
-    const clockPath = fileURLToPath(new URL("./clock.ts", import.meta.url));
 
     // The child imports this repo's own clock by absolute path, quoted through JSON.stringify so a scratch root carrying a quote or a backslash still yields a
     // valid specifier. Composing the source by concatenation keeps the file free of template literals, as everything else here is.
-    await writeFile(childPath, "import { systemClock } from " + JSON.stringify(clockPath) + ";\n\n" +
+    const result = await runChild(scratch.path, "unreferenced-timers.ts", "import { systemClock } from " + JSON.stringify(CLOCK_PATH) + ";\n\n" +
       "systemClock.schedule(() => undefined, 3600000, { unref: true });\n" +
       "systemClock.schedule(() => undefined, 3600000, { repeat: true, unref: true });\n" +
-      "console.log(\"armed\");\n", "utf8");
-
-    // Propagate a type-stripping flag, and only that flag, when the runner carries one, so the child can execute a .ts entry; never the --test, --import, or
-    // coverage flags, which would derail it into a second test run. On a runtime that strips types by default the flag is absent and the child runs flagless.
-    const stripFlag = process.execArgv.find((arg) => (arg === "--strip-types") || (arg === "--experimental-strip-types"));
-    const childArgs = stripFlag ? [ stripFlag, childPath ] : [childPath];
-    const result = await new Promise<{ code: number | null; stderr: string; stdout: string }>((resolveResult) => {
-
-      const stderrChunks: Buffer[] = [];
-      const stdoutChunks: Buffer[] = [];
-      const child = spawn(process.execPath, childArgs, { signal: AbortSignal.timeout(10000), stdio: [ "ignore", "pipe", "pipe" ] });
-
-      child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-      child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
-
-      // A child killed at the deadline surfaces here as an error rather than as a clean close, so this listener is what turns a hung child into a failed assertion.
-      child.on("error", (error: Error) => resolveResult({ code: null, stderr: error.message, stdout: "" }));
-      child.on("close", (code) => resolveResult({ code, stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        stdout: Buffer.concat(stdoutChunks).toString("utf8") }));
-    });
+      "console.log(\"armed\");\n");
 
     assert.equal(result.code, 0, "the child must reach its own exit with both timers still pending; stderr: " + result.stderr);
     assert.equal(result.stdout, "armed\n", "and must have armed both of them before exiting; stderr: " + result.stderr);
-  });
-
-  test("systemClock.timeout answers the platform's deadline signal, aborting with its TimeoutError", async () => {
-
-    // A real wait, for the same reason as the delay() row above: only the real clock can prove the real deadline, so we await a 1ms platform timeout. The signal's
-    // timer is unreferenced, but the test runner holds the process open, so the abort arrives.
-    const signal = systemClock.timeout(1);
-
-    assert.equal(signal.aborted, false, "a freshly armed deadline must not be aborted synchronously");
-
-    await once(signal, "abort");
-
-    assertTimeoutReason(signal.reason, "systemClock deadline signal");
   });
 
   test("the exported timer ceiling is the platform's 32-bit signed millisecond maximum", () => {
@@ -346,36 +366,6 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     assert.deepEqual(fired, [ 1, 2 ], "the disposal cancelled the period the re-arm had already started, so nothing fires afterwards");
   });
 
-  test("a deadline past the ceiling is a chained one-shot aborting with the platform's own TimeoutError", async (t) => {
-
-    // The live platform reason is captured first, on the real timers, so the comparison below is against what the platform produces rather than a restatement.
-    const platformSignal = AbortSignal.timeout(1);
-
-    await once(platformSignal, "abort");
-
-    t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
-
-    const signal = systemClock.timeout(TIMER_DELAY_MAX_MS + 1);
-
-    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
-
-    assert.equal(signal.aborted, false, "a ceiling's worth of time elapsing leaves the chained deadline armed");
-
-    t.mock.timers.tick(1);
-
-    assert.equal(signal.aborted, true, "the remainder elapsing aborts it, at exactly the moment asked for");
-    assertTimeoutReason(signal.reason, "the chained deadline");
-
-    const platformReason: unknown = platformSignal.reason;
-    const chainedReason: unknown = signal.reason;
-
-    assert.ok(platformReason instanceof DOMException, "the platform's reason must be a DOMException");
-    assert.ok(chainedReason instanceof DOMException, "the chained deadline's reason must be a DOMException");
-    assert.equal(chainedReason.name, platformReason.name, "the two reasons must carry the same name");
-    assert.equal(chainedReason.message, platformReason.message, "the two reasons must carry the same message");
-    assert.equal(chainedReason.constructor, platformReason.constructor, "the two reasons must come from the same constructor");
-  });
-
   test("each shape past the ceiling arms without the platform's overflow warning, and an abort mid-chain rejects the delay with the primitive's AbortError", async () => {
 
     // The platform announces a delay it has set to one millisecond through a process warning, emitted on a later tick, so the read below yields a macrotask first.
@@ -389,14 +379,12 @@ describe("systemClock - conformance and behavior-neutrality", () => {
       using oneShot = systemClock.schedule((): void => undefined, TIMER_DELAY_MAX_MS + 1, { unref: true });
       using repeat = systemClock.schedule((): void => undefined, TIMER_DELAY_MAX_MS + 1, { repeat: true, unref: true });
 
-      const deadline = systemClock.timeout(TIMER_DELAY_MAX_MS + 1);
       const controller = new AbortController();
       const waited = systemClock.delay(TIMER_DELAY_MAX_MS + 1, { signal: controller.signal });
 
       await settle();
 
       assert.deepEqual(warnings, [], "no shape armed past the ceiling draws the platform's overflow warning, because each armed at most the ceiling");
-      assert.equal(deadline.aborted, false, "the chained deadline stands armed");
       assert.notEqual(oneShot, repeat, "each arm answers its own handle");
 
       controller.abort();
@@ -1026,11 +1014,10 @@ describe("TestClock - callback timers", () => {
     const clock = new TestClock();
     const fired: string[] = [];
 
-    // All three shapes at one past the platform's ceiling, so the double is proven to need no chain of its own: a virtual timeline has no ceiling, and each entry
-    // comes due when the clock reaches it, which is the moment the production clock's chain delivers.
+    // Each shape at one past the platform's ceiling, so the double is proven to need no chain of its own: a virtual timeline has no ceiling, and each entry comes
+    // due when the clock reaches it, which is the moment the production clock's chain delivers.
     clock.schedule((): number => fired.push("one-shot"), TIMER_DELAY_MAX_MS + 1);
 
-    const signal = clock.timeout(TIMER_DELAY_MAX_MS + 1);
     const waited = clock.delay(TIMER_DELAY_MAX_MS + 1);
 
     assert.equal(clock.nextDeadline, TIMER_DELAY_MAX_MS + 1, "the entries come due at the window asked for");
@@ -1038,96 +1025,244 @@ describe("TestClock - callback timers", () => {
     clock.advance(TIMER_DELAY_MAX_MS);
 
     assert.deepEqual(fired, [], "a ceiling's worth of virtual time fires nothing");
-    assert.equal(signal.aborted, false, "and aborts nothing");
 
     clock.advance(1);
     await waited;
 
     assert.deepEqual(fired, ["one-shot"], "the remainder fires the timer");
-    assert.equal(signal.aborted, true, "aborts the deadline");
-    assert.deepEqual(clock.requested, [ TIMER_DELAY_MAX_MS + 1, TIMER_DELAY_MAX_MS + 1, TIMER_DELAY_MAX_MS + 1 ], "and the ledger records each window as asked");
+    assert.deepEqual(clock.requested, [ TIMER_DELAY_MAX_MS + 1, TIMER_DELAY_MAX_MS + 1 ], "and the ledger records each window as asked");
   });
 });
 
-describe("TestClock - deadline signals", () => {
+describe("armDeadline - a cancellable deadline on a clock's own timer", () => {
 
-  test("a deadline signal aborts when the clock crosses its deadline, and not before", () => {
+  test("aborts at its deadline, with a reason indistinguishable from the platform's", async () => {
 
-    const clock = new TestClock();
-    const signal = clock.timeout(100);
-
-    assert.equal(signal.aborted, false, "an armed deadline is not aborted at creation");
-
-    clock.advance(99);
-
-    assert.equal(signal.aborted, false, "an advance short of the deadline leaves the signal unaborted");
-
-    clock.advance(1);
-
-    assert.equal(signal.aborted, true, "crossing the deadline aborts the signal");
-    assertTimeoutReason(signal.reason, "the double's deadline signal");
-  });
-
-  test("a deadline records its window in the ledger and leaves the timeline once it has fired", () => {
-
-    const clock = new TestClock();
-
-    clock.timeout(250);
-
-    assert.deepEqual(clock.requested, [250], "the window reaches the ledger through the schedule call the deadline is built on");
-    assert.equal(clock.pending, 1, "an armed deadline is outstanding until the clock crosses it");
-
-    clock.advance(250);
-
-    assert.equal(clock.pending, 0, "a fired deadline has left the timeline");
-
-    clock.advance(1000);
-
-    assert.equal(clock.pending, 0, "and a later advance finds nothing left of it");
-    assert.deepEqual(clock.requested, [250], "the ledger records the one window that was asked for, once");
-  });
-
-  test("the double's deadline reason is indistinguishable from the platform's", async () => {
-
-    // The differential oracle for the third time shape. We compare against a LIVE platform reason rather than against a restatement of what the platform is believed
+    // The differential oracle for the deadline's reason. We compare against a LIVE platform reason rather than against a restatement of what the platform is believed
     // to produce, so a future platform change to the message or the class surfaces here as a failure instead of passing against a stale literal.
     const platformSignal = AbortSignal.timeout(1);
 
-    await once(platformSignal, "abort");
+    await waitUntil(() => platformSignal.aborted, { description: "the platform's own deadline to abort" });
 
     const clock = new TestClock();
-    const doubleSignal = clock.timeout(1);
+
+    using deadline = armDeadline(500, { clock });
+
+    assert.equal(deadline.signal.aborted, false, "an armed deadline is not aborted at creation");
+    assert.deepEqual(clock.requested, [500], "the span reaches the ledger through the schedule call the deadline is armed on");
+    assert.equal(clock.pending, 1, "and the armed deadline is outstanding on the timeline");
+
+    clock.advance(499);
+
+    assert.equal(deadline.signal.aborted, false, "an advance short of the span leaves the signal live");
 
     clock.advance(1);
 
+    assert.equal(deadline.signal.aborted, true, "crossing the span aborts it");
+    assert.equal(clock.pending, 0, "and a fired deadline has left the timeline");
+    assertTimeoutReason(deadline.signal.reason, "the deadline's reason");
+
     const platformReason: unknown = platformSignal.reason;
-    const doubleReason: unknown = doubleSignal.reason;
+    const deadlineReason: unknown = deadline.signal.reason;
 
     assert.ok(platformReason instanceof DOMException, "the platform's reason must be a DOMException");
-    assert.ok(doubleReason instanceof DOMException, "the double's reason must be a DOMException");
-    assert.equal(doubleReason.name, platformReason.name, "the two reasons must carry the same name");
-    assert.equal(doubleReason.message, platformReason.message, "the two reasons must carry the same message");
-    assert.equal(doubleReason.constructor, platformReason.constructor, "the two reasons must come from the same constructor");
-    assert.equal(isTimeoutReason(platformReason), true, "the library's predicate accepts the platform's reason");
-    assert.equal(isTimeoutReason(doubleReason), true, "and accepts the double's identically");
+    assert.ok(deadlineReason instanceof DOMException, "the deadline's reason must be a DOMException");
+    assert.equal(deadlineReason.name, platformReason.name, "the reasons must carry the same name");
+    assert.equal(deadlineReason.message, platformReason.message, "the reasons must carry the same message");
+    assert.equal(deadlineReason.constructor, platformReason.constructor, "the reasons must come from the same constructor");
+  });
+
+  test("disposing it before it fires releases its timer, so its entry leaves the timeline and the signal stays live", () => {
+
+    const clock = new TestClock();
+    const deadline = armDeadline(500, { clock });
+
+    assert.equal(clock.pending, 1, "the armed deadline is outstanding");
+
+    clock.advance(200);
+    deadline[Symbol.dispose]();
+
+    assert.equal(clock.pending, 0, "disposing it takes its entry off the timeline");
+    assert.equal(clock.nextDeadline, null, "so nothing is left to come due");
+
+    clock.advance(1000);
+
+    assert.equal(deadline.signal.aborted, false, "and crossing the span it was armed for aborts nothing");
+    assert.deepEqual(clock.requested, [500], "while the ledger keeps the span that was asked for");
+  });
+
+  test("disposing it after it fires, and disposing it again, change nothing", async () => {
+
+    const clock = new TestClock();
+    const deadline = armDeadline(100, { clock });
+    let resolved = false;
+
+    const waited = clock.delay(300).then((): void => {
+
+      resolved = true;
+    });
+
+    clock.advance(100);
+
+    const reason: unknown = deadline.signal.reason;
+
+    assert.equal(deadline.signal.aborted, true, "the deadline fired at its span");
+
+    // A dispose after the fire finds the entry already gone, and a repeat finds nothing at all, so neither may throw, revive the signal, or reach the later delay.
+    assert.doesNotThrow(() => deadline[Symbol.dispose](), "a dispose after the fire is harmless");
+    assert.doesNotThrow(() => deadline[Symbol.dispose](), "and so is a repeat of it");
+    assert.equal(deadline.signal.aborted, true, "the signal stays aborted");
+    assert.equal(deadline.signal.reason, reason, "with the reason it fired with");
+    assert.equal(clock.pending, 1, "and the later delay is still on the timeline");
+
+    clock.advance(200);
+    await waited;
+
+    assert.equal(resolved, true, "where it resolves once its own time is crossed");
   });
 
   test("a deadline and a delay share one timeline, so each step settles the entry that is next", async () => {
 
     const clock = new TestClock();
-    const signal = clock.timeout(500);
-    const waited = clock.delay(700);
 
-    assert.equal(clock.nextDeadline, 500, "the deadline is the earlier of the two entries");
+    using deadline = armDeadline(500, { clock });
+
+    let resolved = false;
+
+    const waited = clock.delay(300).then((): void => {
+
+      resolved = true;
+    });
+
+    assert.equal(clock.nextDeadline, 300, "the delay comes due first");
     assert.equal(clock.advanceToNext(), true, "the first step lands on it");
-    assert.equal(signal.aborted, true, "and aborts the deadline signal");
-    assert.equal(clock.now(), 500, "virtual time moved exactly to the deadline");
-    assert.equal(clock.pending, 1, "the delay is still outstanding");
-    assert.equal(clock.advanceToNext(), true, "a second step lands on the delay");
 
     await waited;
 
-    assert.equal(clock.now(), 700, "which moved virtual time to the wait's own deadline");
-    assert.equal(clock.pending, 0, "and left the timeline empty");
+    assert.equal(resolved, true, "and resolves it");
+    assert.equal(deadline.signal.aborted, false, "with the deadline still live");
+    assert.equal(clock.now(), 300, "at the delay's own time");
+    assert.equal(clock.advanceToNext(), true, "a second step lands on the deadline");
+    assert.equal(deadline.signal.aborted, true, "and aborts it");
+    assert.equal(clock.now(), 500, "at exactly its span");
+    assert.equal(clock.pending, 0, "leaving the timeline empty");
+  });
+
+  test("armed with no clock named, it runs on the system clock and aborts with the platform's reason", async () => {
+
+    // A real wait, kept as small as the real clock allows: only the real clock can prove the default, so we arm a 1ms deadline. Its timer is unreferenced, but the
+    // runner holds the process open, so the abort arrives.
+    using deadline = armDeadline(1);
+
+    assert.equal(deadline.signal.aborted, false, "a freshly armed deadline is not aborted synchronously");
+
+    await waitUntil(() => deadline.signal.aborted, { description: "the default-clock deadline to abort" });
+
+    assertTimeoutReason(deadline.signal.reason, "the default-clock deadline");
+  });
+
+  test("a span past the ceiling arms on the real timers without the platform's overflow warning", async () => {
+
+    // The platform announces a delay it has set to one millisecond through a process warning, emitted on a later tick, so the read below yields a macrotask first.
+    // A span past the ceiling cannot be waited out here, so the deadline is released at once and the read is of what arming it drew.
+    const warnings: string[] = [];
+    const observe = (warning: Error): number => warnings.push(warning.name);
+
+    process.on("warning", observe);
+
+    try {
+
+      const deadline = armDeadline(TIMER_DELAY_MAX_MS + 1);
+
+      deadline[Symbol.dispose]();
+
+      await settle();
+
+      assert.deepEqual(warnings, [], "arming a span past the ceiling draws no overflow warning, because its first hop arms at most the ceiling");
+      assert.equal(deadline.signal.aborted, false, "and the released deadline's signal stays live");
+    } finally {
+
+      process.off("warning", observe);
+    }
+  });
+
+  test("a span past the ceiling is one entry on the double, carrying the full span", () => {
+
+    // A virtual timeline has no ceiling, so the double needs no chain: the deadline is the one entry its schedule call registers, at the span asked for.
+    const clock = new TestClock();
+
+    using deadline = armDeadline(TIMER_DELAY_MAX_MS + 1, { clock });
+
+    assert.deepEqual(clock.requested, [TIMER_DELAY_MAX_MS + 1], "the ledger records the full span");
+    assert.equal(clock.pending, 1, "as one entry");
+    assert.equal(clock.nextDeadline, TIMER_DELAY_MAX_MS + 1, "coming due at the span asked for");
+
+    clock.advance(TIMER_DELAY_MAX_MS);
+
+    assert.equal(deadline.signal.aborted, false, "a ceiling's worth of virtual time aborts nothing");
+
+    clock.advance(1);
+
+    assert.equal(deadline.signal.aborted, true, "and the remainder aborts it");
+  });
+
+  test("a span past the ceiling on the system clock is carried as a chain and aborts at exactly the moment asked for", (t) => {
+
+    t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
+
+    using deadline = armDeadline(TIMER_DELAY_MAX_MS + 1);
+
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
+
+    assert.equal(deadline.signal.aborted, false, "a full ceiling's worth of time leaves the deadline live, because its first hop re-arms for the remainder");
+
+    t.mock.timers.tick(1);
+
+    assert.equal(deadline.signal.aborted, true, "one millisecond more aborts it");
+    assertTimeoutReason(deadline.signal.reason, "the chained deadline");
+  });
+
+  test("disposing it on the system clock clears its timer within the ceiling and past it, while an undisposed twin of each aborts", (t) => {
+
+    // Each released deadline is armed beside an undisposed twin of the same span, so the twins aborting at the same advance shows the harness reached those timers
+    // and the released deadlines stayed live because of their disposal rather than because the advance missed them.
+    t.mock.timers.enable({ apis: [ "setTimeout", "setInterval" ] });
+
+    const within = armDeadline(1000);
+    const withinTwin = armDeadline(1000);
+    const past = armDeadline(TIMER_DELAY_MAX_MS + 1);
+    const pastTwin = armDeadline(TIMER_DELAY_MAX_MS + 1);
+
+    within[Symbol.dispose]();
+    past[Symbol.dispose]();
+
+    t.mock.timers.tick(TIMER_DELAY_MAX_MS);
+    t.mock.timers.tick(1);
+
+    assert.equal(within.signal.aborted, false, "a released deadline within the ceiling stays live past its span");
+    assert.equal(past.signal.aborted, false, "and so does a released deadline past it");
+    assert.equal(withinTwin.signal.aborted, true, "while the undisposed twin within the ceiling aborts");
+    assert.equal(pastTwin.signal.aborted, true, "and so does the undisposed twin past it");
+  });
+
+  test("a process holding a deadline on the system clock exits on its own, whether the deadline was released or left armed", async () => {
+
+    /* Each child arms a deadline far longer than the bound `runChild` puts on its spawn, so reaching its own exit inside that bound is the proof. One child releases
+     * its deadline before it exits and the other never does: a released timer is cleared outright, and one left armed is unreferenced, so neither may hold the
+     * child's event loop open. The children run side by side, so the row's wait stays within a single bound.
+     */
+    await using scratch = await makeScratchRoot();
+
+    const importLine = "import { armDeadline } from " + JSON.stringify(CLOCK_PATH) + ";\n\n";
+    const [ released, armed ] = await Promise.all([
+
+      runChild(scratch.path, "released-deadline.ts", importLine + "const deadline = armDeadline(300000);\n\ndeadline[Symbol.dispose]();\nconsole.log(\"released\");\n"),
+      runChild(scratch.path, "armed-deadline.ts", importLine + "armDeadline(3600000);\nconsole.log(\"armed\");\n")
+    ]);
+
+    assert.equal(released.code, 0, "the child that released its deadline must reach its own exit; stderr: " + released.stderr);
+    assert.equal(released.stdout, "released\n", "having armed and released it first; stderr: " + released.stderr);
+    assert.equal(armed.code, 0, "the child that left its deadline armed must reach its own exit as well; stderr: " + armed.stderr);
+    assert.equal(armed.stdout, "armed\n", "having armed it first; stderr: " + armed.stderr);
   });
 });

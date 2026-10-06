@@ -3459,6 +3459,61 @@ describe("runWithAbort", () => {
 
     assert.equal(await result, null, "crossing the deadline aborts the composed signal, so the helper answers null");
   });
+
+  test("releases its deadline when the factory's promise settles first", async () => {
+
+    const clock = new TestClock();
+    const { promise, resolve }: PromiseWithResolvers<string> = Promise.withResolvers();
+    const result = runWithAbort(async () => promise, { clock, timeout: 1000 });
+
+    assert.equal(clock.pending, 1, "the deadline is on the clock while the work runs");
+
+    resolve("done");
+
+    assert.equal(await result, "done", "the work's value comes back");
+    assert.equal(clock.pending, 0, "and its settling released the deadline");
+  });
+
+  test("releases its deadline when the factory rejects", async () => {
+
+    const clock = new TestClock();
+    const boom = new Error("factory exploded");
+    const { promise, reject }: PromiseWithResolvers<string> = Promise.withResolvers();
+    const result = runWithAbort(async () => promise, { clock, timeout: 1000 });
+
+    assert.equal(clock.pending, 1, "the deadline is on the clock while the factory runs");
+
+    reject(boom);
+
+    await assert.rejects(result, (error: unknown) => error === boom);
+
+    assert.equal(clock.pending, 0, "and the rejection released it");
+  });
+
+  test("with a signal already aborted, arms its deadline and releases it on the early return", async () => {
+
+    const clock = new TestClock();
+    const controller = new AbortController();
+
+    controller.abort(new HbpuAbortError("shutdown"));
+
+    const result = await runWithAbort(async () => "unreachable", { clock, signal: controller.signal, timeout: 1000 });
+
+    assert.equal(result, null, "the aborted signal short-circuits the call");
+    assert.deepEqual(clock.requested, [1000], "after the deadline was armed for the span asked for");
+    assert.equal(clock.pending, 0, "and the early return released it again");
+  });
+
+  test("with a signal and no timeout, asks the clock for nothing", async () => {
+
+    const clock = new TestClock();
+    const controller = new AbortController();
+    const result = await runWithAbort(async () => "ok", { clock, signal: controller.signal });
+
+    assert.equal(result, "ok", "the factory's value comes back");
+    assert.deepEqual(clock.requested, [], "no deadline is armed without a timeout");
+    assert.equal(clock.pending, 0, "so nothing is on the clock");
+  });
 });
 
 describe("toStartCase", () => {

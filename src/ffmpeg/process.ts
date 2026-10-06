@@ -26,14 +26,13 @@
  *
  * @module
  */
-import { HbpuAbortError, composeSignals, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, markHandled, onAbort } from "../util.ts";
+import { HbpuAbortError, Watchdog, composeSignals, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, markHandled, onAbort } from "../util.ts";
 import type { HbpuAbortReason, HomebridgePluginLogging, Nullable } from "../util.ts";
 import type { Readable, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EOL } from "node:os";
 import type { FfmpegOptions } from "./options.ts";
 import { spawn } from "node:child_process";
-import { systemClock } from "../clock.ts";
 
 // Matches non-printable control characters that #onStderrData replaces with EOL so control sequences become line boundaries rather than vanishing. Compiled once at
 // module scope rather than per data event.
@@ -254,8 +253,13 @@ export class FfmpegProcess implements AsyncDisposable {
   // Resolver pair for `exited`. "exit" event resolves with the actual info; "error" rejects when the child never spawned.
   readonly #exitedResolvers: PromiseWithResolvers<FfmpegProcessExitInfo>;
 
-  // Set `true` once we have observed first stderr output. Used by the optional startup-timeout path to decide whether the timeout fired meaningfully.
+  // Set `true` once the process has produced output - its first stderr byte. The ready promise resolves on that byte and the startup watchdog is cleared on it, so
+  // each reads this field to act on the first byte alone.
   #firstStderr = false;
+
+  // The startup watchdog composed over this.signal, or `undefined` when no `startupTimeout` was configured. Armed at spawn, cleared by the first stderr byte, and
+  // cleared by the primitive itself when the signal aborts for any reason, so no teardown wiring is needed.
+  readonly #startupWatchdog: Watchdog | undefined;
 
   // Cached decision - should stderr lines be mirrored to `log.info`? Computed once from `args`, `verbose`, and `debug` during construction and immutable thereafter.
   // Cached rather than recomputed because the stderr hot path consults it per chunk and the inputs never change.
@@ -337,24 +341,19 @@ export class FfmpegProcess implements AsyncDisposable {
     // pre-aborted spawn emits its `"error"` event on the next microtask.
     onAbort(this.signal, () => this.#teardown());
 
-    // Optional startup watchdog. The options' clock - the system clock when the consumer wired none - answers a deadline signal that aborts after the configured
-    // window; we observe that abort and convert it into our own `"timeout"` reason when the process has not yet emitted its first stderr byte. The
-    // `{ signal: this.signal }` option on `addEventListener` ties the listener's lifetime to the process signal, so the listener auto-unregisters (and the timeout
-    // signal becomes GC-eligible) the moment the process aborts for any other reason - no manual `clearTimeout` bookkeeping, and the listener cannot fire after the
-    // process is already torn down. The `#firstStderr` guard prevents firing after a successful start; this is a startup watchdog, not a general stall detector.
-    if(startupTimeout !== undefined) {
+    // Optional startup watchdog, armed at spawn on the options' clock - the system clock when the consumer wired none - and converting a lapsed window into our own
+    // `"timeout"` reason. The first stderr byte clears it, and the primitive clears itself the moment the process signal aborts for any reason: a natural exit, a
+    // spawn failure, an external abort, or a parent signal already aborted at construction, which leaves it never armed at all. It therefore fires only on a process
+    // that is still running and still silent when the window lapses...this is a startup watchdog, not a general stall detector.
+    this.#startupWatchdog = (startupTimeout !== undefined) ? new Watchdog({
 
-      const timeoutSignal = (this.options.clock ?? systemClock).timeout(startupTimeout);
+      clock: this.options.clock,
+      onFire: (): void => this.#controller.abort(new HbpuAbortError("timeout")),
+      signal: this.signal,
+      timeoutMs: startupTimeout
+    }) : undefined;
 
-      timeoutSignal.addEventListener("abort", () => {
-
-        // Only act if we are still waiting for first output and the process has not aborted for another reason.
-        if(!this.aborted && !this.#firstStderr) {
-
-          this.#controller.abort(new HbpuAbortError("timeout"));
-        }
-      }, { once: true, signal: this.signal });
-    }
+    this.#startupWatchdog?.arm();
   }
 
   /**
@@ -512,13 +511,15 @@ export class FfmpegProcess implements AsyncDisposable {
     this.log.error("FFmpeg error: %s.", error.message);
   }
 
-  // Stderr data listener. Responsibilities, in order: mark the process as "ready" on first byte (this is the only reliable signal that FFmpeg is running, since stdin
-  // and stdout may not be used at all depending on the invocation), append each complete line to the rolling stderr log, and emit live-log output if configured.
+  // Stderr data listener. Responsibilities, in order: mark the process as "ready" and clear the startup watchdog on first byte (this is the only reliable signal that
+  // FFmpeg is running, since stdin and stdout may not be used at all depending on the invocation), append each complete line to the rolling stderr log, and emit
+  // live-log output if configured.
   #onStderrData(chunk: Buffer): void {
 
     if(!this.#firstStderr) {
 
       this.#firstStderr = true;
+      this.#startupWatchdog?.clear();
       this.#readyResolvers.resolve();
       this.log.debug("FFmpeg process started.");
     }

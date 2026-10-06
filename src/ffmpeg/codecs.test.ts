@@ -1,12 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/codecs.test.ts: Unit tests for the codec-probe result parsers. Pure-function coverage against fixture strings, plus one virtual-clock row over the probe's
+ * ffmpeg/codecs.test.ts: Unit tests for the codec-probe result parsers. Pure-function coverage against fixture strings, plus virtual-clock rows over the probe's
  * per-command deadline; a real-binary integration test runs whenever an FFmpeg binary is discoverable on PATH (or `FFMPEG_INTEGRATION=1` is set), and is skipped
  * otherwise. See `integration.helpers.ts` for the full gate semantics.
  */
 import { FfmpegCodecs, ffmpegVersionAtLeast, parseAppleSiliconGeneration, parseFfmpegCodecs, parseFfmpegHwAccels, parseFfmpegVersion, parseFfmpegVersionParts,
   parseRpiGpuMem } from "./codecs.ts";
-import { capturingLog, settle, silentLog } from "../testing/index.ts";
+import { capturingLog, drainClock, settle, silentLog } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { TestClock } from "../clock-double.ts";
@@ -414,23 +414,49 @@ describe("FfmpegCodecs.probe - the per-command deadline", () => {
       // The deadline is armed synchronously, before the probe's first suspension, so this yield is margin against a future earlier await rather than a need.
       await settle();
 
-      // A floor rather than an exact count: a Raspberry Pi host runs its GPU-memory probe first, under a deadline of its own, before the version probe arms one.
-      assert.ok(clock.pending >= 1, "the probe's deadline is armed on the injected clock");
+      // Exactly one deadline is on the clock on every host, because the probe runs its commands one at a time and each releases its deadline when its command
+      // answers: the hanging version probe's, or on a Raspberry Pi host the deadline of the GPU-memory probe that runs before it.
+      assert.equal(clock.pending, 1, "the running command's deadline is armed on the injected clock");
 
-      // Step deadline by deadline rather than by one span, so the hanging command's deadline is the one that fires last on every host, whatever ran before it. The
-      // bound fails the row rather than letting it spin, sized generously against this scenario's own deadlines - the optional Raspberry Pi GPU probe plus the
-      // version probe that never answers - since it stops at the first required probe rather than reaching the per-accelerator validation loop, whose deadline
-      // count tracks the host's advertised hardware rather than a fixed ceiling.
-      for(let step = 0; clock.pending > 0; step++) {
-
-        assert.ok(step < 4, "the probe must come to rest within the deadlines it arms");
-        clock.advanceToNext();
-
-        // eslint-disable-next-line no-await-in-loop
-        await settle();
-      }
+      // The drain steps deadline by deadline rather than by one span, so the hanging command's deadline is the one that fires last on every host, whatever ran
+      // before it. A step can land only on a deadline whose command is still running: the version probe's, which never answers, and on a Raspberry Pi host the
+      // GPU-memory probe's, while that probe is still waiting on its own command. The limit covers exactly those and fails the row rather than letting it spin; the
+      // scenario stops at the first required probe, so the per-accelerator validation loop, whose deadline count tracks the host's advertised hardware, is never
+      // reached.
+      await drainClock(clock, 2);
 
       assert.equal(await probing, null, "a probe whose command never answers resolves null once its deadline is crossed");
+    } finally {
+
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("releases each command's deadline as the command answers, so a probe that settles at once leaves nothing on the clock", async () => {
+
+    // A script that answers every probe at once stands in for an FFmpeg binary that works: the version banner the version probe parses, and an empty codec and
+    // accelerator inventory, which keeps the probe out of the per-accelerator validation loop.
+    const directory = await mkdtemp(join(tmpdir(), "hbpu-codec-probe-"));
+
+    try {
+
+      const script = join(directory, "answer.sh");
+
+      await writeFile(script, "#!/bin/sh\ncase \"$*\" in\n  *-version*) echo \"ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers\" ;;\n" +
+        "  *-hwaccels*) echo \"Hardware acceleration methods:\" ;;\n  *) echo \"Codecs:\" ;;\nesac\n", { mode: 0o755 });
+
+      const clock = new TestClock();
+      const probing = FfmpegCodecs.probe({ clock, ffmpegExec: script, log: capturingLog() });
+
+      // The first command's deadline is armed synchronously, before the probe's first suspension, so this read lands while that command is still running.
+      assert.equal(clock.pending, 1, "the running command's deadline is on the clock");
+
+      const codecs = await probing;
+
+      assert.notEqual(codecs, null, "the probe succeeds with no advance of the clock, because every command answered");
+      assert.equal(codecs?.ffmpegVersion, "6.1.1", "with what the version command wrote");
+      assert.ok(clock.requested.length >= 3, "each command the probe ran was armed a deadline of its own");
+      assert.equal(clock.pending, 0, "and each was released when its command answered");
     } finally {
 
       await rm(directory, { force: true, recursive: true });

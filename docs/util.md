@@ -822,8 +822,9 @@ this.signal = composeSignals(init.signal, this.#controller.signal);
 // Per-call composition of the class signal with a caller-supplied per-call signal.
 const composed = composeSignals(this.signal, init.signal);
 
-// Compose an optional caller signal with a derived watchdog timeout.
-const composed = composeSignals(init.signal, clock.timeout(PROBE_DEFAULT_TIMEOUT_MS));
+// Compose an optional caller signal with a deadline from `armDeadline`, released when the enclosing scope ends.
+using deadline = armDeadline(PROBE_DEFAULT_TIMEOUT_MS, { clock });
+const composed = composeSignals(init.signal, deadline.signal);
 ```
 
 ***
@@ -1658,6 +1659,10 @@ whichever comes first when both are provided. The factory must forward this sign
 the underlying work is actually cancelled. When the signal fires and the factory rejects, the rejection is caught and `null` is returned. Genuine (non-abort) errors
 from the factory propagate normally.
 
+The timeout bounds the settlement of the factory's promise. Its deadline, armed through [armDeadline](clock.md#armdeadline), is released the moment that promise settles, so work a
+caller continues with the signal after the helper returns is bounded by the caller's own signal alone. A factory whose work outlives its promise - a response
+whose body is read after the factory hands the response back, for one - finishes that work inside the factory instead, as the example's first call does.
+
 #### Type Parameters
 
 | Type Parameter | Description |
@@ -1669,7 +1674,7 @@ from the factory propagate normally.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `fn` | (`signal`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`T`\> | A factory that receives the composed abort signal and returns the promise to await. |
-| `options` | [`RunWithAbortOptions`](#runwithabortoptions) | Abort options. Provide `timeout` (milliseconds), an external `signal`, or both, plus the optional `clock` the timeout is armed on. Defaults to [systemClock](clock.md#systemclock), whose `timeout` IS `AbortSignal.timeout`, so the default path is that same platform call with one indirection in front of it; supplying a controllable clock puts the deadline on virtual time. |
+| `options` | [`RunWithAbortOptions`](#runwithabortoptions) | Abort options. Provide `timeout` (milliseconds), an external `signal`, or both, plus the optional `clock` the timeout's deadline is armed on, which defaults to [systemClock](clock.md#systemclock); supplying a controllable clock puts the deadline on virtual time. |
 
 #### Returns
 
@@ -1680,8 +1685,13 @@ Resolves with the factory's result if it completes before abort, or `null` if th
 #### Example
 
 ```ts
-// Timeout only - cancel after 500ms.
-const result = await runWithAbort((signal) => fetch(url, { signal }), { timeout: 500 });
+// Timeout only - cancel after 500ms. The factory reads the body before it returns, because the timeout bounds the factory's promise and nothing after it.
+const result = await runWithAbort(async (signal) => {
+
+  const response = await fetch(url, { signal });
+
+  return await response.json();
+}, { timeout: 500 });
 
 // External signal only - cancel on demand.
 const controller = new AbortController();

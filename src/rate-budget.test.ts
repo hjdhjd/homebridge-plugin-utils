@@ -363,8 +363,7 @@ describe("RateBudget - cancellation", () => {
 
       delay: (): Promise<void> => Promise.reject(failure),
       now: (): number => clock.now(),
-      schedule: (callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable => clock.schedule(callback, ms, init),
-      timeout: (ms: number): AbortSignal => clock.timeout(ms)
+      schedule: (callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable => clock.schedule(callback, ms, init)
     };
     const budget = new RateBudget({ capacity: 1, clock: failingClock, window: 1000 });
 

@@ -9,17 +9,21 @@
  * - The guarded path: a successful publish that says nothing, a genuine failure on the error line, each cancellation term - the double aborted, the per-publish
  *   signal aborted, an HbpuAbortError refusal, an "AbortError"-named refusal - reaching the debug line, and an offline refusal reaching the dropped line. The signal
  *   terms are exercised with a plain error as the abort reason, so nothing about the rejection's shape can route them and only the signal read can.
- * - The change gate: the first payload on a topic recorded and a repeat of it suppressed, the Buffer copy and the cross-kind answer, a refused or parked publish
- *   leaving the memory as it was, the lever's false-to-true transition clearing it where a re-assert does not, and a suppressed call saying nothing at all.
+ * - The change gate: the first payload on a topic recorded and a repeat of it suppressed, the Buffer copy and the cross-kind answer, a refused publish leaving the
+ *   memory as it was, a parked publish remembered as it is issued so a call behind it is weighed against it and a return to the earlier value records, a parked publish
+ *   forgotten when its own signal ends its wait, so a retry in the abort's own turn or one await later is suppressed and one after a settle records, and when it fails
+ *   at release only while the entry still carries its own token, the lever's false-to-true transition clearing the memory where a re-assert does not, and a suppressed
+ *   call saying nothing at all.
  * - Connection state: `connected` true on a fresh double, a publish refused and counted while it is false, the refusal answering ahead of the arbitrary refusal
  *   lever, the getter's republish absorbing the same refusal, and `connected` reading false once the double aborts.
  * - The connect notification: the lever's false-to-true edge invoking every registration once and in order, after the memory clear and with the session reading
  *   live; a write that is not that edge invoking nothing; a registration joining a session already held waiting for the edge after it; the releases - a signal, a
  *   pre-aborted signal, the abort - leaving the edge nothing to invoke; a faulting handler reaching the sentence the client logs while the registration beside it
  *   runs; a never-settling handler holding nothing back; the same function twice counting once; and a handler that releases a sibling or registers another mid-pass.
- * - The publish hold: a held publish recording only at release, behind the publish that preceded the hold; the double aborting, the refusal lever arming, and the
- *   connection dropping during a hold each answering the held publish at release, with the guarded form of the teardown reaching the debug line alone; a publish
- *   refused at issue never parking and the release freeing nothing; two holds each freeing their own gate's publishes; and the get driver's republish parking too.
+ * - The publish hold: a held publish recording only at release, behind the publish that preceded the hold; the double aborting during a hold rejecting the held
+ *   publish at once, the refusal lever arming and the connection dropping during a hold each answering it at release, with the guarded form of the teardown
+ *   reaching the debug line alone; a publish refused at issue never parking and the release freeing nothing; nested holds each freeing their own gate's
+ *   publishes; and the get driver's republish parking too.
  * - The suffix view: publishedTo answering a topic's publishes in order, holding back a topic the suffix merely appears inside, answering an empty array when
  *   nothing matches, and handing back an array of its own rather than the recording.
  * - Registration: raw, get, and set entries carrying the appended suffix, the label, and the caller's init verbatim; a pre-aborted signal registering nothing; a
@@ -470,7 +474,7 @@ describe("TestMqttClient - the change gate", () => {
     });
   });
 
-  test("parks two change-gated calls of one payload and records both at release, then suppresses the next", async () => {
+  test("parks a change-gated call and suppresses a repeat issued while it is parked, then one issued after the release", async () => {
 
     await assertNoUnhandledRejections(async () => {
 
@@ -482,18 +486,18 @@ describe("TestMqttClient - the change gate", () => {
 
       await settle();
 
-      assert.deepEqual(mqtt.published, [], "both calls park before either is recorded");
+      assert.deepEqual(mqtt.published, [], "the first call parks before it is recorded");
 
       release();
       await settle();
 
-      assert.deepEqual(mqtt.published, [ { payload: "on", retain: false, topic: TOPIC }, { payload: "on", retain: false, topic: TOPIC } ],
-        "the memory takes a payload only once the publish is recorded, so neither parked call could suppress the other");
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
+        "the memory takes a payload as its publish is issued, so the repeat was weighed against the parked call and suppressed");
 
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
       await settle();
 
-      assert.equal(mqtt.published.length, 2, "a call issued after the release has a recorded payload to weigh against and must be suppressed");
+      assert.equal(mqtt.published.length, 1, "a call issued after the release is weighed against the same payload and suppressed");
     });
   });
 
@@ -513,6 +517,252 @@ describe("TestMqttClient - the change gate", () => {
       assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }]);
       assert.equal(mqtt.rejectedPublishes, 0);
       assert.deepEqual(log.entries, [], "nothing was attempted, so there is nothing to report at any level");
+    });
+  });
+
+  test("records a change-gated return to the remembered payload issued while the publish that moved away from it is parked", async () => {
+
+    // The return is weighed against the parked change rather than against the value before it, so the change and the return record and the double ends
+    // holding the value the device returned to.
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+
+      mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
+      await settle();
+
+      const release = mqtt.holdPublishes();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
+      release();
+      await settle();
+
+      assert.deepEqual(mqtt.published, [ { payload: "off", retain: false, topic: TOPIC }, { payload: "on", retain: false, topic: TOPIC },
+        { payload: "off", retain: false, topic: TOPIC } ], "the return to the earlier value must record after the change it follows");
+    });
+  });
+
+  test("leaves the remembered payload in place when the refusal lever answers a changed one, so the unchanged payload is still suppressed", async () => {
+
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await settle();
+
+      mqtt.publishRejection = new Error("broker refused the message.");
+      mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
+      await settle();
+
+      mqtt.publishRejection = null;
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await settle();
+
+      assert.equal(mqtt.rejectedPublishes, 1);
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
+        "a call the first admission refused issued nothing, so the payload remembered before it must still suppress its repeat");
+    });
+  });
+
+  test("forgets a parked change-gated payload its own signal ends at release, so the same bytes offered again record", async () => {
+
+    // The caller rewrites its buffer while the call is parked, so the forget has to go by the token its write was given rather than by the caller's buffer.
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+      const perPublish = new AbortController();
+      const reason = new HbpuAbortError("shutdown");
+      const scratch = Buffer.from("on");
+      const release = mqtt.holdPublishes();
+      const failed = mqtt.publish(TOPIC, scratch, { ifChanged: true, signal: perPublish.signal });
+
+      scratch.write("no");
+      perPublish.abort(reason);
+      release();
+
+      await assert.rejects(failed, (error: unknown) => error === reason);
+
+      mqtt.publishGuarded(TOPIC, Buffer.from("on"), { ifChanged: true });
+      await settle();
+
+      assert.deepEqual(mqtt.published, [{ payload: Buffer.from("on"), retain: false, topic: TOPIC }],
+        "the failed call's payload was forgotten, so the same bytes offered again must record");
+    });
+  });
+
+  test("forgets a parked change-gated payload the refusal lever answers at release, so the next change-gated publish of any value records", async () => {
+
+    // Each topic held "off" before the refused call, and a forget deletes rather than restores: the failed "on" records when offered again on one topic, and the
+    // earlier "off" records when offered again on the other.
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+
+      mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
+      mqtt.publishGuarded(OTHER, "off", { ifChanged: true });
+      await settle();
+
+      const release = mqtt.holdPublishes();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      mqtt.publishGuarded(OTHER, "on", { ifChanged: true });
+      mqtt.publishRejection = new Error("broker refused the message.");
+      release();
+      await settle();
+
+      assert.equal(mqtt.rejectedPublishes, 2, "each parked call is refused at release");
+
+      mqtt.publishRejection = null;
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      mqtt.publishGuarded(OTHER, "off", { ifChanged: true });
+      await settle();
+
+      assert.deepEqual(mqtt.published,
+        [ { payload: "off", retain: false, topic: TOPIC }, { payload: "off", retain: false, topic: OTHER }, { payload: "on", retain: false, topic: TOPIC },
+          { payload: "off", retain: false, topic: OTHER } ],
+        "a refusal at release leaves nothing remembered on the topic, so the failed payload and the earlier one must each record");
+    });
+  });
+
+  test("keeps a later publish's memory when an earlier parked publish of the same payload fails after it records, so its repeat is suppressed", async () => {
+
+    // The holds nest, so the later calls record before the earlier one fails, and the failed call and the last of the later ones carry the same string, which is
+    // what tells the token rule from a comparison of payloads: the topic's entry carries the later call's own token, so the failure leaves it in place.
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+      const perPublish = new AbortController();
+      const reason = new HbpuAbortError("shutdown");
+      const releaseFirst = mqtt.holdPublishes();
+      const failed = mqtt.publish(TOPIC, "on", { ifChanged: true, signal: perPublish.signal });
+      const releaseSecond = mqtt.holdPublishes();
+
+      mqtt.publishGuarded(TOPIC, "off", { ifChanged: true });
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      releaseSecond();
+      await settle();
+
+      assert.deepEqual(mqtt.published, [ { payload: "off", retain: false, topic: TOPIC }, { payload: "on", retain: false, topic: TOPIC } ],
+        "the later calls record while the earlier call stays parked");
+
+      perPublish.abort(reason);
+      releaseFirst();
+
+      await assert.rejects(failed, (error: unknown) => error === reason);
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await settle();
+
+      assert.equal(mqtt.published.length, 2, "the entry carries the later call's token, so the failure left it and the repeat of the later payload is suppressed");
+    });
+  });
+
+  test("records a change-gated retry issued after a parked publish's own signal ends it, as the client sends it", async () => {
+
+    // The client forgets once its wait's rejection unwinds after the abort, so a retry issued after that has settled goes out; the double waits on its gate
+    // through the same primitive, so its forget lands at the same hop and the retry issued after the settle, while the hold still stands, records at release.
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+      const perPublish = new AbortController();
+      const reason = new HbpuAbortError("shutdown");
+      const release = mqtt.holdPublishes();
+      const failed = assert.rejects(mqtt.publish(TOPIC, "on", { ifChanged: true, signal: perPublish.signal }), (error: unknown) => error === reason);
+
+      perPublish.abort(reason);
+      await settle();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      release();
+
+      await failed;
+      await settle();
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
+        "the aborted call's payload was forgotten when its signal ended it, so the retry must record at release");
+    });
+  });
+
+  test("suppresses a change-gated retry issued in the same turn as a parked publish's abort, and records one issued after a settle, as the client does", async () => {
+
+    // The client forgets once its wait's rejection unwinds, a few microtask hops after the abort, so a retry of the same payload issued in the abort's own turn
+    // is weighed against the aborted payload and suppressed, while one issued after the rejection has settled goes out. The retries differ only in their retain
+    // flag, which the gate never reads, so the recording names which of them went out.
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+      const perPublish = new AbortController();
+      const reason = new HbpuAbortError("shutdown");
+      const release = mqtt.holdPublishes();
+      const failed = assert.rejects(mqtt.publish(TOPIC, "on", { ifChanged: true, signal: perPublish.signal }), (error: unknown) => error === reason);
+
+      perPublish.abort(reason);
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true, retain: true });
+      await settle();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      release();
+
+      await failed;
+      await settle();
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
+        "the retry in the abort's own turn must be suppressed, and the retry after the settle must record at release");
+    });
+  });
+
+  test("suppresses a change-gated retry issued one await after a parked publish's abort, as the client suppresses it", async () => {
+
+    // The client's forget lands in the catch around its wait, after the wait's rejection has unwound, so a retry issued one await after the abort is still
+    // weighed against the aborted payload. The double waits on its gate through the same primitive, so its forget lands at the same hop and the retry is
+    // suppressed here too.
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+      const perPublish = new AbortController();
+      const reason = new HbpuAbortError("shutdown");
+      const release = mqtt.holdPublishes();
+      const failed = assert.rejects(mqtt.publish(TOPIC, "on", { ifChanged: true, signal: perPublish.signal }), (error: unknown) => error === reason);
+
+      perPublish.abort(reason);
+      await Promise.resolve();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true, retain: true });
+      release();
+
+      await failed;
+      await settle();
+
+      assert.deepEqual(mqtt.published, [], "the retry one await after the abort must be weighed against the aborted payload and suppressed");
+    });
+  });
+
+  test("keeps a parked change-gated payload remembered once it records, when its long-lived signal aborts afterwards", async () => {
+
+    // A plugin's lifetime signal outlives each publish it governs. A parked publish's wait drops its listener once the gate opens, as the client's wait does once
+    // it settles, so the signal aborting after the publish records forgets nothing and a repeat stays suppressed.
+    await assertNoUnhandledRejections(async () => {
+
+      const mqtt = new TestMqttClient();
+      const lifetime = new AbortController();
+      const release = mqtt.holdPublishes();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true, signal: lifetime.signal });
+      release();
+      await settle();
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }], "the parked call records at release");
+
+      lifetime.abort(new HbpuAbortError("shutdown"));
+      await settle();
+
+      mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
+      await settle();
+
+      assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
+        "the wait had settled when the gate opened, so the later abort forgets nothing and the repeat must be suppressed");
     });
   });
 });
@@ -906,7 +1156,7 @@ describe("TestMqttClient - the publish hold", () => {
     assert.equal(mqtt.rejectedPublishes, 0, "parking a publish is not refusing it");
   });
 
-  test("a held publish rejects at release with the abort reason when the double aborted during the hold", async () => {
+  test("a held publish rejects with the abort reason when the double aborts during the hold", async () => {
 
     const mqtt = new TestMqttClient();
     const release = mqtt.holdPublishes();
@@ -914,8 +1164,8 @@ describe("TestMqttClient - the publish hold", () => {
 
     await settle();
 
-    // Tearing the double down onto a parked publish is the race the hold exists to force. The second admission is what answers it: the composed signal the first
-    // admission read is the same one read at release, so the publish rejects rather than recording into a double that is already down.
+    // Tearing the double down onto a parked publish is the race the hold exists to force. The parked wait observes the composed signal as the client's wait on
+    // its write does, so the publish rejects at the abort rather than recording into a double that is already down.
     mqtt.abort();
     release();
 

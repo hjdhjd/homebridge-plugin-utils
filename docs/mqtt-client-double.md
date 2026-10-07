@@ -217,17 +217,18 @@ holdPublishes(): () => void;
 ```
 
 Park every publish admitted from here on and return the closure that releases them. A parked publish has passed the admissions [TestMqttClient.publish](#publish)
-opens with and is waiting to be recorded - where a real publish sits while the broker acknowledges it - so a scenario can land a teardown, an outage, or a
-refusal ON an in-flight publish rather than racing one.
+opens with and is waiting to be recorded - where a real publish sits while mqtt.js writes it to the connection - so a scenario can land a teardown, an
+outage, or a refusal ON an in-flight publish rather than racing one.
 
 Each call installs a fresh gate, and a publish parks on whichever gate is active when it is admitted. A release resolves its own gate and stands down as the
 active hold only while nothing has replaced it, so an earlier release frees exactly the publishes parked on its own gate and leaves a later hold standing. A
 second call is a second gate, not an error.
 
-Everything that publishes parks with it. [TestMqttClient.publishGuarded](#publishguarded) routes through `publish`, so a guarded publish released after the double aborts
+Everything that publishes parks with it. [TestMqttClient.publishGuarded](#publishguarded) routes through `publish`, so a guarded publish parked when the double aborts
 reaches the aborted line at debug; [TestMqttClient.invokeGet](#invokeget)'s republish parks too, so a get-driver invocation issued during a hold resolves at release.
-[TestMqttClient.abort](#abort) releases nothing - the release is the test's own hand, and a held publish on a double that aborted rejects when it comes. A hold a
-scenario never releases leaves that scenario's own awaited publishes pending.
+[TestMqttClient.abort](#abort) releases nothing, but it ends the wait of every held publish, which rejects with the abort reason at once, as the client rejects
+a publish whose write is still in flight; a publish's own signal does the same for that publish. A hold a scenario never releases leaves that scenario's own
+awaited publishes pending until a signal ends them.
 
 ###### Returns
 
@@ -323,14 +324,18 @@ publish(
 Record a publish of `payload` to `topic`, mirroring [MqttClient.publish](mqttClient.md#publish). The composed signal is read first, so a publish
 issued after teardown rejects with the abort reason rather than recording. [TestMqttClient.connected](#connected) is read next: while it is false the publish is
 refused with [MqttOfflineError](mqtt-publish.md#mqttofflineerror), exactly as the client refuses a publish it has no broker session for. The refusal lever - when armed - rejects last, in
-place of recording. A publish those admissions let through parks on the gate [TestMqttClient.holdPublishes](#holdpublishes) installed, if one is active, and faces
-those same admissions again when the gate is released, so the state at release is what answers a held publish.
+place of recording. A publish those admissions let through parks on the gate [TestMqttClient.holdPublishes](#holdpublishes) installed, if one is active. The composed
+signal ends the park at once, as it ends the client's wait on a write still in flight, and otherwise the publish faces those same admissions again when the
+gate is released, so the state at release is what answers it.
 
-With `ifChanged`, the double records only when the payload differs from the last one it recorded for a change-gated publish on the topic. The gate answers once
-the composed signal and the placeholder refusal have, and ahead of the session and lever admissions, which is where the client's own gate sits; the memory takes
-the payload once the publish is recorded, and it is cleared when [TestMqttClient.connected](#connected) is set to `true` and when the double aborts, which is where
-the client clears its own. The comparison and keeping rules are [MqttLastPayloads](mqtt-publish.md#mqttlastpayloads)'s. A suppressed publish records
-nothing, counts nothing, and says nothing.
+With `ifChanged`, the double records only when the payload differs from the last one a change-gated publish issued on the topic. The gate answers once the
+composed signal and the placeholder refusal have, and ahead of the session and lever admissions, which is where the client's own gate sits. The memory takes
+the payload once the first admission passes and before any hold, where the client takes its own as it hands the payload to mqtt.js, so a call issued while an
+earlier one is parked is weighed against the parked payload. A parked publish waits on its gate through the primitive the client waits on its write with, so
+an abort ends the wait and the publish forgets its payload in the same catch, after the same unwinding, as the client's failed publish does; a refusal by
+the second admission at release forgets through that catch too, each time only while the topic's entry still carries its own token. The memory is cleared
+when [TestMqttClient.connected](#connected) is set to `true` and when the double aborts, which is where the client clears its own. The comparison and keeping rules
+are [MqttLastPayloads](mqtt-publish.md#mqttlastpayloads)'s. A suppressed publish records nothing, counts nothing, and says nothing.
 
 A tail still carrying a brace is refused through [assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic) once the composed signal has answered,
 ahead of the session and lever admissions, which is where the client's own publish refuses one.

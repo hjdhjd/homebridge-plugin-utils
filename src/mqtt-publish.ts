@@ -139,10 +139,14 @@ export function guardedPublishReason(error: unknown): string {
 }
 
 /**
- * The last payload each topic went out with through a change-gated publish, kept per client so that such a publish goes out only when the payload moved.
+ * The last payload each topic was issued with through a change-gated publish, kept per client so that such a publish goes out only when the payload moved.
  *
  * The client holds one behind the `ifChanged` option of {@link mqttClient!MqttPublishInit | MqttPublishInit}, and the shipped double holds its own mirror. A plugin
  * reaches the behavior through that option and never constructs one of these itself.
+ *
+ * A payload is remembered when its publish is issued, so a change-gated publish issued before an earlier one completes is weighed against the earlier payload.
+ * Each remember mints a token for that write, and the holder of a publish that fails once issued hands the token to {@link MqttLastPayloads.forget}, which
+ * empties the topic only while the topic's entry still carries it, so the retry goes out and a later publish that has taken the topic since keeps its own entry.
  *
  * Two payloads are the same when they are equal strings, or when they are Buffers carrying the same bytes. A string and a Buffer are never the same, whatever their
  * bytes: a topic's payloads are one kind or the other, and comparing across kinds would encode every string on the hot path to answer a question no caller asks.
@@ -151,8 +155,8 @@ export function guardedPublishReason(error: unknown): string {
  */
 export class MqttLastPayloads {
 
-  // The last payload delivered on each topic, keyed by the topic exactly as the caller spells it.
-  readonly #payloads = new Map<string, Buffer | string>();
+  // The last payload issued on each topic beside the token its write was given, keyed by the topic exactly as the caller spells it.
+  readonly #payloads = new Map<string, { readonly payload: Buffer | string; readonly token: object }>();
 
   /**
    * Answer whether `payload` is what was last remembered for `topic`.
@@ -165,7 +169,7 @@ export class MqttLastPayloads {
    */
   public sameAsLast(topic: string, payload: Buffer | string): boolean {
 
-    const last = this.#payloads.get(topic);
+    const last = this.#payloads.get(topic)?.payload;
 
     if(last === undefined) {
 
@@ -183,17 +187,41 @@ export class MqttLastPayloads {
   }
 
   /**
-   * Remember `payload` as what `topic` last went out with, replacing whatever was remembered for it.
+   * Remember `payload` as what `topic` was last issued with, replacing whatever was remembered for it, and answer the token minted for this write.
    *
-   * A Buffer is copied rather than kept by reference, so a caller that fills one scratch buffer per pass is weighed against the bytes it actually delivered rather
-   * than against whatever that buffer holds by the time the next publish asks. A string is kept as it is, since nothing can rewrite it.
+   * A Buffer is copied rather than kept by reference, so a caller that fills one scratch buffer per pass is weighed against the bytes it issued rather than against
+   * whatever that buffer holds by the time the next publish asks. A string is kept as it is, since nothing can rewrite it.
    *
    * @param topic   - The topic to remember under.
-   * @param payload - The payload that went out.
+   * @param payload - The payload being issued.
+   *
+   * @returns A token that belongs to this write alone, which is what {@link MqttLastPayloads.forget} takes if the publish that issued it fails.
    */
-  public remember(topic: string, payload: Buffer | string): void {
+  public remember(topic: string, payload: Buffer | string): object {
 
-    this.#payloads.set(topic, (typeof payload === "string") ? payload : Buffer.from(payload));
+    const token = {};
+
+    this.#payloads.set(topic, { payload: (typeof payload === "string") ? payload : Buffer.from(payload), token });
+
+    return token;
+  }
+
+  /**
+   * Forget what `topic` holds when its entry still carries `token`, so the next change-gated publish on the topic goes out whatever its payload.
+   *
+   * Each remember mints its own token, so the test answers whether the entry is still the failed publish's own write, never whether the payloads match. A later
+   * publish remembered on the topic since carries a token of its own, so its entry stays even when its payload is the same string or the same bytes, and a caller
+   * that rewrote its scratch buffer after the publish was issued cannot keep the failed payload remembered.
+   *
+   * @param topic - The topic to forget.
+   * @param token - The token `remember` answered for the publish that failed.
+   */
+  public forget(topic: string, token: object): void {
+
+    if(this.#payloads.get(topic)?.token === token) {
+
+      this.#payloads.delete(topic);
+    }
   }
 
   /**

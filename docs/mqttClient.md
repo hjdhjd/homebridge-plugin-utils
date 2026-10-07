@@ -32,7 +32,7 @@ client keeps one identity across reconnects, so a reconnect that arrives while t
 previous connection's will goes out, which means a retained `offline` can outlive a live plugin until its next connect replaces it.
 
 For a state topic a plugin re-derives on a schedule, the `ifChanged` option on [MqttPublishInit](#mqttpublishinit) publishes only when the payload moved, remembering per
-topic what the broker last acknowledged for the life of a session.
+topic the payload this client last issued there for the life of a session.
 
 The module offers two construction postures. Direct construction fails loudly on an invalid broker URL: the constructor throws with the underlying mqtt.js error
 attached as `cause`, so a misconfigured plugin cannot silently sit in a zombie state where every call either pretends to succeed or throws an unrelated abort
@@ -226,26 +226,30 @@ publish(
 ): Promise<void>;
 ```
 
-Publish `payload` to `topic`, returning a promise that resolves when the broker acknowledges the publish, or rejects on failure, on abort, or because there is
-no broker session to carry it.
+Publish `payload` to `topic`, returning a promise that resolves once mqtt.js reports the publish written to the connection, or rejects on failure, on abort,
+or because there is no broker session to carry it.
 
 The topic is prefixed with the configured [MqttConfig.topicPrefix](#topicprefix) before being sent; callers supply the topic tail (for example, `"device1/status"`).
 
 A publish issued while [MqttClient.connected](#connected) reads `false` is refused on the spot rather than held for delivery once the broker returns, so nothing is
 retained during an outage and nothing replays after it. See [MqttOfflineError](mqtt-publish.md#mqttofflineerror) for the reasoning.
 
-With `ifChanged` set on [MqttPublishInit](#mqttpublishinit), the publish goes out only when the payload differs from the last one the broker acknowledged for a change-gated
-publish on that topic. The gate answers after the abort check and the placeholder refusal and before the trace and the offline refusal, so a torn-down client
-keeps rejecting with its own reason, an unchanged payload during an outage resolves rather than being refused, and a suppressed publish leaves no line in the
-log, since nothing was attempted. The memory takes a payload only once the broker has acknowledged it, so a refused, failed, or cancelled publish leaves the
-next attempt free to go out, and it is cleared on every connect and at teardown, which is what makes the first change-gated publish after an outage always go
-out: a subscriber that missed a change while the broker was away hears the current value on the next pass. Only a change-gated publish is weighed against the
-memory or written into it, so a publish without the option on the same topic neither reads nor updates it, and a [MqttClient.subscribeGet](#subscribeget) republish
-stays a plain restatement. The boundary is state, never events: an event's payload repeating is the event happening again - a second ring on a doorbell topic,
-a second detection on a motion topic - and the gate would swallow it. The comparison is
-[MqttLastPayloads](mqtt-publish.md#mqttlastpayloads)'s rule: strings by value, Buffers by their bytes, a string never the same as a Buffer, and a remembered
-Buffer copied. The promise reads as "ensure the broker has this value" - it resolves whether the payload just went out or the broker already had it, and rejects
-only as an attempted publish does.
+With `ifChanged` set on [MqttPublishInit](#mqttpublishinit), the publish goes out only when the payload differs from the last one a change-gated publish issued on that topic.
+The gate answers after the abort check and the placeholder refusal and before the trace and the offline refusal, so a torn-down client keeps rejecting with its own
+reason, an unchanged payload during an outage resolves rather than being refused, and a suppressed publish leaves no line in the log, since nothing was attempted.
+The memory takes a payload when the publish is issued, as it is handed to mqtt.js once the offline refusal has answered, so a change-gated publish issued before an
+earlier one completes is weighed against the earlier payload: a repeat ends at the gate, and a return to the value before it goes out. A refused publish issues
+nothing and writes nothing, and a publish that fails once issued forgets its payload while the topic's entry still carries its own token, so the retry goes out and
+a later publish that has taken the topic since keeps its own entry. The forget runs once the rejection unwinds, so a publish of the same payload issued in the same
+turn as the abort is weighed against the aborted payload and suppressed, while one issued after the rejection has settled goes out. The memory is cleared on every
+connect and at teardown, which is what makes the first change-gated publish after an outage always go out: a subscriber that missed a change while the broker was
+away hears the current value on the next pass. Only a change-gated publish is weighed against the memory or written into it, so a publish without the option on the
+same topic neither reads nor updates it, and a [MqttClient.subscribeGet](#subscribeget) republish stays a plain restatement. The boundary is state, never events: an
+event's payload repeating is the event happening again - a second ring on a doorbell topic, a second detection on a motion topic - and the gate would swallow it. The
+comparison is [MqttLastPayloads](mqtt-publish.md#mqttlastpayloads)'s rule: strings by value, Buffers by their bytes, a string never the same as a Buffer, and a
+remembered Buffer copied. The promise reads as "this value has been issued to the broker this session". A suppressed publish resolves on the strength of an earlier
+change-gated publish of the same payload, which was issued and may still be in flight; if that earlier publish then fails, its own caller hears the rejection and
+the memory forgets the payload, while the suppressed caller has already resolved.
 
 A tail still carrying a brace is refused through [assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic), after the abort check and before
 anything else, so an unresolved placeholder never reaches the broker.
@@ -262,8 +266,9 @@ anything else, so an unresolved placeholder never reaches the broker.
 
 [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
 
-A promise that resolves once the broker acknowledges - or at once, with nothing sent, when `ifChanged` finds the payload unchanged - rejects with
-         [MqttOfflineError](mqtt-publish.md#mqttofflineerror) when the client is not connected to the broker, and otherwise rejects with the abort reason or the underlying error.
+A promise that resolves once mqtt.js reports the publish written - or at once, with nothing sent, when `ifChanged` finds the payload unchanged -
+         rejects with [MqttOfflineError](mqtt-publish.md#mqttofflineerror) when the client is not connected to the broker,
+         and otherwise rejects with the abort reason or the underlying error.
 
 ##### publishGuarded()
 
@@ -285,7 +290,7 @@ debug line. A publish refused because the client holds no broker session drops t
 error level by the broker error line. [routeGuardedPublishFailure](mqtt-publish.md#routeguardedpublishfailure) owns the classification and the reasoning behind the order it reads those terms in.
 
 `init` passes through to [publish](#publish) unchanged, which is what lets a per-publish signal cancel this one publish quietly while the connection carries on,
-and what lets a change-gated publish suppress itself just as quietly when the broker already has the payload.
+and what lets a change-gated publish suppress itself just as quietly when its payload is the one the topic was last issued with.
 
 ###### Parameters
 
@@ -448,9 +453,9 @@ Per-publish options accepted by [MqttClient.publish](#publish) and [MqttClient.p
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="ifchanged"></a> `ifChanged?` | `boolean` | Optional. When `true`, the publish goes out only when `payload` differs from the last payload this client delivered on `topic` through a publish that also asked for it, and otherwise resolves at once with nothing sent. For a state topic whose value a plugin re-derives on a schedule, never for an event. The memory's rules are stated on [MqttClient.publish](#publish). |
+| <a id="ifchanged"></a> `ifChanged?` | `boolean` | Optional. When `true`, the publish goes out only when `payload` differs from the last payload this client issued on `topic` through a publish that also asked for it, and otherwise resolves at once with nothing sent. For a state topic whose value a plugin re-derives on a schedule, never for an event. The memory's rules are stated on [MqttClient.publish](#publish). |
 | <a id="retain"></a> `retain?` | `boolean` | Optional. When `true`, the broker keeps this payload as the topic's last retained message and hands it to every subscriber that attaches afterwards, which makes the publish a standing statement rather than an event a late listener misses. Defaults to `false`. |
-| <a id="signal-2"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). When it aborts before the broker acknowledges the publish, the returned promise rejects with `signal.reason`. Composes with the connection-level signal. |
+| <a id="signal-2"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). When it aborts before mqtt.js reports the publish written, the returned promise rejects with `signal.reason`. Composes with the connection-level signal. |
 
 ***
 

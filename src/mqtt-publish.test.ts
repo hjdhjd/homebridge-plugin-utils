@@ -239,4 +239,26 @@ describe("MqttLastPayloads - the change-gated memory", () => {
     assert.equal(memory.sameAsLast(TOPIC, "on"), false);
     assert.equal(memory.sameAsLast(OTHER, Buffer.from("on")), false);
   });
+
+  test("answers a token for each write, and forgets a topic only while its entry still carries the token a failed publish was given", () => {
+
+    // Each remember mints its own token, so a later write of the same string keeps an entry the earlier write's failure cannot reach, and a forget leaves every
+    // other topic alone.
+    const memory = new MqttLastPayloads();
+    const earlier = memory.remember(TOPIC, "on");
+    const later = memory.remember(TOPIC, "on");
+
+    memory.remember(OTHER, "on");
+
+    assert.notEqual(earlier, later, "each write is given a token of its own, even for the same payload");
+
+    memory.forget(TOPIC, earlier);
+
+    assert.equal(memory.sameAsLast(TOPIC, "on"), true, "the entry carries the later write's token, so it stays");
+
+    memory.forget(TOPIC, later);
+
+    assert.equal(memory.sameAsLast(TOPIC, "on"), false, "the entry still carried the token, so it is forgotten");
+    assert.equal(memory.sameAsLast(OTHER, "on"), true, "forgetting one topic leaves every other topic remembered");
+  });
 });

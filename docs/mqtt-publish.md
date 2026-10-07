@@ -20,10 +20,14 @@ import by value is what keeps them from drifting on the comparison or on how a p
 
 ### MqttLastPayloads
 
-The last payload each topic went out with through a change-gated publish, kept per client so that such a publish goes out only when the payload moved.
+The last payload each topic was issued with through a change-gated publish, kept per client so that such a publish goes out only when the payload moved.
 
 The client holds one behind the `ifChanged` option of [MqttPublishInit](mqttClient.md#mqttpublishinit), and the shipped double holds its own mirror. A plugin
 reaches the behavior through that option and never constructs one of these itself.
+
+A payload is remembered when its publish is issued, so a change-gated publish issued before an earlier one completes is weighed against the earlier payload.
+Each remember mints a token for that write, and the holder of a publish that fails once issued hands the token to [MqttLastPayloads.forget](#forget), which
+empties the topic only while the topic's entry still carries it, so the retry goes out and a later publish that has taken the topic since keeps its own entry.
 
 Two payloads are the same when they are equal strings, or when they are Buffers carrying the same bytes. A string and a Buffer are never the same, whatever their
 bytes: a topic's payloads are one kind or the other, and comparing across kinds would encode every string on the hot path to answer a question no caller asks.
@@ -55,27 +59,52 @@ its own when a session is restored and at abort.
 
 `void`
 
+##### forget()
+
+```ts
+forget(topic, token): void;
+```
+
+Forget what `topic` holds when its entry still carries `token`, so the next change-gated publish on the topic goes out whatever its payload.
+
+Each remember mints its own token, so the test answers whether the entry is still the failed publish's own write, never whether the payloads match. A later
+publish remembered on the topic since carries a token of its own, so its entry stays even when its payload is the same string or the same bytes, and a caller
+that rewrote its scratch buffer after the publish was issued cannot keep the failed payload remembered.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `topic` | `string` | The topic to forget. |
+| `token` | `object` | The token `remember` answered for the publish that failed. |
+
+###### Returns
+
+`void`
+
 ##### remember()
 
 ```ts
-remember(topic, payload): void;
+remember(topic, payload): object;
 ```
 
-Remember `payload` as what `topic` last went out with, replacing whatever was remembered for it.
+Remember `payload` as what `topic` was last issued with, replacing whatever was remembered for it, and answer the token minted for this write.
 
-A Buffer is copied rather than kept by reference, so a caller that fills one scratch buffer per pass is weighed against the bytes it actually delivered rather
-than against whatever that buffer holds by the time the next publish asks. A string is kept as it is, since nothing can rewrite it.
+A Buffer is copied rather than kept by reference, so a caller that fills one scratch buffer per pass is weighed against the bytes it issued rather than against
+whatever that buffer holds by the time the next publish asks. A string is kept as it is, since nothing can rewrite it.
 
 ###### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `topic` | `string` | The topic to remember under. |
-| `payload` | `string` \| `Buffer`\<`ArrayBufferLike`\> | The payload that went out. |
+| `payload` | `string` \| `Buffer`\<`ArrayBufferLike`\> | The payload being issued. |
 
 ###### Returns
 
-`void`
+`object`
+
+A token that belongs to this write alone, which is what [MqttLastPayloads.forget](#forget) takes if the publish that issued it fails.
 
 ##### sameAsLast()
 

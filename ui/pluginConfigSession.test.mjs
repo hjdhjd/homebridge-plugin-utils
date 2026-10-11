@@ -129,6 +129,61 @@ describe("PluginConfigSession.commit", () => {
 
     assert.deepEqual(session.platform.options, ["Original"], "the held reference must not advance when the write fails");
   });
+
+  test("a null patch writes nothing, leaves the held entries in place, and answers unchanged", async () => {
+
+    const host = makeHost({ config: [ { controllers: [{ address: "a" }], name: "P", platform: "MyPlugin" }, { name: "Sibling" } ] });
+    const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
+    const entriesBefore = session.entries;
+    const platformBefore = session.platform;
+
+    assert.deepEqual(await session.commit(null), { kind: "unchanged" }, "a null patch must answer unchanged");
+    assert.equal(host.writes.length, 0, "a null patch must reach no host write");
+    assert.equal(session.entries, entriesBefore, "a null patch must not advance the held reference");
+    assert.equal(session.platform, platformBefore, "a null patch must not rebuild the primary entry");
+
+    // A host that refuses every write is never asked, so a null patch answers unchanged there too rather than rejecting.
+    const refusing = await PluginConfigSession.open({ host: makeHost({ config: [{ name: "P", platform: "MyPlugin" }], reject: true }), name: "MyPlugin" });
+
+    assert.deepEqual(await refusing.commit(null), { kind: "unchanged" }, "a null patch must answer unchanged even against a host that refuses writes");
+  });
+
+  test("a patch the host accepts answers written", async () => {
+
+    const host = makeHost({ config: [ { name: "P", platform: "MyPlugin" }, { name: "Sibling" } ] });
+    const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
+
+    assert.deepEqual(await session.commit({ options: ["Enable.Motion"] }), { kind: "written" }, "a patch the host accepts must answer written");
+    assert.deepEqual(host.writes, [[ { name: "P", options: ["Enable.Motion"], platform: "MyPlugin" }, { name: "Sibling" } ]],
+      "the one write must be the patch merged onto the primary entry beside the sibling");
+  });
+
+  test("an undefined or empty patch is still a write, staging the primary entry as it stands", async () => {
+
+    const host = makeHost({ config: [ { name: "P", options: ["Original"], platform: "MyPlugin" }, { name: "Sibling" } ] });
+    const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
+    const held = session.entries;
+
+    // Only null is the answer that there is nothing to write, so each of these stages the held array as it stands and answers as a write.
+    assert.deepEqual(await session.commit(undefined), { kind: "written" }, "an undefined patch must still answer written");
+    assert.deepEqual(await session.commit({}), { kind: "written" }, "an empty patch must still answer written");
+    assert.deepEqual(host.writes, [ held, held ], "an undefined and an empty patch must each record a write equal to the held array");
+  });
+
+  test("on an empty host, a null commit leaves the seeded entry unstaged, and the first real commit stages the name with its data", async () => {
+
+    const host = makeHost({ config: [] });
+    const session = await PluginConfigSession.open({ host, name: "MyPlugin" });
+
+    assert.deepEqual(await session.commit(null), { kind: "unchanged" }, "a null commit on an empty host must answer unchanged");
+    assert.equal(host.writes.length, 0, "a null commit must not stage the held seed");
+    assert.deepEqual(session.platform, { name: "MyPlugin" }, "the seed must stay held as it was");
+
+    await session.commit({ controllers: [{ address: "a" }] });
+
+    assert.deepEqual(host.writes, [[{ controllers: [{ address: "a" }], name: "MyPlugin" }]],
+      "the first real commit must be the only write, staging the name alongside its data");
+  });
 });
 
 describe("PluginConfigSession.persist", () => {
@@ -343,6 +398,29 @@ describe("PluginConfigSession - the config-write generation", () => {
 
     assert.deepEqual(session.platform.options, ["Fresh"], "a read that only a save overlapped must still apply - persist must not advance the write generation");
     assert.equal(host.writes.length, 0, "persist must stage nothing");
+  });
+
+  test("a null commit while a read is in flight leaves that read free to apply - a commit that writes nothing moves no generation", async () => {
+
+    const host = makeGatedHost();
+    const session = new PluginConfigSession(host, "MyPlugin");
+
+    // Establish the replica, then start a read that will answer while a null commit is in the way.
+    const open = session.sync();
+
+    host.gates[0].resolve([{ name: "P", options: ["Original"], platform: "MyPlugin" }]);
+    await open;
+
+    const inFlight = session.sync();
+
+    // A null commit writes nothing, so like a save it holds no newer truth to defend and must leave the read's generation where it was.
+    assert.deepEqual(await session.commit(null), { kind: "unchanged" }, "a null commit must answer unchanged");
+
+    host.gates[1].resolve([{ name: "P", options: ["Fresh"], platform: "MyPlugin" }]);
+    await inFlight;
+
+    assert.deepEqual(session.platform.options, ["Fresh"], "a read that only a null commit overlapped must still apply - a null commit must not move the generation");
+    assert.equal(host.writes.length, 0, "a null commit must stage nothing");
   });
 
   test("a sole sync still applies - the guard drops only reads a later write overtook", async () => {

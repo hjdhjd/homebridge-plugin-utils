@@ -53,7 +53,7 @@ const DEBOUNCE_MS = 300;
  *
  * @param {Object} args
  * @param {{toast: {error: (message: string, title: string) => void}}} args.host - The Homebridge bridge, used only for the final failure's toast through toastError.
- * @param {{commit: (patch: Object) => Promise<void>}} args.session - The config session; option edits stage through its single write path.
+ * @param {import("../../pluginConfigSession.mjs").PluginConfigSession} args.session - The config session; option edits stage through its single write path.
  * @param {AbortSignal} args.signal - The lifecycle signal. Aborting tears down the effect.
  * @param {import("../store.mjs").FeatureOptionsStore} args.store - The store the effect subscribes against.
  * @returns {{flush: () => Promise<void>}} A handle whose `flush()` drains any pending edit to the host now; called at the page's navigate-away / browser-exit edges.

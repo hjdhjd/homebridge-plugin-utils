@@ -325,6 +325,35 @@ describe("webUi.show - first-run routing", () => {
     assert.equal(harness.fake.observed.state.saveButtonEnabled, false, "the save button must stay disabled when the handoff rejects before enableSaveButton runs");
     assert.equal(harness.fake.observed.state.spinnerCount, 0, "the spinner must drain in the finally clause after a failed handoff");
   });
+
+  test("on first-run submit: the injected commit answers the hook with the session's result, and a null patch on an empty host writes nothing", async () => {
+
+    const answers = [];
+
+    // A hook whose composer answered null hands that null to the injected commit, then commits real data, recording each answer the commit gives it.
+    const onSubmit = async ({ commit }) => {
+
+      answers.push(await commit(null));
+      answers.push(await commit({ controllers: [{ address: "a" }] }));
+
+      return true;
+    };
+
+    using harness = makeWebUiHarness({
+
+      firstRun: { isRequired: () => true, onStart: () => true, onSubmit },
+      name: "MyPlugin"
+    });
+
+    await harness.ui.show();
+
+    harness.skeleton.firstRun.click();
+    await flushPending();
+
+    assert.deepEqual(answers, [ { kind: "unchanged" }, { kind: "written" } ], "the hook must receive the session's own answer to each commit");
+    assert.deepEqual(harness.fake.observed.updatedConfigs, [[{ controllers: [{ address: "a" }], name: "MyPlugin" }]],
+      "the null patch must reach no host write, and the real commit must stage the seeded name with its data");
+  });
 });
 
 describe("webUi.show - menu wiring", () => {

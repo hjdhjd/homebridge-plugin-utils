@@ -28,8 +28,15 @@ const WRITE_STALL_NOTICE = WRITE_STALL_SUMMARY + " Recent changes may not be sav
   "If this message stays, close and reopen the plugin settings, and restart Homebridge if it returns.";
 
 /**
+ * What became of a {@link PluginConfigSession#commit} call, declared by the session's own module.
+ *
+ * @typedef {import("./pluginConfigSession.mjs").SessionCommitResult} SessionCommitResult
+ */
+
+/**
  * @typedef {Object} FirstRunContext
- * @property {(patch: Object) => Promise<void>} [commit] - Stage a patch onto the primary platform-config entry. Supplied only to `onSubmit` (the one write hook).
+ * @property {(patch: Object | null) => Promise<SessionCommitResult>} [commit] - Stage a patch onto the primary platform-config entry, answering `written`, or
+ *   `unchanged` for a null patch, which writes nothing. Supplied only to `onSubmit` (the one write hook).
  * @property {Object} config - The primary platform-config entry, injected so the hook is a pure function of its input rather than reaching for the config itself.
  */
 

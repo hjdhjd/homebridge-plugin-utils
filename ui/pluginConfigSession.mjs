@@ -5,6 +5,14 @@
 "use strict";
 
 /**
+ * SessionCommitResult - What became of a {@link PluginConfigSession#commit} call, tagged by `kind`. `written` means the patch was merged onto the primary
+ * entry and the host accepted the staged array. `unchanged` means the patch was null, a composer's answer that it has nothing to write, so the host was not
+ * called and the session holds what it held. A host that refuses the write rejects the call rather than answering it, so no member carries an error.
+ *
+ * @typedef {{kind: "written"} | {kind: "unchanged"}} SessionCommitResult
+ */
+
+/**
  * PluginConfigSession - the single session-scoped accessor to the persisted plugin configuration, holding a coherent replica of the host config.
  *
  * The webUI reads and writes its plugin configuration from several places in its lifecycle. Left to themselves, each of those sites would call the host's config
@@ -21,8 +29,8 @@
  * Because the host config can change underneath the session while the page is hidden (the Settings tab edits the same in-memory model), the replica is not assumed
  * frozen. The feature-options page re-syncs on every entry ({@link sync} in the boot that `show()` and each of the page's re-entries run), so the replica is
  * re-read against any external Settings-tab edit before the page renders against it. {@link commit} advances the reference transactionally - it moves only after
- * the host write resolves, so a failed write leaves the prior replica intact. This mirrors how Homebridge models its own config: read, edit, save - re-read on the
- * next visit.
+ * the host write resolves, so a failed write leaves the prior replica intact. A null patch, a composer's answer that it has nothing to write, reaches no host write
+ * and answers `unchanged`. This mirrors how Homebridge models its own config: read, edit, save - re-read on the next visit.
  *
  * @example
  *
@@ -106,14 +114,25 @@ export class PluginConfigSession {
    * Merge a patch into the primary platform entry and stage the whole array (sibling entries preserved), advancing the held reference only after the host write
    * resolves. Every configuration write funnels through this method; it is the write-direction counterpart of {@link sync}.
    *
+   * A null patch is a composer's answer that it has nothing to write. Only null is that answer, and an undefined or empty patch is still a write, staging the primary
+   * entry as it stands. A null patch calls no host write and leaves the replica, the write generation and a fresh install's held seed as they were. The session
+   * reports the answer and nothing more, because the caller owns what the user hears.
+   *
    * Transactional by construction: the next array is built and written before it replaces the held reference, so a rejected write throws without moving the session
    * off its last-good state. Callers that need to surface the failure (the staging effect's rollback path) catch the rejection; the session itself stays consistent
    * either way.
    *
-   * @param {Object} patch - Fields to merge onto the primary platform entry (e.g. `{ controllers }` or `{ options }`). The primary entry's other fields are preserved.
-   * @returns {Promise<void>}
+   * @param {Object | null} patch - Fields to merge onto the primary platform entry (e.g. `{ controllers }` or `{ options }`), or null when there is nothing to
+   *   write. The primary entry's other fields are preserved.
+   * @returns {Promise<SessionCommitResult>} `written` once the host accepts the staged array, or `unchanged` for a null patch, which writes nothing.
    */
   async commit(patch) {
+
+    // A null patch writes nothing, so the write generation stays where it is: with no newer write to protect, a read already in flight still applies.
+    if(patch === null) {
+
+      return { kind: "unchanged" };
+    }
 
     const next = [ { ...this.#config[0], ...patch }, ...this.#config.slice(1) ];
 
@@ -122,6 +141,8 @@ export class PluginConfigSession {
     // Advance the write generation alongside the replica, so a read that began before this save cannot land afterwards and quietly restore the pre-save config.
     this.#generation += 1;
     this.#config = next;
+
+    return { kind: "written" };
   }
 
   /**
@@ -150,8 +171,8 @@ export class PluginConfigSession {
    *
    * Called on every page entry so the replica re-reads against any external Settings-tab edit before the page renders against it. An empty host result yields a
    * single bare entry; in both cases we ensure the primary entry carries the platform name so a later commit stages a well-formed block. The seed is held only -
-   * never eagerly written - so a fresh install that is opened and abandoned never leaves a bare platform entry staged on the host; the first real commit stages the
-   * name alongside actual data.
+   * never eagerly written, and a null commit leaves it held too - so a fresh install that is opened and abandoned never leaves a bare platform entry staged on the
+   * host; the first real commit stages the name alongside actual data.
    *
    * Built like {@link commit} for symmetry and clarity: the read happens into a local, the local is seeded, and a single trailing assignment advances the held
    * reference. (The build-then-assign does not guard against a torn write here - the only I/O is the first statement - but it keeps this method's shape

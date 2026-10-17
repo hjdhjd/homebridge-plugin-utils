@@ -16,11 +16,12 @@ const MESSAGE = "Compare DOM nodes with assert.ok(a === b, \"<reason>\"); an equ
 
 /* The type kinds a constituent is dropped for before the assignability question is asked.
  *
- * `any` and `never` are each assignable to every target, so a predicate that kept them would report on any operand the checker could not type and on any operand
- * it narrowed away entirely - ordinary value comparisons, by the thousand. `unknown` is dropped on the same reasoning, and `null` and `undefined` are dropped
- * because they are what the bounded form compares against: an operand typed `Element | null` must answer for its `Element` arm alone.
+ * `any` and `unknown` carry no information about the value they type, so the predicate draws no conclusion from them: `any` is assignable to every target, and
+ * a predicate that kept it would report every operand the checker could not type - ordinary value comparisons, by the thousand. `null` and `undefined` are
+ * dropped because they are what the bounded form compares against: an operand typed `Element | null` must answer for its `Element` arm alone. `never` is not in
+ * the list, because the loop asks the never question of each constituent directly.
  */
-const IGNORED_FLAGS = ts.TypeFlags.Any | ts.TypeFlags.Never | ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Unknown;
+const IGNORED_FLAGS = ts.TypeFlags.Any | ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Unknown;
 
 // The resolved DOM Node type, keyed by the program it was resolved from. Resolution walks every source file the program holds, which is far too expensive to
 // repeat for each node visited, and one lint run reuses a single program across every file it reads.
@@ -76,6 +77,16 @@ function isDomNodeType(type, checker, domNodeType) {
       continue;
     }
 
+    // A constituent that can hold no value is not a node. TypeScript keeps an empty intersection as an intersection type that carries no `never` flag, and such
+    // arms are ordinary in test code: an `asserts actual is T` assertion such as node:assert's `deepEqual` narrows its operand to an intersection with the
+    // literal's type, and an index into the narrowed operand is then a union of pairwise arm intersections whose mismatched pairs are empty. An empty type is
+    // assignable to every target, so it would otherwise read as a DOM node. Assignability to `never` is the one public question that identifies `never` and an
+    // empty intersection alike, while `any` does not pass it and stays with the flag test above.
+    if(checker.isTypeAssignableTo(constituent, checker.getNeverType())) {
+
+      continue;
+    }
+
     if(checker.isTypeAssignableTo(constituent, domNodeType)) {
 
       return true;
@@ -125,6 +136,7 @@ function isAssertEqualityCall(node) {
 //  * `assert.equal(el?.textContent, "x", "r");`                is a value read off a node rather than a node, and is left alone.
 //  * `assert.ok(el === null, "r");`                            is the bounded form this rule points authors toward, and is outside the equality family.
 //  * `matcher.equal(document.body, null, "r");`                is an unrelated receiver and is left alone.
+//  * `assert.deepEqual(tracks[1], { kind: "audio" }, "r");`    is left alone after a prior `deepEqual` narrowed `tracks` - empty arm intersections are not nodes.
 //
 // A failing equality assertion over two DOM nodes does not fail the run, it hangs it: node:assert builds its failure message by walking both operands, and a
 // node's getter-backed properties compute by walking the subtree beneath them. The bounded form compares first and hands the assertion a plain boolean plus the

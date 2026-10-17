@@ -3,7 +3,7 @@
  * no-dom-node-equality.test.mjs: Unit tests for the no-dom-node-equality rule covering the shapes an operand reaches a comparison through - a bare accessor, a
  * binding assigned from one, a helper's return value, a navigation property, and an optional chain in a TypeScript file - alongside the per-argument report
  * count, both admitted receiver spellings, and the negative cases that prove a value read off a node, the bounded form, an ordinary comparison, a truthiness
- * check, and an unrelated receiver are none of this rule's business.
+ * check, an unrelated receiver, and an element indexed out of an array an earlier assertion narrowed are none of this rule's business.
  *
  * Every snippet opens with the node:assert import. Without it the callee is an unresolved global typed `any`, TypeScript declines to check the arguments of a
  * call it cannot resolve, every operand comes back `any`, and the rule correctly stays silent - which would leave each invalid case passing while proving
@@ -144,6 +144,17 @@ ruleTester.run("no-dom-node-equality", rule, {
 
       code: IMPORT + "const matcher = { equal(a, b, r) { return [ a, b, r ]; } };\nmatcher.equal(document.body, null, \"r\");",
       filename: MJS
+    },
+
+    // An element indexed out of an array an earlier assertion narrowed. The first assertion narrows `tracks` to an intersection with the literal's type, the
+    // indexed element then carries empty arm intersections, and an empty intersection is not a node.
+    {
+
+      code: IMPORT + "type Track = { readonly kind: \"video\"; readonly width: number } | { readonly kind: \"audio\"; readonly channels: number };\n" +
+        "declare const tracks: readonly Track[];\n" +
+        "assert.deepEqual(tracks, [{ kind: \"video\", width: 1 }, { kind: \"audio\", channels: 1 }], \"r\");\n" +
+        "assert.deepEqual(tracks[1], { kind: \"audio\", channels: 1 }, \"r\");",
+      filename: TS
     }
   ]
 });

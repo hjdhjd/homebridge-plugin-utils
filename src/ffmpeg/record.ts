@@ -468,6 +468,8 @@ function buildRecordingCommandLine(options: FfmpegOptions, init: FfmpegRecording
     channels: recordingConfig.audioCodec.audioChannels,
     codec: recordingConfig.audioCodec.type,
     filters: recording.audioFilters,
+    // Upstream types this samplerate as an intersection of the enum with a union that contains it, which the enum-assignment rule misreads as a foreign value.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-assignment
     samplerate: recordingConfig.audioCodec.samplerate
   } : undefined;
 

@@ -33,6 +33,7 @@ const ANNOUNCE_TIMEOUT_MS = 15000;
 
 // The responder's announced state, spelled as the responder's own type. The enum it belongs to is ambient and const, which this project's `isolatedModules`
 // bars a value import of, so the state is named once here and compared by identity below.
+// eslint-disable-next-line @typescript-eslint/no-unsafe-enum-assignment
 const ANNOUNCED = "announced" as CiaoService["serviceState"];
 
 /* A responder puts a goodbye on the wire only from its announced state: one still probing is torn down silently, and probing across every link of a family

@@ -4,7 +4,7 @@
  * between the process and the assembler, known-HKSV-error friendly teardown message, livestream segmentLength wiring, and the livestream lifecycle run against the real
  * process and against TestLivestreamProcess, so the double is held to what the real process does.
  */
-import { AudioRecordingCodecType, AudioRecordingSamplerate, H264Level, H264Profile } from "./hap-enums.ts";
+import { AudioRecordingCodecType, AudioRecordingSamplerate, H264Level, H264Profile, MediaContainerType, VideoCodecType } from "./hap-enums.ts";
 import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit, LivestreamProcess } from "./record.ts";
 import { FfmpegLivestreamProcess, FfmpegRecordingProcess, livestreamProcessFactory } from "./record.ts";
 import { TestLivestreamProcessFactory, capturingLog, expectAt, settle, waitUntil } from "../testing/index.ts";
@@ -63,7 +63,7 @@ function makeRecordingConfig(): CameraRecordingConfiguration {
     mediaContainerConfiguration: {
 
       fragmentLength: 4000,
-      type: 0
+      type: MediaContainerType.FRAGMENTED_MP4
     },
     prebufferLength: 4000,
     videoCodec: {
@@ -76,7 +76,7 @@ function makeRecordingConfig(): CameraRecordingConfiguration {
         profile: H264Profile.MAIN
       },
       resolution: [ 1920, 1080, 30 ],
-      type: 0
+      type: VideoCodecType.H264
     }
   } as CameraRecordingConfiguration;
 }

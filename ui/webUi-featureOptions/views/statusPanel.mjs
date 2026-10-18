@@ -11,94 +11,13 @@ import { defaultIdentityFields } from "./deviceInfo.mjs";
 import { effect } from "../store.mjs";
 import { selectedDevice } from "../selectors.mjs";
 
-/**
- * One member of a choices row's list. A hand-authored browser-side rendering of `StatusChoice` from `src/webui/status.ts`, the contract owner these typedefs are kept
- * in lockstep with.
- *
- * @typedef {Object} StatusChoice
- * @property {string} label - The human-readable choice name, rendered beside its checkbox glyph.
- * @property {boolean} selected - Whether the choice is currently enabled on the device. Display-only: the panel reports it and offers no way to change it.
+/* The device-status contract's types this panel names, read from their owner, `src/webui/status.ts`, so the contract has one statement and the panel restates none
+ * of it: each alias keeps the contract's own name, and the shapes and their documentation live with the contract alone. The aliases name the TypeScript source
+ * rather than the compiled copy the panel imports its event and route names from at runtime, because the source is what carries the types an editor resolves.
  */
-
-/**
- * A choices row's static vocabulary. Mirrors `StatusChoicesRowTemplate` from `src/webui/status.ts`. It declares no sizer, because every choice renders at all times
- * and the checkbox glyph is metrically constant, so the rendered list occupies exactly the width it reserves.
- *
- * @typedef {Object} StatusChoicesRowTemplate
- * @property {string} id - The stable row identity a `"row"` event addresses to replace this row's choices in place.
- * @property {"choices"} kind - The tag marking this row as the choices form.
- * @property {string} label - The human-readable row label.
- */
-
-/**
- * One rendered choices row: a {@link StatusChoicesRowTemplate} plus its live list. Mirrors `StatusChoicesRow` from `src/webui/status.ts`.
- *
- * @typedef {StatusChoicesRowTemplate & { choices: StatusChoice[] }} StatusChoicesRow
- */
-
-/**
- * A text row's static vocabulary. Mirrors `StatusTextRowTemplate` from `src/webui/status.ts`. Its tag is optional, which makes the text row what an untagged
- * composition means.
- *
- * @typedef {Object} StatusTextRowTemplate
- * @property {string} id - The stable row identity a `"row"` event addresses to update this row in place.
- * @property {"text"} [kind] - The optional tag marking this row as the text form. A row that states no kind is a text row.
- * @property {string} label - The human-readable row label.
- * @property {{ seconds: number, value: string }} [latch] - The optional momentary-value latch: a rendered value equal to `latch.value` clears back to the placeholder
- *   after `latch.seconds`. A text-value mechanism, so the choices form declares none.
- * @property {string | string[]} sizer - The widest value the row can produce, as a single string or a non-empty tuple of candidates the panel reserves and maxes.
- */
-
-/**
- * One rendered text row: a {@link StatusTextRowTemplate} plus its live value. Mirrors `StatusTextRow` from `src/webui/status.ts`.
- *
- * @typedef {StatusTextRowTemplate & { value: string }} StatusTextRow
- */
-
-/**
- * A status row's static vocabulary in either form, tagged on `kind`. Mirrors `StatusRowTemplate` from `src/webui/status.ts`. A template carrying a kind neither of
- * these declares renders its label over the placeholder dash, so a row form newer than this panel costs that row's content and nothing else.
- *
- * @typedef {StatusChoicesRowTemplate | StatusTextRowTemplate} StatusRowTemplate
- */
-
-/**
- * One rendered status row in either form. Mirrors `StatusRow` from `src/webui/status.ts`.
- *
- * @typedef {StatusChoicesRow | StatusTextRow} StatusRow
- */
-
-/**
- * The payload a `"row"` event carries: the addressed row's id plus the one thing that changed, stated in that row's own vocabulary. Mirrors `StatusRowUpdate` from
- * `src/webui/status.ts`. The panel reads what an update MEANS from the addressed row's template kind rather than from the payload's own shape, so a payload shaped
- * for the other form leaves the value absent and the row renders the placeholder dash.
- *
- * @typedef {{ choices?: StatusChoice[], id: string, value?: string }} StatusRowUpdate
- */
-
-/**
- * The classified feed-failure reasons. Mirrors `StatusErrorReason` from `src/webui/status.ts`; the component owns default copy for each and merges per-plugin
- * overrides on top.
- *
- * @typedef {"auth-invalid" | "auth-missing" | "faulted" | "misconfigured" | "not-found" | "not-ready" | "throttled" | "timeout" | "unreachable" |
- *   "unsupported"} StatusErrorReason
- */
-
-/**
- * The bridge push event, tagged on `kind`. Mirrors `StatusEvent` from `src/webui/status.ts`; the handler reads it from the host `MessageEvent`'s `data` property.
- *
- * @typedef {Object} StatusEvent
- * @property {string} kind - The event tag: `"hello"`, `"connecting"`, `"snapshot"`, `"row"`, `"availability"`, or `"error"`.
- * @property {string} [serialNumber] - The device identity, present on every device event and the view request; absent on the server-scoped `"hello"`.
- * @property {number} [session] - The monotonic session token the per-serialNumber guard reads, present on every device event.
- * @property {number} [generation] - The adapter process's opaque generation, on a `"hello"`. Compared by equality alone; a value the panel has not seen marks a fresh
- *   server, so the panel clears its per-device floors and notifies the plugin.
- * @property {boolean} [encrypted] - The transport's encryption state, on snapshot and online-availability events.
- * @property {boolean} [online] - The reachability flag, on availability events.
- * @property {StatusRow[]} [rows] - The authoritative row set, on a snapshot.
- * @property {StatusRowUpdate} [row] - The single row update, on a `"row"` event.
- * @property {StatusErrorReason} [reason] - The classified failure, on an `"error"` event.
- */
+/** @typedef {import("../../../src/webui/status.ts").StatusChoice} StatusChoice */
+/** @typedef {import("../../../src/webui/status.ts").StatusErrorReason} StatusErrorReason */
+/** @typedef {import("../../../src/webui/status.ts").StatusRowTemplate} StatusRowTemplate */
 
 /**
  * The status-panel configuration. A plugin supplies the parts it owns - the identity fields, the placeholder row templates, and any error-copy overrides - and
@@ -136,7 +55,7 @@ import { selectedDevice } from "../selectors.mjs";
  * One device's remembered state: what that device last told the panel, kept whether or not it is the device on screen. The map of these entries is the panel's single
  * source of truth - the push handler reduces every event into the addressed device's entry, and the DOM is a projection of the viewed device's entry - so selecting a
  * device the panel already knows renders at once. Internal mount state rather than wire contract: nothing outside this module produces or consumes it, so unlike the
- * typedefs above it mirrors nothing in `src/webui/status.ts`.
+ * contract types above it is declared here rather than named from `src/webui/status.ts`.
  *
  * @typedef {Object} DeviceStateEntry
  * @property {Map<string, ReturnType<typeof setTimeout>>} latchTimers - The pending clear-back timer per row id. The clock belongs to the device rather than to the

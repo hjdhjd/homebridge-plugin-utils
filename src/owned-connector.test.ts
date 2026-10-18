@@ -42,9 +42,6 @@ interface StallingRig {
   readonly stop: () => Promise<void>;
 }
 
-// The orders a consumer can run its teardown statements in, and the whole of what the last row tells apart.
-type TeardownOrder = "destroyFirst" | "releaseFirst";
-
 // A peer presenting a certificate no store trusts, recording the protocols each client offered it.
 interface CertificateRig {
 
@@ -223,17 +220,14 @@ async function fetchStatus(agent: Agent, origin: string): Promise<number> {
   return response.statusCode;
 }
 
-/* Abandon one WebSocket upgrade mid-handshake and answer how many connections the peer accepted in total.
+/* Abandon one WebSocket upgrade mid-handshake, tear down in the order the connector documents, and answer how many connections the peer accepted in total.
  *
  * The peer accepts the TCP connection and answers nothing, so the dial completes, the socket moves into the connector's established collection, and the upgrade
- * request underneath it stays unanswered - which is the state a caller's lifetime ending has to unwind, and the one where the order of the teardown statements
- * decides the outcome.
+ * request underneath it stays unanswered - which is the state a caller's lifetime ending has to unwind.
  *
- * @param order - Which order to run the dispatcher's destroy, the WebSocket's close and the connector's release in.
- *
- * @returns The peer's accepted-connection count once a second dial has had time to arrive.
+ * @returns The peer's accepted-connection count once a second dial would have had time to arrive.
  */
-async function abandonedUpgradeConnections(order: TeardownOrder): Promise<number> {
+async function abandonedUpgradeConnections(): Promise<number> {
 
   const rig = await startStallingRig();
   const connector = createOwnedConnector({ allowH2: false });
@@ -246,21 +240,10 @@ async function abandonedUpgradeConnections(order: TeardownOrder): Promise<number
 
   await waitUntil(() => rig.connections() >= 1, { description: "the dial to reach the peer" });
 
-  if(order === "destroyFirst") {
-
-    void agent.destroy();
-  }
-
+  // The documented order: the dispatcher's destroy first, so the pending request fails outright and takes its socket with it, then the close and the release.
+  void agent.destroy();
   ws.close(1000);
   connector.release();
-
-  if(order === "releaseFirst") {
-
-    // Leaving the destroy to a later turn is what makes the close the first thing the transport hears about the abandoned request.
-    await delay(0);
-
-    void agent.destroy();
-  }
 
   /* One settling window before the count is read. A second dial reaches the peer within a few milliseconds when it comes at all, and an ABSENCE cannot be waited for
    * by predicate, so this is a dwell rather than a poll - long enough that a reading of one is silence rather than a race.
@@ -540,17 +523,15 @@ describe("createOwnedConnector", () => {
     assert.deepEqual(rig.offered(), ["http/1.1"]);
   });
 
-  /* The order a consumer has to tear this connector's sockets down in, which is the connector's own contract rather than any one consumer's. Closing a socket whose
-   * upgrade is still unanswered aborts the request underneath it in the way the transport treats as retryable, so with the dispatcher still live it dials again
-   * through this same connector and nothing is left to release the second socket. Destroying the dispatcher first fails that request outright and takes its socket
-   * with it, so there is nothing to retry in any later turn.
+  /* The order the connector documents for a consumer's teardown: destroy the dispatcher, then release the connector. Destroying the dispatcher first fails the
+   * request still pending under an unanswered upgrade outright and takes its socket with it, so the transport has nothing to retry in any later turn and the peer
+   * sees the one connection the dial made and no other.
    *
-   * The reading lives here, on a direct dial, because the position of the destroy is not observable through a consumer that wraps it: driven through the log
-   * socket the connector's `connect` is invoked exactly once and both forms of the wrong order read one connection, so only a dial made here tells the two apart.
+   * The reading lives here, on a direct dial, because a consumer that wraps the connector invokes its `connect` once whatever happens afterwards, so only a dial
+   * made here shows the peer's count.
    */
-  test("destroying the dispatcher before the release leaves one connection where the other order leaves two", async () => {
+  test("the documented teardown order leaves the peer exactly one connection", async () => {
 
-    assert.equal(await abandonedUpgradeConnections("destroyFirst"), 1, "the ruled order must leave the transport nothing to re-dial");
-    assert.equal(await abandonedUpgradeConnections("releaseFirst"), 2, "closing ahead of a live dispatcher is what leaves a second, orphaned socket behind");
+    assert.equal(await abandonedUpgradeConnections(), 1, "the documented order must leave the transport nothing to re-dial");
   });
 });

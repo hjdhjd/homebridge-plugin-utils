@@ -22,7 +22,8 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 
 - **MQTT client.** Building in MQTT client capabilities is made easier through a set of utilities that allow you to easily publish and subscribe to events.
 
-- **`hblog` log client.** A zero-dependency tool for tailing and querying a `homebridge-config-ui-x` log, usable both as the `hblog` command-line bin and as the importable `HomebridgeLogClient` API. See [Log Client (`hblog`)](#log-client-hblog) below.
+- **`hblog` log client.** A tool for tailing and querying a `homebridge-config-ui-x` log, usable both as the `hblog` command-line bin and as the importable
+  `HomebridgeLogClient` API. Its one runtime dependency is undici. See [Log Client (`hblog`)](#log-client-hblog) below.
 
 - **Plugin tooling.** A `homebridge-plugin-utils` command-line tool that mirrors the compiled webUI into your plugin under a content-hashed folder (so the browser never serves a stale copy after a rebuild) and regenerates your Feature Options reference, your MQTT topic tables, and your documentation chrome from the sources each is projected from (so none of it can drift). See [Plugin Tooling](#plugin-tooling) below.
 
@@ -34,7 +35,9 @@ Documentation and examples for using this library to simplify and enhance Homebr
 
 ## Log Client (`hblog`)
 
-`hblog` is a zero-dependency tool for tailing and querying the log of a [homebridge-config-ui-x](https://github.com/homebridge/homebridge-config-ui-x) instance. It connects to the web UI, authenticates, and either live-tails the log over the UI's Socket.IO stream or pulls historical lines over REST. It is meant for plugin development and debugging.
+`hblog` is a tool for tailing and querying the log of a [homebridge-config-ui-x](https://github.com/homebridge/homebridge-config-ui-x) instance, and its one runtime
+dependency is undici, which carries its live Socket.IO stream, while its REST calls use Node's built-in `fetch`. It connects to the web UI, authenticates, and either
+live-tails the log over the UI's Socket.IO stream or pulls historical lines over REST. It is meant for plugin development and debugging.
 
 It is available two ways: as the `hblog` command-line bin, and as the importable `HomebridgeLogClient` API.
 

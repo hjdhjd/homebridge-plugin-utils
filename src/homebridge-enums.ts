@@ -5,17 +5,20 @@
 
 /**
  * Mirrors the const enum values every Homebridge plugin needs at value-side runtime, sourced from the "homebridge" module surface: `APIEvent` from homebridge-core's
- * `api.d.ts`, and `Categories` from hap-nodejs's `Accessory.d.ts` and `HAPStatus` from its `HAPServer.d.ts` as "homebridge" re-exports them. `verbatimModuleSyntax`
- * disallows value imports of ambient const enums, so those contracts are re-declared here at value-side. This is the plugin-facing counterpart of the camera-protocol
- * mirrors in `ffmpeg/hap-enums.ts`: every plugin registers for the `api` lifecycle events, any plugin that registers an accessory names its category, and any plugin
- * that reports a device fault to HomeKit names a status code, so centralizing the mirrors gives every consumer a single import path and a single update point.
+ * `api.d.ts`, and `Categories` from hap-nodejs's `Accessory.d.ts`, `HAPStatus` from its `HAPServer.d.ts` and `Perms` from its `Characteristic.d.ts` as "homebridge"
+ * re-exports them. `verbatimModuleSyntax` disallows value imports of ambient const enums, so those contracts are re-declared here at value-side. This is the
+ * plugin-facing counterpart of the camera-protocol mirrors in `ffmpeg/hap-enums.ts`: every plugin registers for the `api` lifecycle events, any plugin that registers
+ * an accessory names its category, any plugin that reports a device fault to HomeKit names a status code, and any plugin that selects an accessory's characteristics
+ * by permission names the flag it selects on, so centralizing the mirrors gives every consumer a single import path and a single update point.
  *
- * Each mirror is annotated with a type derived from the upstream declaration itself, so the compiler enforces lockstep: a member added, removed, or revalued upstream
- * fails the build here until the mirror is updated. The matching type aliases let consumers import the canonical names from one place rather than re-declaring them.
+ * Each mirror is annotated with a type derived from the upstream declaration itself, so the compiler enforces lockstep: a member added or removed upstream fails the
+ * build here until the mirror is updated. A member revalued upstream fails it as well, a numeric mirror's through that derived type and a string mirror's through the
+ * `satisfies` check each of its values passes before it is branded, because the `as` assertion that brands a string as its enum member accepts any string. The
+ * matching type aliases let consumers import the canonical names from one place rather than re-declaring them.
  *
  * @module
  */
-import type { APIEvent as APIEventEnum, Categories as CategoriesEnum, HAPStatus as HAPStatusEnum } from "homebridge";
+import type { APIEvent as APIEventEnum, Categories as CategoriesEnum, HAPStatus as HAPStatusEnum, Perms as PermsEnum } from "homebridge";
 
 /**
  * String mirror of homebridge-core's `APIEvent` const enum, surfaced to plugins for `api.on(...)` lifecycle-event registration: `DID_FINISH_LAUNCHING` fires once
@@ -25,10 +28,11 @@ import type { APIEvent as APIEventEnum, Categories as CategoriesEnum, HAPStatus 
  */
 export const APIEvent: Readonly<typeof APIEventEnum> = {
 
-  // String const enum members are nominal in TypeScript: a raw string literal is not assignable to the enum member type without an explicit brand. The per-property
-  // assertions make the intent visible at each value, and the assertion fails fast if the upstream string ever changes out from under us.
-  DID_FINISH_LAUNCHING: "didFinishLaunching" as APIEventEnum.DID_FINISH_LAUNCHING,
-  SHUTDOWN: "shutdown" as APIEventEnum.SHUTDOWN
+  // String const enum members are nominal in TypeScript: a raw string literal is not assignable to the enum member type without an explicit brand, and that brand, an
+  // `as` assertion, compiles for any string. Each value therefore passes a `satisfies` check against the template-literal type of its upstream member, which resolves
+  // to that member's string, before it is branded...a value that drifts from upstream fails that check and the build with it.
+  DID_FINISH_LAUNCHING: ("didFinishLaunching" satisfies `${APIEventEnum.DID_FINISH_LAUNCHING}`) as APIEventEnum.DID_FINISH_LAUNCHING,
+  SHUTDOWN: ("shutdown" satisfies `${APIEventEnum.SHUTDOWN}`) as APIEventEnum.SHUTDOWN
 };
 
 /**
@@ -87,3 +91,33 @@ export const HAPStatus: Readonly<typeof HAPStatusEnum> = {
  * @category Homebridge
  */
 export type HAPStatus = HAPStatusEnum;
+
+/**
+ * String mirror of HAP's `Perms` const enum: the permission flags a characteristic declares in its `props.perms`, such as whether a controller may read it, write
+ * it, or subscribe to its change notifications. A plugin that refuses writes while a device is unreachable walks an accessory's characteristics by their write
+ * permission, reading `props.perms` against `Perms.PAIRED_WRITE` rather than a bare `"pw"` literal.
+ *
+ * @category Homebridge
+ */
+// The `Readonly<typeof PermsEnum>` annotation derives the required shape from hap-nodejs's own declaration, so a missing member or an extra member is a compile error
+// here. Each value passes a `satisfies` check against its upstream member's string before it is branded, the form `APIEvent` documents, which makes a value that
+// drifts from upstream a compile error too. Upstream declares `EVENTS` with the same string as `NOTIFY`, and it is mirrored exactly as upstream declares it.
+export const Perms: Readonly<typeof PermsEnum> = {
+
+  ADDITIONAL_AUTHORIZATION: ("aa" satisfies `${PermsEnum.ADDITIONAL_AUTHORIZATION}`) as PermsEnum.ADDITIONAL_AUTHORIZATION,
+  EVENTS: ("ev" satisfies `${PermsEnum.EVENTS}`) as PermsEnum.EVENTS,
+  HIDDEN: ("hd" satisfies `${PermsEnum.HIDDEN}`) as PermsEnum.HIDDEN,
+  NOTIFY: ("ev" satisfies `${PermsEnum.NOTIFY}`) as PermsEnum.NOTIFY,
+  PAIRED_READ: ("pr" satisfies `${PermsEnum.PAIRED_READ}`) as PermsEnum.PAIRED_READ,
+  PAIRED_WRITE: ("pw" satisfies `${PermsEnum.PAIRED_WRITE}`) as PermsEnum.PAIRED_WRITE,
+  TIMED_WRITE: ("tw" satisfies `${PermsEnum.TIMED_WRITE}`) as PermsEnum.TIMED_WRITE,
+  WRITE_RESPONSE: ("wr" satisfies `${PermsEnum.WRITE_RESPONSE}`) as PermsEnum.WRITE_RESPONSE
+};
+
+/**
+ * Type alias re-exposing the HAP enum under its canonical name so existing `perms: Perms[]` annotations resolve through the shared module rather than a local
+ * redeclaration in each consumer.
+ *
+ * @category Homebridge
+ */
+export type Perms = PermsEnum;

@@ -223,12 +223,12 @@ class StatusError extends Error {
   }
 }
 
-/* Compile-time shape exercises for the reader type notResponding accepts. These never run - the function is never called, and its leading underscore marks it, with
+/* Compile-time shape exercises for the handler type notResponding accepts. These never run - the function is never called, and its leading underscore marks it, with
  * its bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during
  * `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming plugin. The negative case uses `@ts-expect-error`, which fails
  * the build if the error it expects ever stops occurring.
  */
-const _readerShapeExercises = (): void => {
+const _handlerShapeExercises = (): void => {
 
   const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
 
@@ -242,12 +242,28 @@ const _readerShapeExercises = (): void => {
   type _BooleanIsExact = Assert<Equal<typeof _boolean, () => boolean>>;
 
   // HAP's own get handler may answer null, so a reader that does is accepted here too. Each line exercises the bound from a different end: one reader narrowed to
-  // a single nullable primitive, and one answering the whole HAP value union the bound itself names.
+  // a single nullable primitive, and one answering the whole nullable HAP value union a get handler declares.
   const _nullable = wrap((): number | null => null);
   const _value = wrap((): Nullable<CharacteristicValue> => null);
 
   type _NullableIsExact = Assert<Equal<typeof _nullable, () => number | null>>;
   type _ValueIsExact = Assert<Equal<typeof _value, () => Nullable<CharacteristicValue>>>;
+
+  // A set handler is accepted too, synchronous or asynchronous, and each wraps to exactly its own shape: the value it takes and the answer it gives back.
+  const written: CharacteristicValue[] = [];
+  const _set = wrap((value: CharacteristicValue): void => {
+
+    written.push(value);
+  });
+  const _asyncSet = wrap(async (value: CharacteristicValue): Promise<void> => {
+
+    written.push(value);
+  });
+  const _answeringSet = wrap((value: CharacteristicValue): boolean => value === true);
+
+  type _SetIsExact = Assert<Equal<typeof _set, (value: CharacteristicValue) => void>>;
+  type _AsyncSetIsExact = Assert<Equal<typeof _asyncSet, (value: CharacteristicValue) => Promise<void>>>;
+  type _AnsweringSetIsExact = Assert<Equal<typeof _answeringSet, (value: CharacteristicValue) => boolean>>;
 
   // @ts-expect-error - a symbol is not a CharacteristicValue, so a reader answering one is not a characteristic reader.
   const _symbol = wrap((): symbol => Symbol("not a characteristic value"));
@@ -1508,5 +1524,71 @@ describe("notResponding", () => {
     assert.throws(currentPosition, StatusError);
     assert.throws(positionState, StatusError);
     assert.throws(on, StatusError);
+  });
+
+  test("refuses a write with the injected status error and never runs the set handler while unavailable", () => {
+
+    let writes = 0;
+    const wrap = notResponding({ errorClass: StatusError, unavailable: () => true });
+
+    const write = wrap((_value: boolean): void => {
+
+      writes++;
+    });
+
+    assert.throws(() => write(true), (error: unknown) => {
+
+      assert.ok(error instanceof StatusError, "the refusal is an instance of the injected class, not a plain Error");
+      assert.equal(error.hapStatus, HAPStatus.SERVICE_COMMUNICATION_FAILURE, "a refused write carries the default status, which HAP surfaces as the write's result");
+
+      return true;
+    });
+
+    // The refusal happens before the write, not after it: a set handler that ran would send its command toward a device that cannot be reached, and a refusal
+    // raised afterward could not take that command back.
+    assert.equal(writes, 0, "the wrapped set handler never runs while the device is unavailable");
+  });
+
+  test("passes a write's arguments through unchanged and answers what the set handler answers while available", () => {
+
+    const received: unknown[] = [];
+    const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
+
+    const write = wrap((value: CharacteristicValue, context: object): boolean => {
+
+      received.push(value, context);
+
+      return true;
+    });
+
+    const value = hap.Characteristic.TargetDoorState.CLOSED;
+    const context = { origin: "controller" };
+
+    // HAP owns the judgment of a set handler's answer - it accepts it, warns about it at debug level, or uses it as the write response, depending on the answer and
+    // the characteristic - so the wrapper hands back whatever the handler answers and adds no opinion of its own.
+    assert.equal(write(value, context), true, "an available device answers a write with what its set handler answers");
+    assert.equal(received.length, 2, "the set handler ran once, with the value and the context");
+    assert.equal(received[0], value, "the value reaches the set handler as HAP handed it over");
+    assert.equal(received[1], context, "and the context reaches it as the very same object, in the same position");
+  });
+
+  test("refuses an async set handler with a synchronous throw", async () => {
+
+    let writes = 0;
+    let unavailable = true;
+    const write = notResponding({ errorClass: StatusError, unavailable: () => unavailable })(async (_value: string): Promise<void> => {
+
+      writes++;
+    });
+
+    // The wrapper is not itself async and refuses before it calls, so an async handler's refusal is a synchronous throw rather than a rejected promise, and the
+    // handler never starts the work a rejection would only report after the fact.
+    assert.throws(() => write("Open"), StatusError);
+    assert.equal(writes, 0, "the async set handler never runs while the device is unavailable");
+
+    unavailable = false;
+
+    await assert.doesNotReject(write("Open"), "the async set handler resolves once the device is reachable again");
+    assert.equal(writes, 1, "and it ran exactly once to do so");
   });
 });

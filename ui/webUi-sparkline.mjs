@@ -7,10 +7,11 @@
  * A domain-ignorant trend strip: numbers in, a one-color SVG out.
  *
  * The primitive owns the mechanism and nothing else. It takes a window of numbers, projects it onto a fixed drawing grid, and renders an area, a line, an end dot,
- * and a zero hairline - all in `currentColor`, so the strip wears whatever color the markup around it wears and the two can never disagree. Every policy stays with
- * the consumer: what the numbers mean, where they come from, how often they arrive, what color the surrounding element carries, whether an update slides, and what
- * the accessible label says. The module holds no store and subscribes to nothing; its one dependency is the webUI's shared SVG element builder, which every
- * graphic in the tree draws through.
+ * and a zero hairline, with a cursor hairline and a cursor dot at the sample under the pointer for a consumer that scrubs - all in `currentColor`, so the strip
+ * wears whatever color the markup around it wears and the two can never disagree. Every policy stays with the consumer: what the numbers mean, where they come
+ * from, how often they arrive, what color the surrounding element carries, whether an update slides, what the accessible label says, whether a pointer scrubs the
+ * strip at all, and how a scrubbed sample's readout is worded and where it is shown. The module holds no store and subscribes to nothing beyond its own element;
+ * its one dependency is the webUI's shared SVG element builder, which every graphic in the tree draws through.
  *
  * A consumer composes it into a panel it owns:
  *
@@ -33,10 +34,14 @@ const VIEW_WIDTH = 600;
 const VIEW_HEIGHT = 64;
 const VIEW_BOX = "0 0 " + String(VIEW_WIDTH) + " " + String(VIEW_HEIGHT);
 
+// The plot's left inset. The oldest sample's dot, and the scrub cursor's dot when it rests on that sample, sit at the left edge of the plot, so the plot starts in
+// from the viewBox edge by enough room for the dot and its ring to render whole rather than clipped in half.
+const LEFT_INSET = 8;
+
 // The plot's right inset. The newest sample's dot sits at the right edge of the plot, so the plot stops short of the viewBox edge by enough room for the dot and
 // its ring to render whole rather than clipped in half.
 const RIGHT_INSET = 8;
-const PLOT_WIDTH = VIEW_WIDTH - RIGHT_INSET;
+const PLOT_WIDTH = VIEW_WIDTH - LEFT_INSET - RIGHT_INSET;
 
 // The headroom reserved above the domain's top value, so the highest sample's line cap and dot are not shaved off by the top edge.
 const TOP_PAD = 7;
@@ -46,15 +51,20 @@ const PLOT_HEIGHT = VIEW_HEIGHT - TOP_PAD;
 // strip sits under.
 const AREA_FILL_OPACITY = 0.12;
 
-// The zero hairline's stroke opacity. The hairline is a reference mark, not data, so it renders as a faint tint of the same color the data wears.
+// The zero hairline's stroke opacity, and the stroke width it shares with the scrub cursor's hairline. The zero hairline is a reference mark, not data, so it
+// renders as a faint tint of the same color the data wears.
 const HAIRLINE_OPACITY = 0.4;
 const HAIRLINE_WIDTH = 1;
+
+// The scrub cursor's stroke opacity. Stronger than the zero hairline's, because the cursor marks the sample the reader is pointing at rather than a reference, and
+// still a tint of the data's own color so it never reads as a second data line.
+const CURSOR_OPACITY = 0.6;
 
 // The data line's stroke width. Non-scaling, so the line keeps this weight no matter how far the viewBox is stretched by the consumer's sizing.
 const LINE_WIDTH = 2;
 
-// The end dot's radius and the width of the ring that separates it from the line beneath it. The ring strokes the library's own surface token, falling back to the
-// CSS system canvas color, because its job is to read as a punch-out of the page surface rather than as a color of its own.
+// The radius of the end dot and of the scrub cursor's dot, and the width of the ring that separates each from the line beneath it. The ring strokes the library's
+// own surface token, falling back to the CSS system canvas color, because its job is to read as a punch-out of the page surface rather than as a color of its own.
 const DOT_RADIUS = 4;
 const DOT_RING_COLOR = "var(--fo-surface-bg, Canvas)";
 const DOT_RING_WIDTH = 2;
@@ -87,6 +97,15 @@ const COORDINATE_PRECISION = 2;
  */
 
 /**
+ * The sample under a scrubbing pointer.
+ *
+ * @typedef {Object} SparklineScrubSample
+ * @property {number} index - The sample's position in the normalized window, oldest sample first. A consumer whose window is all finite can index a parallel array
+ *                            of per-sample metadata with it directly.
+ * @property {number} value - The sample's value, in the caller's own units.
+ */
+
+/**
  * The options a strip is constructed with.
  *
  * @typedef {Object} SparklineOptions
@@ -97,6 +116,17 @@ const COORDINATE_PRECISION = 2;
  *                                     maximum and is never clipped. Ignored unless finite. Fixed for the instance's life by design: a consumer whose anchor
  *                                     changes builds a new strip rather than re-anchoring this one, which keeps every repaint free of a whole-scale reset the
  *                                     slide would have to reason about.
+ * @property {(sample: SparklineScrubSample | null) => void} [onScrub] - Wire pointer scrubbing, which a strip carries only when this is a function. A pointer
+ *                                                                       over the strip snaps to the nearest sample, the strip draws a cursor hairline and
+ *                                                                       dot there, and the consumer draws the readout. The callback receives the sample when
+ *                                                                       a pointer moves onto a different one and after every settled repaint under a held
+ *                                                                       pointer, because a repaint can put a different sample at the same index; null when
+ *                                                                       the pointer leaves or the window empties under it; and no sample while a slide is in
+ *                                                                       flight, the last report holding until the slide settles. The mapping reads the
+ *                                                                       element's border box, so the consumer sizes the strip with no padding and no border.
+ *                                                                       A throw from the callback propagates untouched: the strip's own state is final
+ *                                                                       before the call, and the throw reaches the consumer through its own update call or
+ *                                                                       through the browser's reporting of an event listener or timer error.
  * @property {number[]} [points=[]] - The initial window, oldest sample first. Null and non-finite elements are dropped before any geometry is computed.
  */
 
@@ -187,6 +217,27 @@ const domainFor = ({ anchor, points }) => {
 const yFor = ({ domain, value }) => VIEW_HEIGHT - (((value - domain.min) / domain.span) * PLOT_HEIGHT);
 
 /**
+ * The horizontal distance between adjacent samples for a window of a given size. A window that cannot be drawn as a line has no meaningful step.
+ *
+ * @param {number} count - The number of points in the window being drawn.
+ * @returns {number} The step, in viewBox units, or zero for a window of fewer than two points.
+ */
+const stepFor = (count) => (count > 1) ? (PLOT_WIDTH / (count - 1)) : 0;
+
+/**
+ * Place a sample on the strip's horizontal axis. The oldest sample lands on the plot's left edge and each later one a step further right, which at a window's own
+ * step puts the newest on the plot's right edge. A lone sample has no step to space it by, so it sits at the plot's right edge, the position every window's newest
+ * sample occupies. Every mark placed on a sample takes its x from here, so a cursor on the newest sample lands exactly on the end dot.
+ *
+ * @param {Object} options - The placement inputs.
+ * @param {number} options.count - The number of points in the window being drawn.
+ * @param {number} options.index - The sample's position in that window, oldest sample first.
+ * @param {number} options.step - The horizontal distance between adjacent points, in viewBox units.
+ * @returns {number} The x coordinate, in viewBox units.
+ */
+const sampleX = ({ count, index, step }) => (count === 1) ? (VIEW_WIDTH - RIGHT_INSET) : (LEFT_INSET + (index * step));
+
+/**
  * Build the line and area path data for a window.
  *
  * The line is a polyline through every point. The area is that same polyline closed down to the zero line rather than to the strip's bottom edge, so a stretch of
@@ -201,17 +252,19 @@ const yFor = ({ domain, value }) => VIEW_HEIGHT - (((value - domain.min) / domai
 const pathsFor = ({ domain, points, step }) => {
 
   const commands = [];
+  const count = points.length;
 
   for(const [ index, value ] of points.entries()) {
 
-    commands.push(((index === 0) ? "M" : "L") + coordinate(index * step) + "," + coordinate(yFor({ domain, value })));
+    commands.push(((index === 0) ? "M" : "L") + coordinate(sampleX({ count, index, step })) + "," + coordinate(yFor({ domain, value })));
   }
 
   const line = commands.join(" ");
-  const lastX = coordinate((points.length - 1) * step);
+  const firstX = coordinate(sampleX({ count, index: 0, step }));
+  const lastX = coordinate(sampleX({ count, index: count - 1, step }));
   const zeroY = coordinate(yFor({ domain, value: 0 }));
 
-  return { area: line + " L" + lastX + "," + zeroY + " L" + coordinate(0) + "," + zeroY + " Z", line };
+  return { area: line + " L" + lastX + "," + zeroY + " L" + firstX + "," + zeroY + " Z", line };
 };
 
 /**
@@ -251,14 +304,15 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
 /**
  * Build a sparkline trend strip.
  *
- * The returned element is inert markup the consumer places, sizes, and colors: it draws in `currentColor`, so setting a color anywhere up the tree colors the whole
- * strip. Everything after construction happens through {@link Sparkline.update}, which mutates the same element and the same marks in place - no element is ever
- * replaced, so a consumer can hold the reference for the life of its panel.
+ * The returned element is markup the consumer places, sizes, and colors: it draws in `currentColor`, so setting a color anywhere up the tree colors the whole strip.
+ * Built without {@link SparklineOptions.onScrub} it is inert markup that answers no pointer; built with one, it also listens for pointers on itself alone and hands
+ * the sample under one to that callback. Everything else after construction happens through {@link Sparkline.update}, which mutates the same element and the same
+ * marks in place - no element is ever replaced, so a consumer can hold the reference for the life of its panel.
  *
  * @param {SparklineOptions} options - The strip's construction options.
  * @returns {Sparkline} The element and its update function.
  */
-export function createSparkline({ ariaLabel = "", domainAnchor = undefined, points: initialPoints = [] }) {
+export function createSparkline({ ariaLabel = "", domainAnchor = undefined, onScrub = undefined, points: initialPoints = [] }) {
 
   const element = createSvgElement({ attributes: { preserveAspectRatio: "none", role: "img", viewBox: VIEW_BOX }, tag: "svg" });
 
@@ -334,9 +388,6 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
     }
   };
 
-  // The horizontal distance between adjacent samples for a window of a given size. A window that cannot be drawn as a line has no meaningful step.
-  const stepFor = (count) => (count > 1) ? (PLOT_WIDTH / (count - 1)) : 0;
-
   /**
    * Repaint the marks for a window at a given horizontal step.
    *
@@ -367,22 +418,21 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
 
     endDot.setAttribute("visibility", "visible");
 
-    // A lone sample has no line to draw, so the dot carries it alone - at the right edge of the plot, the position every window's newest sample occupies.
+    // A lone sample has no line to draw, so the dot carries it alone.
     if(count === 1) {
 
       areaPath.setAttribute("d", "");
       linePath.setAttribute("d", "");
-      endDot.setAttribute("cx", coordinate(PLOT_WIDTH));
-      endDot.setAttribute("cy", coordinate(yFor({ domain, value: points[0] })));
     } else {
 
       const { area, line } = pathsFor({ domain, points, step });
 
       areaPath.setAttribute("d", area);
       linePath.setAttribute("d", line);
-      endDot.setAttribute("cx", coordinate((count - 1) * step));
-      endDot.setAttribute("cy", coordinate(yFor({ domain, value: points[count - 1] })));
     }
+
+    endDot.setAttribute("cx", coordinate(sampleX({ count, index: count - 1, step })));
+    endDot.setAttribute("cy", coordinate(yFor({ domain, value: points[count - 1] })));
 
     // The hairline marks zero only for a window that actually dips below it. A window that never goes negative has zero sitting at its baseline, where a hairline
     // would just underline the bottom of the strip.
@@ -415,7 +465,153 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
     return true;
   };
 
-  // Land the slide: drop the inline transition and transform the animation ran on, then draw the settled window at its own spacing.
+  /**
+   * Wire pointer scrubbing onto the strip: the cursor marks, the touch rule, the pointer listeners, and the state they share.
+   *
+   * The strip owns the geometry only it knows - which sample is nearest a pointer and where that sample's dot sits - and hands the consumer the one fact the consumer
+   * cannot know, the sample itself, so the readout's wording and placement stay with the consumer. Text never enters the SVG: the viewBox stretches to the
+   * consumer's box with `preserveAspectRatio` set to none, so a glyph drawn inside it would stretch with the strip.
+   *
+   * @returns {(options: { repaint: boolean }) => void} The resolve each settled repaint runs, so a held pointer follows the window as it changes.
+   */
+  const wireScrub = () => {
+
+    // The cursor marks, appended after the sliding group so they draw above the data and stay put while the group translates beneath them.
+    const cursorLine = createSvgElement({
+
+      attributes: {
+
+        "stroke": "currentColor",
+        "stroke-opacity": String(CURSOR_OPACITY),
+        "stroke-width": String(HAIRLINE_WIDTH),
+        "vector-effect": "non-scaling-stroke",
+        "visibility": "hidden",
+        "y1": "0",
+        "y2": String(VIEW_HEIGHT)
+      },
+      tag: "line"
+    });
+
+    const cursorDot = createSvgElement({
+
+      attributes: {
+
+        "fill": "currentColor",
+        "r": String(DOT_RADIUS),
+        "stroke": DOT_RING_COLOR,
+        "stroke-width": String(DOT_RING_WIDTH),
+        "visibility": "hidden"
+      },
+      tag: "circle"
+    });
+
+    element.append(cursorLine, cursorDot);
+
+    // A horizontal drag scrubs while a vertical one still scrolls the page and a pinch still zooms it. The browser decides which gesture a touch is, and a pan or a
+    // zoom it takes over ends the scrub with a pointercancel.
+    element.style.touchAction = "pan-y pinch-zoom";
+
+    // The scrub's whole state: the pointer's last position in viewBox units while it is over the strip, and the sample last handed to the consumer. The position is
+    // what is remembered rather than the index, because a repaint that resizes the window puts a different sample under the same pointer.
+    const scrub = { pointerX: null, reported: null };
+
+    const hideCursor = () => {
+
+      cursorLine.setAttribute("visibility", "hidden");
+      cursorDot.setAttribute("visibility", "hidden");
+    };
+
+    // Resolve the pointer against the settled window, place the marks, and report. Every change to the cursor and every report comes through here, and the
+    // consumer's callback is always the last thing it does, after the state and the marks are final, so a callback that throws leaves the strip consistent.
+    const resolve = ({ repaint }) => {
+
+      // Nothing to point at: no pointer, a strip that is off the page, or an empty window. A sample the consumer is still showing is withdrawn once.
+      if((scrub.pointerX === null) || !element.isConnected || (currentPoints.length === 0)) {
+
+        // A strip off the page has no pointer over it and gets no leave from a browser that removed it, so only then is the position dropped, while an empty
+        // window keeps it so a pointer held over the strip resolves as soon as data arrives.
+        if(!element.isConnected) {
+
+          scrub.pointerX = null;
+        }
+
+        hideCursor();
+
+        if(scrub.reported !== null) {
+
+          scrub.reported = null;
+          onScrub(null);
+        }
+
+        return;
+      }
+
+      // A slide in flight has the data part-way through a translation the cursor does not follow, so the marks step aside and the last report holds until the
+      // settle resolves the pointer against the window it lands.
+      if(pendingSlide) {
+
+        hideCursor();
+
+        return;
+      }
+
+      const count = currentPoints.length;
+      const step = stepFor(count);
+
+      // The nearest sample, clamped so a pointer beyond the plot's left or right edge reads the sample at that edge. Nothing interpolates: the consumer is only ever
+      // handed a value some sample actually carries.
+      const index = (count > 1) ? Math.min(Math.max(Math.round((scrub.pointerX - LEFT_INSET) / step), 0), count - 1) : 0;
+      const value = currentPoints[index];
+      const x = coordinate(sampleX({ count, index, step }));
+
+      cursorLine.setAttribute("x1", x);
+      cursorLine.setAttribute("x2", x);
+      cursorLine.setAttribute("visibility", "visible");
+      cursorDot.setAttribute("cx", x);
+      cursorDot.setAttribute("cy", coordinate(yFor({ domain: domainFor({ anchor: domainAnchor, points: currentPoints }), value })));
+      cursorDot.setAttribute("visibility", "visible");
+
+      // A move reports only when it reaches a different sample. A repaint always reports, because a slid window can put a different sample at the same index with
+      // the same value, and the consumer's readout may carry more than the value.
+      if(!repaint && (scrub.reported?.index === index)) {
+
+        return;
+      }
+
+      scrub.reported = { index, value };
+      onScrub(scrub.reported);
+    };
+
+    // Map a pointer onto the viewBox through the element's border box, read at the event because the consumer's layout can move or resize the strip at any time. A
+    // box with no width has no mapping, so it reads as no pointer at all.
+    const track = (event) => {
+
+      const rect = element.getBoundingClientRect();
+
+      scrub.pointerX = (rect.width > 0) ? (((event.clientX - rect.left) / rect.width) * VIEW_WIDTH) : null;
+      resolve({ repaint: false });
+    };
+
+    const release = () => {
+
+      scrub.pointerX = null;
+      resolve({ repaint: false });
+    };
+
+    // A press resolves like a move, so a touch reads a sample the moment it lands rather than on its first motion.
+    element.addEventListener("pointerdown", track);
+    element.addEventListener("pointermove", track);
+    element.addEventListener("pointercancel", release);
+    element.addEventListener("pointerleave", release);
+
+    return resolve;
+  };
+
+  // The scrub is wired only for a consumer that passed a callback, because a cursor with no readout is a mark with no meaning: a strip built without one carries no
+  // cursor, no listener and no touch rule, and every repaint skips the resolve.
+  const resolveScrub = (typeof onScrub === "function") ? wireScrub() : null;
+
+  // Land the slide: drop the inline transition and transform the animation ran on, then draw the settled window at its own spacing and resolve any held pointer.
   const settleSlide = ({ points, step }) => {
 
     if(!clearPendingSlide()) {
@@ -426,6 +622,7 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
     slideGroup.style.transition = "";
     slideGroup.style.transform = "";
     paint({ points, step });
+    resolveScrub?.({ repaint: true });
   };
 
   /**
@@ -458,6 +655,7 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
     if(!slide || wasSliding || !isOneStepShift({ next: nextPoints, previous: previousPoints }) || prefersReducedMotion()) {
 
       paint({ points: nextPoints, step });
+      resolveScrub?.({ repaint: true });
 
       return;
     }
@@ -495,6 +693,9 @@ export function createSparkline({ ariaLabel = "", domainAnchor = undefined, poin
 
     slideGroup.style.transition = "transform " + String(SLIDE_DURATION_MS) + "ms " + SLIDE_EASING;
     slideGroup.style.transform = "translateX(-" + coordinate(step) + "px)";
+
+    // The slide is armed, so a held pointer resolves against it: the cursor steps aside while the data moves and returns when the settle lands the window.
+    resolveScrub?.({ repaint: true });
   };
 
   applyAriaLabel(ariaLabel);

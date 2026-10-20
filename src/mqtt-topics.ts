@@ -325,16 +325,71 @@ export type MqttAvailabilityPayload = typeof MQTT_AVAILABILITY_OFFLINE | typeof 
  * export const flatTopics = mqttTopicCatalog({ availability: mqttAvailabilityEntry, lock: { label: "lock", publish: "`true` when locked.", topic: "lock" } });
  * ```
  *
+ * A plugin whose availability is about something other than a device, a price feed or a hub, composes the same entry with its own nouns through
+ * {@link mqttAvailabilityEntryFor}, so its document states availability in the family's words without copying the sentence.
+ *
  * @category Utilities
  */
-export const mqttAvailabilityEntry = {
+export const mqttAvailabilityEntry: MqttAvailabilityEntry = mqttAvailabilityEntryFor();
 
-  label: "availability",
-  publish: "`" + MQTT_AVAILABILITY_ONLINE + "` when the plugin can reach the device, `" + MQTT_AVAILABILITY_OFFLINE + "` when it cannot. Retained, so a " +
-    "subscriber attaching later reads the last statement. A device is available only when this topic and the plugin-level `" + MQTT_AVAILABILITY_TOPIC +
-    "` topic both read `" + MQTT_AVAILABILITY_ONLINE + "`.",
-  topic: MQTT_AVAILABILITY_TOPIC
-} as const satisfies MqttTopicEntry;
+/**
+ * The shape {@link mqttAvailabilityEntryFor} returns and {@link mqttAvailabilityEntry} carries: the family's availability tail and label as literals, so a catalog
+ * assembled from either keeps the tail's literal type, with the message text composed for the consumer's subject.
+ */
+export interface MqttAvailabilityEntry {
+
+  readonly label: "availability";
+  readonly publish: string;
+  readonly topic: typeof MQTT_AVAILABILITY_TOPIC;
+}
+
+/**
+ * The nouns {@link mqttAvailabilityEntryFor} composes the availability sentence from.
+ */
+export interface MqttAvailabilityEntryOptions {
+
+  /** What the plugin reaches, as the noun phrase that completes "when the plugin can reach ...": the shipped entry's is "the device". */
+  readonly reaches?: string;
+
+  /** What the sentence declares available, with its article, as the subject that opens "... is available only when": the shipped entry's is "A device". */
+  readonly subject?: string;
+}
+
+/**
+ * Compose the per-device availability entry for a consumer's own subject.
+ *
+ * The family states availability in one sentence, and the library owns that sentence: what changes between plugins is only what the plugin reaches and what it
+ * declares available. A device plugin spreads {@link mqttAvailabilityEntry}, which is this factory at its defaults. A plugin whose availability is about a feed or
+ * a hub names its nouns here and gets the same sentence with them in place, so a rewording of the sentence reaches every plugin's document at its next build
+ * rather than leaving a copied sentence behind.
+ *
+ * @example
+ *
+ * ```ts
+ * import { mqttAvailabilityEntryFor, mqttTopicCatalog } from "homebridge-plugin-utils";
+ *
+ * export const mqttTopics = mqttTopicCatalog({
+ *
+ *   availability: mqttAvailabilityEntryFor({ reaches: "the ComEd price feed", subject: "The price" }),
+ *   price: { label: "Hourly price", publish: "The status JSON, published on every poll.", topic: "price" }
+ * });
+ * ```
+ *
+ * @param options - The consumer's nouns, each defaulting to the device plugin's.
+ * @returns The availability entry, ready to spread into a catalog.
+ * @category Utilities
+ */
+export function mqttAvailabilityEntryFor({ reaches = "the device", subject = "A device" }: MqttAvailabilityEntryOptions = {}): MqttAvailabilityEntry {
+
+  return {
+
+    label: "availability",
+    publish: "`" + MQTT_AVAILABILITY_ONLINE + "` when the plugin can reach " + reaches + ", `" + MQTT_AVAILABILITY_OFFLINE + "` when it cannot. Retained, so a " +
+      "subscriber attaching later reads the last statement. " + subject + " is available only when this topic and the plugin-level `" + MQTT_AVAILABILITY_TOPIC +
+      "` topic both read `" + MQTT_AVAILABILITY_ONLINE + "`.",
+    topic: MQTT_AVAILABILITY_TOPIC
+  } as const satisfies MqttTopicEntry;
+}
 
 /**
  * The placeholder names a topic carries, in order of appearance, and an empty list for a plain tail. A name repeated in the topic is listed once per appearance.

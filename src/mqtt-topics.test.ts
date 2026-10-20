@@ -9,7 +9,7 @@
  * typed `string`, which is the widened form a plugin reaches by declaring its catalog through plain constants.
  */
 import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC, MQTT_DEVICE_COLUMN, MQTT_GET_SUFFIX, MQTT_SET_SUFFIX,
-  assertResolvedMqttTopic, mqttAvailabilityEntry, mqttGetTopic, mqttSetTopic, mqttTopic, mqttTopicCatalog, mqttTopicPlaceholders,
+  assertResolvedMqttTopic, mqttAvailabilityEntry, mqttAvailabilityEntryFor, mqttGetTopic, mqttSetTopic, mqttTopic, mqttTopicCatalog, mqttTopicPlaceholders,
   resolveMqttTopic } from "./mqtt-topics.ts";
 import { describe, test } from "node:test";
 import type { MqttAvailabilityPayload } from "./mqtt-topics.ts";
@@ -146,9 +146,14 @@ const _catalogShapeExercises = (): void => {
   const _availabilityGroupedKept: typeof MQTT_AVAILABILITY_TOPIC = _availabilityGrouped.availability.topic;
   const _availabilityNoColumnKept: typeof MQTT_AVAILABILITY_TOPIC = _availabilityNoColumn.availability.topic;
 
-  // The shipped entry carries its own `as const`, so the tail keeps its literal type wherever a consumer assembles it from.
+  // The shipped entry carries its tail as a literal, so the tail keeps its literal type wherever a consumer assembles it from, and the factory's entries keep it
+  // the same way, because both share one declared shape.
   const fromShippedEntry = mqttTopicCatalog({ availability: mqttAvailabilityEntry, lock: { label: "lock", publish: "The lock state.", topic: "lock" } });
   const _shippedKept: typeof MQTT_AVAILABILITY_TOPIC = fromShippedEntry.availability.topic;
+
+  const fromFactory = mqttTopicCatalog({ availability: mqttAvailabilityEntryFor({ reaches: "the feed", subject: "The price" }),
+    lock: { label: "lock", publish: "The lock state.", topic: "lock" } });
+  const _factoryKept: typeof MQTT_AVAILABILITY_TOPIC = fromFactory.availability.topic;
 
   // The same entry hand-authored without `as const` widens every tail to `string`, which is what silences the guard.
   const plainAvailabilityGroup = { availability: { label: "availability", publish: "The availability statement.", topic: "availability" } };
@@ -229,6 +234,24 @@ describe("the availability vocabulary and the shipped entry", () => {
       "a spread into a column-bearing catalog must carry every declared field through, alongside the device list the column requires");
     assert.deepEqual(noColumn.availability, mqttAvailabilityEntry,
       "the entry named as-is in a catalog declaring no column must carry every declared field through unchanged");
+  });
+
+  test("composes the same entry for a consumer's own subject, the shipped entry being the factory at its defaults", () => {
+
+    // The shipped entry is the factory's default output and nothing else, so a rewording of the sentence can never leave the two apart.
+    assert.deepEqual(mqttAvailabilityEntryFor(), mqttAvailabilityEntry, "the shipped entry is the factory at its defaults");
+
+    const feed = mqttAvailabilityEntryFor({ reaches: "the ComEd price feed", subject: "The price" });
+
+    // The consumer's nouns land where the device plugin's nouns sat, and nothing else moves: the label, the tail, the payload words and the retained clause read
+    // exactly as the shipped entry's.
+    assert.equal(feed.label, mqttAvailabilityEntry.label, "the label is the family's, whatever the subject");
+    assert.equal(feed.topic, mqttAvailabilityEntry.topic, "the tail is the family's, whatever the subject");
+    assert.ok(feed.publish.includes("when the plugin can reach the ComEd price feed,"), "the reach phrase completes the reachability clause, observed: " + feed.publish);
+    assert.ok(feed.publish.includes("The price is available only when this topic"), "the subject opens the availability clause, observed: " + feed.publish);
+    assert.ok(!feed.publish.includes("the device") && !feed.publish.includes("A device"), "no device noun survives a consumer's own subject");
+    assert.equal(feed.publish.replace("the ComEd price feed", "the device").replace("The price", "A device"), mqttAvailabilityEntry.publish,
+      "the sentence around the nouns is the shipped entry's own, word for word");
   });
 });
 

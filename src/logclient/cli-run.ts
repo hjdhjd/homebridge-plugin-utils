@@ -587,8 +587,10 @@ function formatRecord(record: LogRecord, json: boolean, color: boolean): string 
  * `HBLOG_CONFIG`), maps the result into a {@link LogClientCredentials} and a {@link TailRequest}, builds a {@link HomebridgeLogClient}, runs the selected channel,
  * applies the {@link createLogFilter} criteria, and writes log data to stdout (NDJSON for `--json`, raw/stripped lines otherwise) while routing diagnostics and warnings
  * to stderr. A SIGINT/SIGTERM aborts the run cleanly (exit 0); a broken pipe (`EPIPE`) on stdout also ends cleanly (exit 0); a usage error returns 2; a connection or
- * authentication failure returns 1. Token redaction is applied at the hard-error stderr writes (the setup failure, a captured stdout write error on either the
- * normal-completion or the catch path, and the streaming catch's generic error); the usage and advisory writes never carry a token.
+ * authentication failure returns 1. A failure after records have arrived is followed by a notice that the output is incomplete, naming the latest timestamp received,
+ * so a capture that ends on a whole record is never mistaken for a finished one. Token redaction is applied at the hard-error stderr writes (the setup failure, a
+ * captured stdout write error whether the run completed or unwound into the catch, and the streaming catch's generic error); the usage, advisory and incomplete-output
+ * writes never carry a token.
  *
  * @param options - The injected argument vector, environment, streams, home directory, and dependencies. See {@link RunHblogOptions}.
  *
@@ -724,8 +726,8 @@ interface StreamRecordsState {
 }
 
 // Build the client, run the selected channel, and stream filtered records to stdout. Owns the signal wiring (SIGINT/SIGTERM abort the run cleanly), the EPIPE trap (a
-// closed downstream pipe ends the run cleanly), and the level-without-color advisory. Returns the exit code: 0 on a clean end (stream exhausted, clean signal, or EPIPE),
-// 1 on a connection/auth failure.
+// closed downstream pipe ends the run cleanly), the level-without-color advisory, and the notice a failure prints once records have arrived. Returns the exit code: 0 on
+// a clean end (stream exhausted, clean signal, or EPIPE), 1 on a connection/auth failure.
 async function streamRecords(state: StreamRecordsState): Promise<number> {
 
   const { color, connection, credentials, filter, flags, levelFilterActive, options, request } = state;
@@ -806,6 +808,11 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
   // bypass the level dimension thereafter, so the user still sees output. A colored log never trips this - levels apply normally and no warning fires.
   let colorStripped = false;
 
+  // How far the log reached, for the notice a failure prints: whether any record arrived, and the latest timestamp a record carried. They are read before the content
+  // filter, because the notice states where the received log ends, and that is what tells a reader what a filtered capture may be missing.
+  let received = false;
+  let lastTimestamp: Nullable<string> = null;
+
   try {
 
     // The non-level predicate (plugin/grep only) for the level-without-color bypass, compiled once. While a level filter is active and no level has appeared, a strict
@@ -830,6 +837,9 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
     // Stream the selected channel's records directly. Time-bounded selection lives in the engine's `window` channel (it alone holds the merged seed/download instant the
     // coverage gate and the snapshot horizon need); the CLI owns only the content filtering below.
     for await (const record of stream) {
+
+      received = true;
+      lastTimestamp = record.timestamp ?? lastTimestamp;
 
       // A formatted log line (one with a plugin prefix) that parses to a null level is the unambiguous signal that the server's log is color-stripped - a colored line
       // always resolves to "info" or a severity, never null. Conclude levels are unavailable on first sight, warn once, then bypass the level dimension.
@@ -893,6 +903,13 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
     }
 
     stderr.write(redactToken("Error: " + formatErrorMessage(error) + ".", token) + "\n");
+
+    // A failure after records arrived leaves output that reads as finished, because the last line written is a whole record, so say plainly that it is not and how far
+    // the log reached. A failure before any record arrived wrote nothing, and the error alone says so.
+    if(received) {
+
+      stderr.write("The output is incomplete" + ((lastTimestamp === null) ? "" : " - the last log entry received is from " + lastTimestamp) + ".\n");
+    }
 
     return EXIT.failure;
   } finally {

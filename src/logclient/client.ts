@@ -12,8 +12,8 @@
  *
  * - {@link HomebridgeLogClient.history} - a one-shot REST whole-file download parsed into records, optionally trimmed to the most recent N lines.
  * - {@link HomebridgeLogClient.follow} - a live socket tail: the server's ~500-line seed followed by genuinely new lines, streamed indefinitely.
- * - {@link HomebridgeLogClient.tail} - a {@link TailRequest}-driven dispatcher that selects `history`, `follow`, the socket-first `follow-history` join, or the
- *   hedged-seed time-bounded `window` channel.
+ * - {@link HomebridgeLogClient.tail} - a {@link TailRequest}-driven dispatcher over the channels above and the hedged-seed ones: the most recent lines (`history` and
+ *   `follow-history`, served from the socket's seed whenever it holds them) and the time-bounded `window`.
  *
  * The following design points matter:
  *
@@ -59,9 +59,10 @@ export interface LogStream extends AsyncIterable<LogRecord>, AsyncDisposable {}
 /**
  * Construction-time options for {@link HomebridgeLogClient}.
  *
- * @property clock         - Optional time source for the window channel's deadlines and for every socket this client creates. Defaults to {@link systemClock}, whose
- *                           members ARE the platform primitives, so the default path is behavior-neutral. A test injects a `TestClock` seeded at the horizon it wants
- *                           and drives the whole channel - the settle floor, the quiescence terminator, the hard cap, and the gate deadline - by advancing it.
+ * @property clock         - Optional time source for the seed-served channels' deadlines, the download's stall bound, and every socket this client creates. Defaults to
+ *                           {@link systemClock}, whose members ARE the platform primitives, so the default path is behavior-neutral. A test injects a `TestClock` seeded
+ *                           at the horizon it wants and drives the whole channel - the settle floor, the quiescence terminator, the hard cap, and the gate deadline -
+ *                           by advancing it.
  * @property credentials   - The credentials used to authenticate. See {@link LogClientCredentials}.
  * @property fetch         - Optional `fetch` implementation for the auth and REST transports. Defaults to the global `fetch`. Injected so the client is testable without
  *                           a live server.
@@ -88,10 +89,41 @@ export interface HomebridgeLogClientOptions {
   readonly tls?: boolean;
 }
 
-// The tagged, non-rejecting outcome of the windowed channel's speculative download, observed by the gate's race. The download promise's own rejection is neutralized
+// The tagged, non-rejecting outcome of a seed-served channel's speculative download, observed by the gate's race. The download promise's own rejection is neutralized
 // separately; this derived tag turns "the download finished" into a value the race can win on without either arm ever rejecting: `done` carries the completed records'
 // availability (the gate then uses the download), `failed` latches the error so the gate can drop the settled arm and fall to a seed-only phase.
-type WindowDownloadOutcome = { readonly kind: "done" } | { readonly error: unknown; readonly kind: "failed" };
+type HedgeOutcome = { readonly kind: "done" } | { readonly error: unknown; readonly kind: "failed" };
+
+// A seed-served channel's verdict on one line of the socket's stream: the stream `covers` the request, `cannot` cover it, or stays `undecided` until a later line.
+type SeedVerdict = "cannot" | "covers" | "undecided";
+
+// The speculative whole-file download a seed-served channel runs beside its socket: the controller that cancels only the download, the collected records, and the
+// outcome tag a gate races on.
+interface Hedge {
+
+  readonly controller: AbortController;
+  readonly download: Promise<LogRecord[]>;
+  readonly outcome: Promise<HedgeOutcome>;
+}
+
+// What the hedged seed gate works over: the buffer it fills oldest-first, the verdict it asks of each line (`null` when coverage is ruled out from the start), the
+// channel's hedge, the snapshot horizon its seed-only phase is bounded from, and the channel's single live iterator.
+interface HedgedSeedGate {
+
+  readonly buffered: LogRecord[];
+  readonly decide: Nullable<(record: LogRecord) => SeedVerdict>;
+  readonly hedge: Hedge;
+  readonly horizonNow: number;
+  readonly liveIterator: AsyncIterator<string>;
+}
+
+// Where the hedged seed gate leaves its channel: the source that serves, whether the socket ended during the gate, and the pull outstanding when the gate decided.
+interface HedgedSeedGateResult {
+
+  readonly liveDone: boolean;
+  readonly pendingNext: Promise<IteratorResult<string>>;
+  readonly served: "download" | "seed";
+}
 
 // The shape of the `window` arm of {@link TailRequest}, narrowed once at the `tail()` dispatch and threaded through the windowed channel. `since` is the inclusive lower
 // bound (`null` for an unbounded-below `--until`-only window); `until` is the user's explicit upper bound (`null` for a bare `--since`, which the engine fills with the
@@ -136,7 +168,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
   readonly #controller: AbortController;
 
   // The client's time source, RESOLVED here rather than passed on unresolved as a pure composer would. This class is not a pure composer: it reads `now()` and arms
-  // the window channel's own timers itself, so it needs a definite clock, and the sockets it builds inherit that same one.
+  // the seed-served channels' own timers itself, so it needs a definite clock, and the sockets and downloads it starts inherit that same one.
   readonly #clock: Clock;
 
   readonly #credentials: LogClientCredentials;
@@ -219,7 +251,8 @@ export class HomebridgeLogClient implements AsyncDisposable {
    *
    * Streams `GET .../log/download` through the parser and yields each parsed {@link LogRecord}. When `quantity` is a number, only the most recent N records are retained
    * (via {@link takeLast}, a bounded ring so a multi-MB log is never fully materialized); when it is `"all"` (the default), every record passes through. This is the
-   * deep-history channel paid only when the caller explicitly wants history beyond the socket's ~500-line seed.
+   * deep-history channel paid only when the caller explicitly wants history beyond the socket's ~500-line seed. A caller after the most recent lines asks
+   * {@link HomebridgeLogClient.tail} for a `history` count instead, which serves them from the socket's seed whenever the seed holds them.
    *
    * @param options          - Optional per-call options.
    * @param options.quantity - How many of the most recent records to retain. Defaults to `"all"`.
@@ -260,12 +293,15 @@ export class HomebridgeLogClient implements AsyncDisposable {
   /**
    * Deliver log content over the channel selected by the {@link TailRequest} discriminated union.
    *
-   * - `history` - delegates to {@link HomebridgeLogClient.history} with the request's quantity.
+   * - `history` - the most recent `quantity` lines, one-shot. A count is served by the hedged seed: the socket connects and buffers its stream while a parallel
+   *   abortable whole-file download runs, and once the stream holds the count the download is aborted and the last `quantity` lines of the opening burst are served;
+   *   a count the stream falls short of is served by the download, trimmed to the quantity. `"all"` delegates to {@link HomebridgeLogClient.history}.
    * - `follow` - delegates to {@link HomebridgeLogClient.follow}.
-   * - `follow-history` - the socket-first join: the socket connects and buffers its seed plus any live lines that arrive during the REST download into an ordered list,
-   *   then the REST history is downloaded and trimmed to the request's quantity, then the two are joined by {@link stitchLive} so the boundary overlap is removed without
-   *   dropping a distinct live line, and finally the live stream continues. Connecting the socket first is what guarantees no live line produced during the download is
-   *   lost.
+   * - `follow-history` - the most recent `quantity` lines, then the live stream. A count the socket's stream holds is served from it exactly as for `history`, and
+   *   the live stream continues from the same iterator. Otherwise it is the socket-first join: the socket buffers its seed plus any live lines that arrive during the
+   *   REST download into an ordered list, the download is trimmed to the request's quantity, the two are joined by {@link stitchLive} so the boundary overlap is
+   *   removed without dropping a distinct live line, and the live stream continues. Connecting the socket first is what guarantees no live line produced during the
+   *   download is lost.
    * - `window` - the hedged-seed time-bounded channel: the socket connects and buffers its seed while a parallel abortable whole-file download runs, a strict-coverage
    *   gate decides whether the seed covers `[since, until]` (serve from the seed and abort the download) or not (fall back to the download, stitched with the seed),
    *   and the merged output is time-window-filtered. A one-shot window terminates when its content has been served; a `follow` window continues live.
@@ -289,13 +325,24 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
         return this.#stream(options.signal, async function *(this: HomebridgeLogClient, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
 
-          yield* this.#followHistory(request.quantity, callSignal);
+          yield* this.#recent(request.quantity, true, callSignal);
         });
       }
 
       case "history": {
 
-        return this.history({ quantity: request.quantity, signal: options.signal });
+        // All of history is the download alone, so it opens no socket; a count goes through the hedged seed.
+        if(request.quantity === "all") {
+
+          return this.history({ quantity: "all", signal: options.signal });
+        }
+
+        const quantity = request.quantity;
+
+        return this.#stream(options.signal, async function *(this: HomebridgeLogClient, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
+
+          yield* this.#recent(quantity, false, callSignal);
+        });
       }
 
       case "window": {
@@ -395,96 +442,132 @@ export class HomebridgeLogClient implements AsyncDisposable {
     }
   }
 
-  // Follow-history channel implementation - the socket-first join. The socket connects first (so no live line produced during the REST download is lost) and its seed
-  // plus any live lines that arrive during the download are buffered into an ordered list; the REST history is downloaded and trimmed to `quantity`; the two are
-  // joined by `stitchLive` (minimal overlap, so no distinct live line is dropped); the stitched result is yielded; then the live stream continues. A single in-flight
-  // live pull is carried across the stitch boundary so a line that was requested-but-not-yet-arrived when the download finished becomes the first live-continuation
-  // line rather than being lost or double-counted.
-  async *#followHistory(quantity: LogQuantity, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
+  // Most-recent-lines channel implementation, one-shot or followed: every `history` count and every `follow-history` request. The socket connects first, so no live
+  // line produced during a download is lost, and its stream - the seed, then live lines - is buffered through the hedged seed gate while a speculative download runs.
+  // The stream is a contiguous tail of the log that only grows, so a count is covered the moment the stream holds that many lines: the download is aborted, the
+  // channel waits for the opening burst to end so the lines it keeps are the most recent, and it serves the last `quantity` of them. A count the stream falls short
+  // of, and every request for all of history, is served by the download instead - alone for a one-shot, exactly as the REST channel serves it, or joined to the
+  // buffered stream by `stitchLive` for a follow. A followed request then continues live from the same iterator, the pull outstanding at the switch carried across it
+  // so no line is lost or double-counted.
+  async *#recent(quantity: LogQuantity, follow: boolean, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
 
+    const horizonNow = this.#clock.now();
     const socket = this.#createSocket(callSignal);
 
     try {
 
-      // The single live iterator. The class is single-consumer, so exactly one iterator is pulled - here and, after the stitch, for the live continuation. We hold the
-      // in-flight `next()` promise across the buffering loop so the pull that is outstanding when history finishes is not discarded. The gate wrapper drops the seed's
-      // leading fragment/preamble so the stitch aligns clean seed lines against the clean REST history.
+      // The single live iterator: the socket is single-consumer, so exactly one iterator is pulled - through the gate and, on a follow, for the live continuation.
       const liveIterator = this.#gatedStdout(socket)[Symbol.asyncIterator]();
+      const buffered: LogRecord[] = [];
 
-      // Start the REST history download in parallel with buffering the socket's seed-plus-live. Trimming to `quantity` happens inside so the resolved value is already
-      // the history tail to stitch against. The promise is observed below; until then it runs concurrently with the buffering race.
-      const historyPromise = this.#collectHistory(quantity, callSignal);
+      // A count is covered once this line brings the stream to `quantity`. The recent seed can never cover all of history, so that request has coverage ruled out.
+      const decide = (quantity === "all") ? null : (): SeedVerdict => (((buffered.length + 1) >= quantity) ? "covers" : "undecided");
 
-      // Buffer the socket's seed plus any live lines that arrive while history downloads, into an ordered list. We race the outstanding live pull against the history
-      // download: each time the live pull resolves first, we record the line and issue the next pull; when the download resolves first, we stop buffering and carry the
-      // still-outstanding live pull forward as the first continuation pull.
-      const bufferedLive: LogRecord[] = [];
-      let pendingNext = liveIterator.next();
-      let liveDone = false;
-      const historyMarker = historyPromise.then((): "history" => "history");
+      // A count the stream fell short of rests on the download alone, so a failed download is reported with how many of the most recent lines the stream did hold -
+      // the count a caller can still ask for without the download. An abort is the caller's own ending, a request for everything has no smaller count to offer, and a
+      // stream that held nothing offers no count at all, so each of those surfaces the download's error untouched.
+      const shortfall = (error: unknown): unknown => {
 
-      for(;;) {
+        if(callSignal.aborted || (quantity === "all") || (buffered.length === 0)) {
 
-        // eslint-disable-next-line no-await-in-loop
-        const winner = await Promise.race([ pendingNext.then((): "live" => "live"), historyMarker ]);
-
-        if(winner === "history") {
-
-          // History finished first. Stop buffering; `pendingNext` may still be outstanding and is carried into the continuation phase below.
-          break;
+          return error;
         }
 
-        // eslint-disable-next-line no-await-in-loop
-        const result = await pendingNext;
+        return new Error("Only the most recent " + buffered.length.toString() + ((buffered.length === 1) ? " line is" : " lines are") +
+          " available from the live stream, and the whole-file download that would serve more failed", { cause: error });
+      };
 
-        if(result.done) {
+      const hedge = this.#startHedge(quantity, callSignal);
+      let gate: HedgedSeedGateResult;
 
-          // The socket ended before history finished (an abort or a terminal failure). There is no more live to buffer or continue.
-          liveDone = true;
+      try {
 
-          break;
-        }
+        gate = await this.#hedgedSeedGate({ buffered, decide, hedge, horizonNow, liveIterator });
+      } catch(error: unknown) {
 
-        // Buffer the resolved live line (oldest-first) and carry the freshly-issued pull forward. This is the small primitive the windowed gate shares with this loop.
-        pendingNext = this.#bufferLine(bufferedLive, result.value, liveIterator);
+        throw shortfall(error);
       }
 
-      // Join history and the buffered live at their minimal overlap, then yield the stitched result. `stitchLive` never drops a distinct live line; it may emit a bounded
-      // run of duplicates or a visible gap marker when no overlap is found.
-      const history = await historyPromise;
+      let { liveDone, pendingNext } = gate;
 
-      for(const record of stitchLive(history, bufferedLive)) {
+      if(gate.served === "seed") {
 
-        yield record;
-      }
+        // The seed covers the count, but the lines to keep are the most recent once the opening burst has ended, so keep buffering - every line re-arms the burst
+        // watch - until it says the burst is over.
+        const burstEnded: PromiseWithResolvers<"ended"> = Promise.withResolvers();
 
-      // Live continuation. First drain the pull that was outstanding when history finished (so the in-flight line is not lost), then continue pulling the live stream
-      // until it ends or the call is torn down.
-      if(!liveDone) {
+        {
 
-        const result = await pendingNext;
-
-        if(!result.done) {
-
-          yield parseLogLine(result.value);
+          using burst = this.#watchSeedBurst(horizonNow, callSignal, (): void => burstEnded.resolve("ended"));
 
           for(;;) {
 
             // eslint-disable-next-line no-await-in-loop
-            const next = await liveIterator.next();
+            const winner = await Promise.race([ pendingNext.then((): "live" => "live"), burstEnded.promise ]);
 
-            if(next.done) {
+            if(winner === "ended") {
 
               break;
             }
 
-            yield parseLogLine(next.value);
+            // eslint-disable-next-line no-await-in-loop
+            const result = await pendingNext;
+
+            if(result.done) {
+
+              liveDone = true;
+
+              break;
+            }
+
+            burst.arm();
+            pendingNext = this.#bufferLine(buffered, parseLogLine(result.value), liveIterator);
           }
+        }
+
+        // Serve the most recent `quantity` lines of the buffer. Only a count reaches this branch, since nothing covers a request for all of history.
+        yield* (quantity === "all") ? buffered : buffered.slice(Math.max(0, buffered.length - quantity));
+      } else {
+
+        let history: LogRecord[];
+
+        try {
+
+          history = await hedge.download;
+        } catch(error: unknown) {
+
+          throw shortfall(error);
+        }
+
+        // A one-shot is the download's most recent lines alone, exactly as the REST channel serves them; a follow joins them to the buffered stream at their overlap,
+        // which never drops a distinct live line and may emit a bounded run of duplicates or a visible gap marker when no overlap is found.
+        if(!follow) {
+
+          yield* history;
+
+          return;
+        }
+
+        yield* stitchLive(history, buffered);
+      }
+
+      // The live continuation of a followed request: drain the pull outstanding at the switch first, so the in-flight line is not lost, then continue until the socket
+      // ends or the call is torn down.
+      if(follow && !liveDone) {
+
+        let result = await pendingNext;
+
+        while(!result.done) {
+
+          yield parseLogLine(result.value);
+
+          // eslint-disable-next-line no-await-in-loop
+          result = await liveIterator.next();
         }
       }
     } finally {
 
-      // Dispose the per-call socket on every exit path, exactly as the simple follow channel does.
+      // Dispose the per-call socket on every exit path, as every socket-sourced channel does.
       await socket[Symbol.asyncDispose]();
     }
   }
@@ -512,247 +595,205 @@ export class HomebridgeLogClient implements AsyncDisposable {
     }
   }
 
-  // The raw (pre-time-window) record stream for the windowed channel: the hedge setup, the bounded multi-phase coverage gate, the seed-vs-download branch, and the
-  // clock-driven one-shot terminator. Separate from `#window` so the gate's exit semantics - which diverge from `#followHistory` and ARE the channel's essence - read as
-  // their own dedicated race loops rather than being forced behind a shared callback; only the small buffer-and-carry primitive (`#bufferLine`), the download collector
-  // (`#collectHistory`), and the `Watchdog` are reused. `socket` is owned by `#window`; this method owns the download child controller and the terminator timers.
+  // The raw (pre-time-window) record stream for the windowed channel: the window's coverage verdict handed to the hedged seed gate, then the seed-served or
+  // download-served branch, with the burst watch as a one-shot's terminator. `socket` is owned by `#window`.
   async *#windowRecords(request: WindowRequest, horizonNow: number, socket: LogSocketLike, callSignal: AbortSignal): AsyncGenerator<LogRecord> {
 
     const { follow, since } = request;
 
     // The single live iterator. The socket is single-consumer, so exactly one iterator is pulled - here through the coverage gate and, on the seed-served path, for the
-    // live continuation. One in-flight `next()` is carried across the coverage gate so the pull outstanding when it decides is never discarded. The seed gate wrapper
-    // drops the seed's leading fragment/preamble upstream, so the first line this channel sees is a genuine entry and the coverage decision reads a real timestamp; the
-    // channel's own leading-orphan handling below remains as defense in depth and never assumes the gate ran.
+    // live continuation. The seed gate wrapper drops the seed's leading fragment/preamble upstream, so the first line this channel sees is a genuine entry and the
+    // coverage verdict reads a real timestamp; the verdict's own leading-orphan handling remains as defense in depth and never assumes the gate ran.
     const liveIterator = this.#gatedStdout(socket)[Symbol.asyncIterator]();
-
-    // A dedicated child controller composed under the call signal, so aborting it cancels ONLY the speculative download (reason `"replaced"`) and never the socket or the
-    // call - the socket must survive a seed-covers abort to keep serving the window.
-    const downloadController = new AbortController();
-    const downloadSignal = composeSignals(callSignal, downloadController.signal);
-
-    // Start the speculative whole-file download in parallel with buffering the seed. It is reused verbatim from the history path (`#collectHistory("all", ...)`), made
-    // abortable because `#collectHistory` forwards the download child controller's signal to `downloadLog`. Every observer attaches AT CREATION so none floats on any
-    // exit: the base `.catch` absorbs the rejection that arrives on a seed-covers abort or a genuine failure, and the derived `downloadTag` turns completion into a
-    // non-rejecting value the gate's race can win on.
-    const downloadPromise = this.#collectHistory("all", downloadSignal);
-
-    downloadPromise.catch((): void => {
-
-      // Observed via `downloadTag`; on a seed-covers abort the rejection is expected and intentionally discarded.
-    });
-
-    const downloadTag: Promise<WindowDownloadOutcome> = downloadPromise.then((): WindowDownloadOutcome => ({ kind: "done" }),
-      (error: unknown): WindowDownloadOutcome => ({ error, kind: "failed" }));
-
-    // The seed buffered (oldest-first) while the gate decides. `liveDone` records the socket ending before the gate could leave the buffering loop.
     const bufferedSeed: LogRecord[] = [];
-    let pendingNext = liveIterator.next();
-    let liveDone = false;
 
-    // The terminator state for a seed-served one-shot (armed only there). Held here so the finally disposes both timers on every exit path - no timer outlives the
-    // channel.
-    let watchdog: Watchdog | undefined;
-    let capTimer: Disposable | undefined;
+    // The first parseable-timestamp seed line decides whether the seed strictly covers `[since, until]`. An unbounded-below window (a bare `--until`) can never be
+    // covered by the recent ~500-line seed, so its coverage is ruled out up front and seed timestamps are never inspected.
+    const decide = (since === null) ? null : (record: LogRecord): SeedVerdict => {
 
-    try {
+      const seedOldest = (record.timestamp !== null) ? parseLogTimestamp(record.timestamp) : null;
 
-      // The gate, fused with the seed-plus-live buffering. A single loop buffers the seed (oldest-first) like `#followHistory`, while watching for the coverage
-      // decision: the first parseable-timestamp seed line decides whether the seed strictly covers `[since, until]`. If it covers, short-circuit to the seed branch
-      // and abort the download; if it does NOT (a deep window), keep buffering the FULL seed so the no-cover stitch has a real overlap region to align against - a
-      // single-line buffer would manufacture a spurious gap marker. The bounded Phase 2 handles a download that FAILS before coverage is decided (the seed may still
-      // cover); a failure once a deep / unbounded-below window is established surfaces the actionable error, because then neither source can serve.
-      let decision: "no-cover" | "seed-covers" = "no-cover";
+      // Skip a leading null-epoch orphan (a continuation line, or an unrecognized-locale head); only a parseable timestamp decides coverage.
+      if(seedOldest === null) {
 
-      // An unbounded-below window (a bare `--until`) can never be covered by the recent ~500-line seed, so coverage is settled (no-cover) up front and seed timestamps
-      // are never inspected; otherwise the first parseable-timestamp seed line decides.
-      let coverageDecided = since === null;
+        return "undecided";
+      }
 
-      for(;;) {
+      // STRICT `<`: the seed is count-bounded and timestamps are whole-second, so an equal-boundary second could have older same-second lines truncated out of the
+      // seed; strict `<` guarantees nothing in-window was truncated, and an exact boundary falls back to the download.
+      return (seedOldest < since) ? "covers" : "cannot";
+    };
+
+    const hedge = this.#startHedge("all", callSignal);
+    const gate = await this.#hedgedSeedGate({ buffered: bufferedSeed, decide, hedge, horizonNow, liveIterator });
+
+    if(gate.served === "seed") {
+
+      // Seed-covered: serve the window from the socket - the buffered seed, then continue live from the SAME iterator. CONCATENATE; never `stitchLive` (there is a
+      // single source with no overlap, so a stitch would manufacture a spurious gap). A one-shot arms the burst watch as its terminator, ending the channel by
+      // aborting the socket so the live pull resolves `done`; a `follow` window arms none and runs until the socket ends or the call is torn down.
+      using terminator = follow ? undefined : this.#watchSeedBurst(horizonNow, callSignal, (): void => socket.abort(new HbpuAbortError("timeout")));
+
+      for(const record of bufferedSeed) {
+
+        // Re-arm the terminator on every source line.
+        terminator?.arm();
+
+        yield record;
+      }
+
+      if(!gate.liveDone) {
+
+        // Drain the carried pull first, so the in-flight line is not lost, then continue the live stream.
+        let result = await gate.pendingNext;
+
+        while(!result.done) {
+
+          terminator?.arm();
+
+          yield parseLogLine(result.value);
+
+          // eslint-disable-next-line no-await-in-loop
+          result = await liveIterator.next();
+        }
+      }
+
+      return;
+    }
+
+    // No-cover fallback: the seed cannot cover the window (or unbounded-below, or the download already completed). Await the download - if it errored, its actionable
+    // message surfaces here - then join it with the buffered seed at their overlap and serve. `stitchLive` never drops a distinct live line.
+    const history = await hedge.download;
+
+    for(const record of stitchLive(history, bufferedSeed)) {
+
+      yield record;
+    }
+
+    // A `follow` window continues live from the iterator; a one-shot ends here - the finite download already carries `[since, ~now]`, so the generator ends naturally
+    // once the stitched records are served, and there is no live tail for a clock-driven terminator to bound.
+    if(follow && !gate.liveDone) {
+
+      let result = await gate.pendingNext;
+
+      while(!result.done) {
+
+        yield parseLogLine(result.value);
 
         // eslint-disable-next-line no-await-in-loop
-        const winner = await Promise.race([ pendingNext.then((): "live" => "live"), downloadTag ]);
+        result = await liveIterator.next();
+      }
+    }
+  }
 
-        if(winner !== "live") {
+  // Start a seed-served channel's speculative download: the REST history collected under a child controller composed with the call signal, so aborting the controller
+  // cancels ONLY the download (reason `"replaced"`) and never the socket or the call - the socket must survive a seed-covers abort to keep serving. Every observer
+  // attaches AT CREATION so none floats on any exit: the base `.catch` absorbs the rejection a seed-covers abort or a genuine failure delivers, and the derived outcome
+  // turns settlement into a non-rejecting value the gate's race can win on.
+  #startHedge(quantity: LogQuantity, callSignal: AbortSignal): Hedge {
 
-          if(winner.kind === "done") {
+    const controller = new AbortController();
+    const download = this.#collectHistory(quantity, composeSignals(callSignal, controller.signal));
 
-            // The whole-file download completed. It is authoritative and there is no stall left to save, so stop buffering and serve the no-cover fallback - never keep
-            // racing the now-settled tag (which would spin).
-            break;
-          }
+    download.catch((): void => {
 
-          // `kind === "failed"` (a systemd 400, a dead token, the server down). If coverage is not yet decided, the seed might still cover, so hand off to the bounded
-          // seed-only Phase 2. If a deep / unbounded-below window is already established, neither source can serve it, so surface the actionable error.
-          if(!coverageDecided && (since !== null)) {
+      // Observed through `outcome`; on a seed-covers abort the rejection is expected and intentionally discarded.
+    });
 
-            // eslint-disable-next-line no-await-in-loop
-            const phase2 = await this.#windowGatePhase2({ bufferedSeed, horizonNow, latchedError: winner.error, liveIterator, pendingNext, since });
+    const outcome = download.then((): HedgeOutcome => ({ kind: "done" }), (error: unknown): HedgeOutcome => ({ error, kind: "failed" }));
 
-            pendingNext = phase2.pendingNext;
-            decision = "seed-covers";
+    return { controller, download, outcome };
+  }
 
-            break;
-          }
+  // The hedged seed gate every seed-served channel passes through. It buffers the socket's stream oldest-first while the hedge's download runs, and asks `decide` about
+  // each line until coverage is settled. A line that covers the request aborts only the download and leaves the seed serving; a line that rules coverage out keeps
+  // the gate buffering the FULL stream, so a later stitch has a real overlap region to align against - a single-line buffer would manufacture a spurious gap marker. A
+  // download that completes first is authoritative, so the download serves. One that fails while coverage is still open hands off to the bounded seed-only phase,
+  // since the seed may yet cover; one that fails once coverage is ruled out surfaces its error, because then neither source can serve. The socket ending first leaves
+  // the download to serve. One in-flight `next()` is carried across the gate, so the pull outstanding when it decides is never discarded.
+  async #hedgedSeedGate({ buffered, decide, hedge, horizonNow, liveIterator }: HedgedSeedGate): Promise<HedgedSeedGateResult> {
+
+    // The verdict still to be reached: it drops to `null` once a line rules coverage out, and starts there for a request the seed can never cover.
+    let verdictFor = decide;
+    let pendingNext = liveIterator.next();
+
+    for(;;) {
+
+      // eslint-disable-next-line no-await-in-loop
+      const winner = await Promise.race([ pendingNext.then((): "live" => "live"), hedge.outcome ]);
+
+      if(winner !== "live") {
+
+        // The download completed first. It is authoritative, so stop buffering - never keep racing the now-settled outcome, which would spin.
+        if(winner.kind === "done") {
+
+          return { liveDone: false, pendingNext, served: "download" };
+        }
+
+        // The download failed (a systemd 400, a dead token, the server down) with coverage ruled out, so neither source can serve.
+        if(verdictFor === null) {
 
           throw winner.error;
         }
 
         // eslint-disable-next-line no-await-in-loop
-        const result = await pendingNext;
+        const phase = await this.#seedOnlyPhase({ buffered, decide: verdictFor, horizonNow, latchedError: winner.error, liveIterator, pendingNext });
 
-        if(result.done) {
+        return { liveDone: false, pendingNext: phase.pendingNext, served: "seed" };
+      }
 
-          // The socket ended before the download finished. There is no more live to buffer or continue; fall to the no-cover fallback (which awaits the download).
-          liveDone = true;
+      // eslint-disable-next-line no-await-in-loop
+      const result = await pendingNext;
+
+      // The socket ended before the download finished, so there is no more stream to buffer or continue and the download serves.
+      if(result.done) {
+
+        return { liveDone: true, pendingNext, served: "download" };
+      }
+
+      const record = parseLogLine(result.value);
+
+      switch(verdictFor?.(record)) {
+
+        case "covers": {
+
+          // The seed covers the request, so the speculative download is wasted: abort ONLY it, with the supersession reason, and consume the deciding line.
+          hedge.controller.abort(new HbpuAbortError("replaced"));
+
+          return { liveDone: false, pendingNext: this.#bufferLine(buffered, record, liveIterator), served: "seed" };
+        }
+
+        case "cannot": {
+
+          verdictFor = null;
 
           break;
         }
 
-        if(!coverageDecided) {
+        default: {
 
-          const record = parseLogLine(result.value);
-          const seedOldest = (record.timestamp !== null) ? parseLogTimestamp(record.timestamp) : null;
-
-          // Skip a leading null-epoch orphan (a continuation line, or an unrecognized-locale head); only a parseable timestamp decides coverage.
-          if(seedOldest !== null) {
-
-            coverageDecided = true;
-
-            // STRICT `<`: the seed is count-bounded and timestamps are whole-second, so an equal-boundary second could have older same-second lines truncated out of the
-            // seed; strict `<` guarantees nothing in-window was truncated, and an exact boundary falls back to the download.
-            if((since !== null) && (seedOldest < since)) {
-
-              decision = "seed-covers";
-
-              // The seed covers the window, so the speculative download is wasted: abort ONLY it (the socket survives) with the supersession reason, consume the deciding
-              // line, and break to the seed-served branch.
-              downloadController.abort(new HbpuAbortError("replaced"));
-              pendingNext = this.#bufferLine(bufferedSeed, result.value, liveIterator);
-
-              break;
-            }
-
-            // A deep window: the seed does not reach back to `since`, so keep buffering the full seed for a correct stitch, like `#followHistory`. Fall through.
-          }
-        }
-
-        pendingNext = this.#bufferLine(bufferedSeed, result.value, liveIterator);
-      }
-
-      // Serve the decided branch.
-      if(decision === "seed-covers") {
-
-        // Seed-covered: serve the window from the socket - the buffered seed, then continue live from the SAME iterator. CONCATENATE; never `stitchLive` (there is a
-        // single source with no overlap, so a stitch would manufacture a spurious gap). The download is aborted (seed-covers) or failed (Phase 2) and is not awaited.
-        if(!follow) {
-
-          // Arm the one-shot terminator on the client's clock: a re-armable quiescence `Watchdog` (held off until the settle floor so a sub-floor stall cannot
-          // truncate the seed) plus a hard cap, both ending the channel by aborting the socket so the live pull resolves `done`. Both are disposed in the finally.
-          const terminate = (): void => {
-
-            capTimer?.[Symbol.dispose]();
-            capTimer = undefined;
-
-            watchdog?.[Symbol.dispose]();
-            socket.abort(new HbpuAbortError("timeout"));
-          };
-
-          watchdog = new Watchdog({ clock: this.#clock, onFire: (): void => {
-
-            // Hold the terminator off until the settle floor so an intra-burst stall shorter than the floor cannot be mistaken for the end of the seed burst; past
-            // the floor, a full quiescence gap with no new source line ends the one-shot.
-            if(this.#clock.now() < (horizonNow + SEED_SETTLE_MS)) {
-
-              watchdog?.arm();
-
-              return;
-            }
-
-            terminate();
-          }, signal: callSignal, timeoutMs: SEED_QUIESCENCE_MS });
-
-          // The hard cap fires SEED_WINDOW_MAX_MS after the horizon regardless of activity, so a perpetually-chatty log (whose post-horizon lines are filtered out
-          // of the window but still re-arm quiescence) cannot keep the one-shot open forever.
-          capTimer = this.#scheduleAtHardCap(horizonNow, terminate);
-
-          watchdog.arm();
-        }
-
-        for(const record of bufferedSeed) {
-
-          // Re-arm the quiescence terminator on every source line (a no-op for a `follow` window, which arms no terminator).
-          watchdog?.arm();
-
-          yield record;
-        }
-
-        if(!liveDone) {
-
-          // Drain the carried pull first (so the in-flight line is not lost), then continue the live stream. On a one-shot the terminator aborts the socket when the
-          // window has gone quiescent or the cap fires, which resolves the outstanding pull `done` and ends the loop; a `follow` window runs until the socket ends or the
-          // call is torn down.
-          let result = await pendingNext;
-
-          while(!result.done) {
-
-            watchdog?.arm();
-
-            yield parseLogLine(result.value);
-
-            // eslint-disable-next-line no-await-in-loop
-            result = await liveIterator.next();
-          }
-        }
-      } else {
-
-        // No-cover fallback: the seed cannot cover the window (or unbounded-below, or the download already completed). Await the download - if it errored, its
-        // actionable message surfaces here - then join it with the buffered seed at their overlap and serve. `stitchLive` never drops a distinct live line.
-        const history = await downloadPromise;
-
-        for(const record of stitchLive(history, bufferedSeed)) {
-
-          yield record;
-        }
-
-        // A `follow` window continues live from the iterator; a one-shot ends here - the finite download already carries `[since, ~now]`, so the generator ends
-        // naturally once the stitched records are served, and there is no live tail for a clock-driven terminator to bound.
-        if(follow && !liveDone) {
-
-          let result = await pendingNext;
-
-          while(!result.done) {
-
-            yield parseLogLine(result.value);
-
-            // eslint-disable-next-line no-await-in-loop
-            result = await liveIterator.next();
-          }
+          break;
         }
       }
-    } finally {
 
-      // Dispose BOTH timers on every exit path - normal completion, the terminator firing, an early break, a thrown error, or call teardown - so none survives to fire
-      // onto a torn-down channel. Disposal is safe to repeat, so a timer the terminator already disposed is harmless to dispose again.
-      capTimer?.[Symbol.dispose]();
-      watchdog?.[Symbol.dispose]();
+      pendingNext = this.#bufferLine(buffered, record, liveIterator);
     }
   }
 
-  // Phase 2 of the windowed gate, reached ONLY after the speculative download has failed: the seed is now the sole hope, so await the SAME outstanding pull alone (the
-  // settled download tag has been dropped from the race - a single-consumer iterator forbids a second concurrent `next()`), bounded by a gate deadline set
-  // a hard cap (`SEED_WINDOW_MAX_MS`) past the snapshot horizon. A parseable seed line that strictly covers the window serves from the seed (returning the carried pull);
-  // a line that cannot cover, the deadline firing, or the socket ending with no parseable line all THROW the latched error (so an all-null / non-en-US seed against a
-  // dead download cannot hang). The deciding line is consumed into `bufferedSeed`.
-  async #windowGatePhase2(state: { bufferedSeed: LogRecord[]; horizonNow: number; latchedError: unknown; liveIterator: AsyncIterator<string>;
-    pendingNext: Promise<IteratorResult<string>>; since: number; }): Promise<{ pendingNext: Promise<IteratorResult<string>> }> {
+  // The seed-only phase of the hedged gate, reached ONLY after the download has failed while coverage was still open: the socket's stream is now the sole hope, so
+  // await the SAME outstanding pull alone (the settled outcome leaves the race, since a single-consumer iterator forbids a second concurrent `next()`), bounded by a
+  // deadline at the hard cap past the snapshot horizon. A line `decide` finds covering serves from the seed, returning the carried pull; a line it rules out, the
+  // deadline firing, or the socket ending all THROW the latched error, so a seed that never covers cannot hang against a dead download. Every line short of a ruling-out
+  // verdict is buffered, the covering one among them.
+  async #seedOnlyPhase(state: { buffered: LogRecord[]; decide: (record: LogRecord) => SeedVerdict; horizonNow: number; latchedError: unknown;
+    liveIterator: AsyncIterator<string>; pendingNext: Promise<IteratorResult<string>>; }): Promise<{ pendingNext: Promise<IteratorResult<string>> }> {
 
-    const { bufferedSeed, horizonNow, latchedError, liveIterator, since } = state;
+    const { buffered, decide, horizonNow, latchedError, liveIterator } = state;
 
-    // Continue with the outstanding pull Phase 1 left in flight; re-issue locally as the scan advances.
+    // Continue with the outstanding pull the gate left in flight; re-issue locally as the scan advances.
     let pendingNext = state.pendingNext;
 
-    // The gate deadline: bound the seed-only wait to the same hard cap, measured from the snapshot horizon, so a never-arriving parseable line cannot hang.
+    // The deadline: bound the seed-only wait to the hard cap, measured from the snapshot horizon, so a never-arriving covering line cannot hang.
     const deadline: PromiseWithResolvers<"deadline"> = Promise.withResolvers();
     const deadlineTimer = this.#scheduleAtHardCap(horizonNow, (): void => deadline.resolve("deadline"));
 
@@ -763,46 +804,85 @@ export class HomebridgeLogClient implements AsyncDisposable {
         // eslint-disable-next-line no-await-in-loop
         const winner = await Promise.race([ pendingNext.then((): "live" => "live"), deadline.promise ]);
 
+        // The seed produced no covering line within the cap. With the download already failed, there is nothing left to serve.
         if(winner === "deadline") {
 
-          // The seed never produced a parseable line within the cap. With the download already failed, there is nothing left to serve.
           throw latchedError;
         }
 
         // eslint-disable-next-line no-await-in-loop
         const result = await pendingNext;
 
+        // The socket ended short of a covering line and the download failed - surface the actionable error rather than hang.
         if(result.done) {
 
-          // The socket ended with no parseable seed line and the download failed - surface the actionable error rather than hang.
           throw latchedError;
         }
 
         const record = parseLogLine(result.value);
-        const seedOldest = (record.timestamp !== null) ? parseLogTimestamp(record.timestamp) : null;
+        const verdict = decide(record);
 
-        if(seedOldest === null) {
+        // The seed cannot cover the request and the download failed - surface the actionable error.
+        if(verdict === "cannot") {
 
-          // Skip a leading null-epoch orphan and keep scanning for the first parseable-timestamp line.
-          pendingNext = this.#bufferLine(bufferedSeed, result.value, liveIterator);
-
-          continue;
+          throw latchedError;
         }
 
-        if(seedOldest < since) {
+        pendingNext = this.#bufferLine(buffered, record, liveIterator);
 
-          // The seed strictly covers the window: serve from the seed. Consume the deciding line, then return the fresh carried pull - exactly as Phase 1
-          // does before its own break. The pull is wrapped so the async return does NOT await it (the carry must stay in flight).
-          return { pendingNext: this.#bufferLine(bufferedSeed, result.value, liveIterator) };
+        // The seed covers the request: serve from it. The pull is returned wrapped so the async return does NOT await it - the carry must stay in flight.
+        if(verdict === "covers") {
+
+          return { pendingNext };
         }
-
-        // The seed cannot cover the window and the download failed - surface the actionable error.
-        throw latchedError;
       }
     } finally {
 
       deadlineTimer[Symbol.dispose]();
     }
+  }
+
+  // Watch for the end of the socket's opening burst - its seed, and any live lines arriving with it - on the client's clock: a full quiescence gap with no new line
+  // once the settle floor has passed, or the hard cap, whichever comes first. The floor keeps an intra-burst stall shorter than it from being mistaken for the end of
+  // the burst, and the cap keeps a perpetually-chatty log from holding the watch open forever. `onEnd` runs once, when the burst ends. The returned watch is re-armed
+  // on every source line and disposed with its channel, so no timer outlives the channel.
+  #watchSeedBurst(horizonNow: number, signal: AbortSignal, onEnd: () => void): { readonly arm: () => void } & Disposable {
+
+    // Whichever ending comes first - the quiet gap past the floor, or the cap - releases the watch's timers before running `onEnd`, so the burst ends exactly once.
+    const end = (): void => {
+
+      watch[Symbol.dispose]();
+      onEnd();
+    };
+
+    const watchdog: Watchdog = new Watchdog({ clock: this.#clock, onFire: (): void => {
+
+      // Short of the settle floor, a quiet gap is not yet the end of the burst, so keep watching.
+      if(this.#clock.now() < (horizonNow + SEED_SETTLE_MS)) {
+
+        watchdog.arm();
+
+        return;
+      }
+
+      end();
+    }, signal, timeoutMs: SEED_QUIESCENCE_MS });
+
+    const capTimer = this.#scheduleAtHardCap(horizonNow, end);
+
+    const watch = {
+
+      arm: (): void => watchdog.arm(),
+      [Symbol.dispose]: (): void => {
+
+        capTimer[Symbol.dispose]();
+        watchdog[Symbol.dispose]();
+      }
+    };
+
+    watchdog.arm();
+
+    return watch;
   }
 
   // Arm `callback` at the hard cap: SEED_WINDOW_MAX_MS past the snapshot horizon, clamped at zero so a horizon already that old fires immediately rather than
@@ -813,11 +893,11 @@ export class HomebridgeLogClient implements AsyncDisposable {
     return this.#clock.schedule(callback, Math.max(0, (horizonNow + SEED_WINDOW_MAX_MS) - this.#clock.now()));
   }
 
-  // Buffer a resolved live line into `buffer` (oldest-first) and issue the next pull, returning the in-flight `next()`. The single primitive shared between
-  // the windowed gate and `#followHistory`: each carries exactly one outstanding pull across its buffering loop, so the parse-and-advance step lives in one place.
-  #bufferLine(buffer: LogRecord[], value: string, liveIterator: AsyncIterator<string>): Promise<IteratorResult<string>> {
+  // Buffer a resolved line's record into `buffer` (oldest-first) and issue the next pull, returning the in-flight `next()`. The single primitive every buffering loop
+  // shares - the hedged gate, its seed-only phase and the count's burst wait: each carries exactly one outstanding pull, so the push-and-advance step lives in one place.
+  #bufferLine(buffer: LogRecord[], record: LogRecord, liveIterator: AsyncIterator<string>): Promise<IteratorResult<string>> {
 
-    buffer.push(parseLogLine(value));
+    buffer.push(record);
 
     return liveIterator.next();
   }
@@ -851,7 +931,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
     const token = await this.#tokenProvider(callSignal);
 
-    for await (const line of downloadLog({ fetch: this.#fetch, host: this.#host, port: this.#port, signal: callSignal, tls: this.#tls, token })) {
+    for await (const line of downloadLog({ clock: this.#clock, fetch: this.#fetch, host: this.#host, port: this.#port, signal: callSignal, tls: this.#tls, token })) {
 
       yield parseLogLine(line);
     }

@@ -51,6 +51,12 @@ export const JITTER_FRACTION = 0.5;
 // has gone silent, so this margin is added to that window to avoid a premature fire on a momentarily late ping.
 export const MARGIN_MS = 5000;
 
+// The longest the REST log download waits on the server for its next data, in milliseconds - for the response to begin, or for the next piece of its body - before
+// failing as stalled. The server streams a file it already holds on disk, so a silence this long means the transfer has stopped rather than slowed, and failing here
+// turns what would otherwise be an open-ended wait into a prompt, actionable error. Only the wait on the server counts: while the consumer holds the stream, a slow
+// stdout downstream for example, no window is running, so a slow reader can never trip it.
+export const DOWNLOAD_STALL_MS = 30000;
+
 // The idle gap, in milliseconds, after which a seed-served one-shot window is considered quiescent. When a `--since` (one-shot) window is served from the socket seed the
 // source is the never-ending live socket, so the channel needs an explicit terminator: a re-armable quiescence watchdog re-armed on every source line. Once this much
 // time elapses with no further source line (and the settle floor below has passed), the seed burst is judged complete and the one-shot ends. Kept small so a quiet log's

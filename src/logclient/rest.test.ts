@@ -1,12 +1,18 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * logclient/rest.test.ts: Unit tests for the streamed whole-file log download - line splitting via the shared splitter, the end-of-response flush, and the 400 mapping.
+ * logclient/rest.test.ts: Unit tests for the streamed whole-file log download - line splitting via the shared splitter, the end-of-response flush, the 400 mapping,
+ * and the stall bound.
  */
+import { assertNoUnhandledRejections, present, settle } from "../testing/index.ts";
 import { describe, test } from "node:test";
+import { DOWNLOAD_STALL_MS } from "./settings.ts";
 import type { DownloadLogOptions } from "./rest.ts";
+import type { OpenDownload } from "./rest.helpers.ts";
+import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
-import { assertNoUnhandledRejections } from "../testing/index.ts";
 import { downloadLog } from "./rest.ts";
+import { onAbort } from "../util.ts";
+import { openDownload } from "./rest.helpers.ts";
 
 // The connection target plus token every test reuses. The download flow builds `http://localhost:8581/api/platform-tools/hb-service/log/download?colour=yes`.
 const TARGET = { host: "localhost", port: 8581, token: "raw.jwt" };
@@ -128,6 +134,53 @@ function abortObservingFetch(lines: readonly string[]): AbortObservingFetch {
   }) as typeof fetch;
 
   return { fetch: fetchImpl, signalSeen: (): AbortSignal | undefined => seen, wasCancelled: (): boolean => cancelled };
+}
+
+// The error a stalled download fails with, restated here so a change to the user-facing wording is a deliberate one. A rejection is matched against the error's
+// string form, which leads with its name, so the pattern anchors only at the end.
+const STALL_PATTERN = new RegExp("Log download stalled - the server sent no data for " + (DOWNLOAD_STALL_MS / 1000).toString() + " seconds\\.$");
+
+// The captured surface of a `fetch` double standing in for a server that goes quiet.
+//
+// @property download - The open download the server answered with, once it has answered.
+// @property fetch    - The `fetch` implementation to inject.
+// @property signal   - The signal the download handed `fetch`, once it has been called.
+interface QuietServer {
+
+  download: () => OpenDownload | undefined;
+  fetch: typeof fetch;
+  signal: () => AbortSignal | undefined;
+}
+
+// Build a `fetch` double for a server that goes quiet. It answers the download with an open body that delivers `chunks` and then waits on the test, or, with `answer`
+// false, never answers at all - until the request's signal aborts, when it rejects with the signal's reason, as the platform `fetch` does.
+function quietServer({ answer = true, chunks = [] }: { answer?: boolean; chunks?: readonly string[] } = {}): QuietServer {
+
+  let download: OpenDownload | undefined;
+  let seen: AbortSignal | undefined;
+
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+
+    const signal = present(init?.signal, "the download's request signal");
+
+    seen = signal;
+
+    if(!answer) {
+
+      await new Promise<void>((resolve) => {
+
+        onAbort(signal, resolve);
+      });
+
+      throw signal.reason;
+    }
+
+    download = openDownload({ chunks, signal });
+
+    return download.response;
+  }) as typeof fetch;
+
+  return { download: (): OpenDownload | undefined => download, fetch: fetchImpl, signal: (): AbortSignal | undefined => seen };
 }
 
 describe("downloadLog - request shape", () => {
@@ -365,5 +418,99 @@ describe("downloadLog - abort", () => {
 
     assert.deepEqual(lines, [], "a pre-aborted signal must short-circuit before any line is yielded");
     assert.equal(signalSeen()?.aborted, true, "fetch must have received the pre-aborted signal");
+  });
+});
+
+describe("downloadLog - stall bound", () => {
+
+  test("fails as stalled once the body has been silent for the whole window, and tears the request down", async () => {
+
+    const clock = new TestClock();
+    const server = quietServer({ chunks: ["one\ntwo"] });
+    const iterator = downloadLog({ ...TARGET, clock, fetch: server.fetch })[Symbol.asyncIterator]();
+
+    assert.equal((await iterator.next()).value, "one", "the line the server did send must stream before the stall");
+
+    // "two" has no terminator yet, so this pull waits on a server that has gone quiet.
+    const pending = iterator.next();
+    let settled = false;
+
+    void pending.then(() => {
+
+      settled = true;
+    }, () => {
+
+      settled = true;
+    });
+
+    await settle();
+    clock.advance(DOWNLOAD_STALL_MS - 1);
+    await settle();
+
+    assert.equal(settled, false, "the download must hold on until the whole window has passed");
+
+    clock.advance(1);
+
+    await assert.rejects(pending, STALL_PATTERN);
+    assert.equal(server.signal()?.aborted, true, "a stall must abort the request so its connection is released");
+  });
+
+  test("fails as stalled when the server never answers the request", async () => {
+
+    const clock = new TestClock();
+    const server = quietServer({ answer: false });
+    const lines = collect({ ...TARGET, clock, fetch: server.fetch });
+
+    await settle();
+    clock.advance(DOWNLOAD_STALL_MS);
+
+    await assert.rejects(lines, STALL_PATTERN);
+  });
+
+  test("never counts the time the consumer holds the stream against the server", async () => {
+
+    const clock = new TestClock();
+    const server = quietServer({ chunks: ["one\ntwo\n"] });
+    const iterator = downloadLog({ ...TARGET, clock, fetch: server.fetch })[Symbol.asyncIterator]();
+
+    assert.equal((await iterator.next()).value, "one");
+
+    // Hold the stream far past the window without pulling, as a consumer blocked on a slow stdout does. No window runs while a line is out with the consumer.
+    clock.advance(DOWNLOAD_STALL_MS * 10);
+    await settle();
+
+    // The next pull finds "two" waiting on a possible paired terminator and reads on, and the server answers inside the window.
+    const next = iterator.next();
+
+    await settle();
+    server.download()?.push("three\n");
+
+    assert.equal((await next).value, "two", "a consumer that held the stream must find the download still alive");
+    assert.equal(server.signal()?.aborted, false, "holding the stream must never abort the request");
+
+    await iterator.return?.();
+  });
+
+  test("completes a slow download whose every wait falls inside the window, and leaves no timer behind", async () => {
+
+    const clock = new TestClock();
+    const server = quietServer();
+    const lines = collect({ ...TARGET, clock, fetch: server.fetch });
+
+    // Feed the body one line at a time, each arriving just inside the window, so the download as a whole runs several windows long. Each step has to let the download
+    // reach its next read before the clock moves, so the steps run in order.
+    for(const line of [ "one", "two", "three" ]) {
+
+      // eslint-disable-next-line no-await-in-loop
+      await settle();
+      clock.advance(DOWNLOAD_STALL_MS - 1);
+      server.download()?.push(line + "\n");
+    }
+
+    await settle();
+    server.download()?.close();
+
+    assert.deepEqual(await lines, [ "one", "two", "three" ], "a download whose every wait falls inside the window must complete");
+    assert.equal(clock.advanceToNext(), false, "a finished download must leave no stall timer armed");
   });
 });

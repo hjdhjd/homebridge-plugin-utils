@@ -79,7 +79,7 @@ Output:
 
 Bare `hblog` live-tails the log. `--follow` goes through the UI's Socket.IO stream - it is cheap and incremental, includes a free ~500-line seed of recent history, and reconnects automatically through the Homebridge restarts you do while iterating. A deep `-n N` or `--all` falls back to a one-shot whole-file download, paid only when you explicitly ask for history beyond the seed. `history`/`--all` require the Homebridge log method to be file-backed (`file`/`native`); with `systemd`/`custom` there is no file to download, so use `--follow` instead.
 
-Output discipline is pipe-friendly: log data goes to stdout (so `--json` NDJSON stays clean), diagnostics and warnings go to stderr, and a broken downstream pipe (`hblog -f | grep -m1 ...`) ends cleanly. Exit codes are `0` for success (including a clean Ctrl-C), `1` for a connection or authentication failure, and `2` for a usage error.
+Output discipline is pipe-friendly: log data goes to stdout (so `--json` NDJSON stays clean), diagnostics and warnings go to stderr, and a broken downstream pipe (`hblog -f | grep -m1 ...`) ends cleanly. Exit codes are `0` for success (including a clean Ctrl-C), `1` for a connection or authentication failure, and `2` for a usage error. A download the server stops sending partway through fails with a clear error rather than hanging, and a run that fails after printing log lines says on stderr that its output is incomplete, naming the last log entry received, so check the exit code before trusting a saved capture.
 
 ### `~/.hblog.json`
 

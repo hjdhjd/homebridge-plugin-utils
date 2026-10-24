@@ -4,9 +4,9 @@
  */
 import { HbpuAbortError, onAbort } from "../util.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
-import { SEED_SETTLE_MS, SEED_WINDOW_MAX_MS } from "./settings.ts";
+import { SEED_QUIESCENCE_MS, SEED_SETTLE_MS, SEED_WINDOW_MAX_MS } from "./settings.ts";
 import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
-import { assertNoUnhandledRejections, settle, silentLog, waitUntil } from "../testing/index.ts";
+import { assertNoUnhandledRejections, settle, settleUntil, silentLog, waitUntil } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogRecord } from "./types.ts";
@@ -14,6 +14,7 @@ import { LogSocket } from "./socket.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import { openDownload } from "./rest.helpers.ts";
 
 // A captured fetch call: the URL the auth or REST transport produced. Enough to assert which transport ran.
 interface FetchCall {
@@ -307,12 +308,13 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
     await stream[Symbol.asyncDispose]();
   });
 
-  test("trims history to the requested numeric quantity before stitching", async () => {
+  test("trims history to the requested numeric quantity before stitching, when the seed holds fewer lines than asked", async () => {
 
-    // History has four lines but the request asks for the most recent two (C, D); the socket seed C, D overlaps that trimmed tail and E is new. The trimmed history must
-    // be the stitch basis, so the output is exactly C, D, E - the older A, B are excluded by the quantity, and no live line is dropped at the boundary.
-    const historyLines = [ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C", "[6/29/2026, 12:00:00 PM] [P] D" ];
-    const seedLines = [ "[6/29/2026, 12:00:00 PM] [P] C", "[6/29/2026, 12:00:00 PM] [P] D", "[6/29/2026, 12:00:00 PM] [P] E" ];
+    // History runs A through E and the request asks for the most recent four, B through E. The socket's stream delivers only D, E and F, too few to cover the count,
+    // so the download serves: the trimmed history is the stitch basis, the older A is excluded by the quantity, and the new F follows with no line dropped.
+    const historyLines = [ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C", "[6/29/2026, 12:00:00 PM] [P] D",
+      "[6/29/2026, 12:00:00 PM] [P] E" ];
+    const seedLines = [ "[6/29/2026, 12:00:00 PM] [P] D", "[6/29/2026, 12:00:00 PM] [P] E", "[6/29/2026, 12:00:00 PM] [P] F" ];
 
     const { TestLogSocket } = await import("./socket-double.ts");
     const preset = new TestLogSocket({ lines: seedLines });
@@ -321,8 +323,8 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
-    const stream = client.tail({ mode: "follow-history", quantity: 2 });
-    const collected = collect(stream, 3);
+    const stream = client.tail({ mode: "follow-history", quantity: 4 });
+    const collected = collect(stream, 5);
 
     await settle(10);
 
@@ -330,8 +332,8 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
 
     const records = await collected;
 
-    assert.deepEqual(records.map((record) => record.message), [ "C", "D", "E" ],
-      "a numeric follow-history quantity must trim history to the most recent N before the stitch");
+    assert.deepEqual(records.map((record) => record.message), [ "B", "C", "D", "E", "F" ],
+      "a numeric follow-history quantity the seed cannot cover must trim history to the most recent N before the stitch");
 
     await stream[Symbol.asyncDispose]();
   });
@@ -712,7 +714,6 @@ interface WindowFetch {
 // signal and whether the request was issued are captured, so a test asserts the speculative download was superseded.
 function windowFetch(options: { gate?: Promise<void>; historyLines?: readonly string[]; mode: "complete" | "open" | "reject" }): WindowFetch {
 
-  const encoder = new TextEncoder();
   const historyLines = options.historyLines ?? [];
   let downloadSignal: AbortSignal | undefined;
   let started = false;
@@ -744,45 +745,16 @@ function windowFetch(options: { gate?: Promise<void>; historyLines?: readonly st
       return new Response("Bad Request", { status: 400 });
     }
 
-    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    // An "open" download never closes on its own and errors its body when the forwarded signal aborts, as the platform does, so the consumer's read rejects and the
+    // speculative collection settles (its rejection neutralized by the channel) rather than draining forever. A "complete" download closes at once and ignores aborts.
+    const download = openDownload({ chunks: historyLines.map((text) => text + "\n"), signal: (options.mode === "open") ? (init?.signal ?? undefined) : undefined });
 
-    const stream = new ReadableStream<Uint8Array>({
+    if(options.mode === "complete") {
 
-      start(controller): void {
-
-        streamController = controller;
-
-        for(const text of historyLines) {
-
-          controller.enqueue(encoder.encode(text + "\n"));
-        }
-
-        if(options.mode === "complete") {
-
-          controller.close();
-        }
-      }
-    });
-
-    // An "open" download never closes on its own; mirror undici by erroring its body when the forwarded signal aborts, so the consumer's read rejects and the speculative
-    // collection settles (its rejection neutralized by the channel) rather than draining forever.
-    const signal = init?.signal ?? undefined;
-
-    if((options.mode === "open") && (signal !== undefined)) {
-
-      signal.addEventListener("abort", () => {
-
-        try {
-
-          streamController?.error(signal.reason);
-        } catch {
-
-          // The body may already be closed; erroring a closed stream is a harmless no-op for the test.
-        }
-      }, { once: true });
+      download.close();
     }
 
-    return new Response(stream, { status: 200 });
+    return download.response;
   }) as typeof fetch;
 
   return { downloadAbortReason: (): unknown => (downloadSignal?.aborted === true) ? downloadSignal.reason : undefined, downloadStarted: (): boolean => started,
@@ -1207,5 +1179,163 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     assert.equal(socket.abortReasons.length, reasonsAfterDisposal, "no stale timer may fire after the channel is disposed");
     assert.ok(!socket.abortReasons.some((reason) => (reason instanceof HbpuAbortError) && (reason.name === "timeout")),
       "the one-shot terminator must not fire after disposal (its timers were disposed)");
+  });
+});
+
+describe("HomebridgeLogClient - most recent lines from the seed", () => {
+
+  // Wait until the burst watch has armed - its quiescence window is the one timer that asks the clock for that span - which happens once the seed covers the count.
+  async function untilBurstWatch(clock: TestClock): Promise<void> {
+
+    await settleUntil(() => clock.requested.includes(SEED_QUIESCENCE_MS), { description: "the burst watch to arm once the seed covers the count" });
+  }
+
+  test("serves a one-shot count from the seed when it holds that many lines, and aborts the download", async () => {
+
+    // The seed holds more lines than the count asks for, so the stream covers the count before the seed is through: the never-closing, distinctively-tagged download is
+    // superseded, and once the opening burst has ended its most recent lines are served.
+    const clock = new TestClock(WINDOW_HORIZON);
+    const socket = new ScriptedSocket([ line(11, 1, "first"), line(11, 2, "second"), line(11, 3, "third"), line(11, 4, "fourth"), line(11, 5, "fifth") ]);
+    const download = windowFetch({ historyLines: [line(9, 0, "DOWNLOAD-LEAK")], mode: "open" });
+
+    await using client = windowClient(download.fetch, socket, clock);
+
+    const collected = collect(client.tail({ mode: "history", quantity: 3 }));
+
+    await untilBurstWatch(clock);
+    clock.advance(SEED_SETTLE_MS + SEED_QUIESCENCE_MS);
+
+    const records = await collected;
+
+    assert.deepEqual(records.map((record) => record.message), [ "third", "fourth", "fifth" ], "the opening burst's most recent lines must be served, as many as asked");
+
+    const reason = download.downloadAbortReason();
+
+    assert.ok(reason instanceof HbpuAbortError);
+    assert.equal(reason.name, "replaced", "a seed that covers the count must supersede the speculative download");
+  });
+
+  test("serves a one-shot count from the download when the seed holds fewer lines", async () => {
+
+    // The seed holds fewer lines than the count asks for, so the stream cannot cover it and the completed download serves its most recent lines.
+    const clock = new TestClock(WINDOW_HORIZON);
+    const socket = new ScriptedSocket([ line(11, 4, "seed four"), line(11, 5, "seed five") ]);
+    const download = windowFetch({ historyLines: [ line(11, 1, "one"), line(11, 2, "two"), line(11, 3, "three"), line(11, 4, "four"), line(11, 5, "five") ],
+      mode: "complete" });
+
+    await using client = windowClient(download.fetch, socket, clock);
+
+    const records = await collect(client.tail({ mode: "history", quantity: 3 }));
+
+    assert.deepEqual(records.map((record) => record.message), [ "three", "four", "five" ], "a count the seed cannot cover must be served by the download");
+  });
+
+  test("follows a count from the seed: the last lines of the opening burst, then the live stream", async () => {
+
+    // The seed holds more lines than the count asks for, and the request follows the live stream afterwards. Once the opening burst has ended its most recent lines are
+    // served, and a line fed afterwards follows them as the live continuation.
+    const clock = new TestClock(WINDOW_HORIZON);
+    const socket = new ScriptedSocket([ line(11, 1, "first"), line(11, 2, "second"), line(11, 3, "third"), line(11, 4, "fourth") ]);
+    const download = windowFetch({ mode: "open" });
+
+    await using client = windowClient(download.fetch, socket, clock);
+
+    const stream = client.tail({ mode: "follow-history", quantity: 2 });
+    const collected = collect(stream, 3);
+
+    await untilBurstWatch(clock);
+    clock.advance(SEED_SETTLE_MS + SEED_QUIESCENCE_MS);
+    await settle();
+    socket.feed(line(11, 6, "live"));
+
+    const records = await collected;
+
+    assert.deepEqual(records.map((record) => record.message), [ "third", "fourth", "live" ], "the burst's most recent lines must be followed by the live stream");
+
+    const reason = download.downloadAbortReason();
+
+    assert.ok(reason instanceof HbpuAbortError);
+    assert.equal(reason.name, "replaced", "a seed that covers the count must supersede the speculative download");
+
+    await stream[Symbol.asyncDispose]();
+  });
+
+  test("serves a count from the seed when the download fails, as long as the seed holds it", async () => {
+
+    // The download fails at once - the systemd "no log file" case - before the socket has delivered anything, so the gate falls to its seed-only phase. The seed then
+    // arrives holding the count, and its most recent lines are served rather than the download's error.
+    const clock = new TestClock(WINDOW_HORIZON);
+    const socket = new ScriptedSocket();
+    const download = windowFetch({ mode: "reject" });
+
+    await using client = windowClient(download.fetch, socket, clock);
+
+    const collected = collect(client.tail({ mode: "history", quantity: 3 }));
+
+    // The seed-only phase's deadline is the hard cap past the horizon, so its request marks the download's failure having reached the gate.
+    await settleUntil(() => clock.requested.includes(SEED_WINDOW_MAX_MS), { description: "the seed-only phase to arm once the download has failed" });
+
+    socket.feed(line(11, 1, "first"));
+    socket.feed(line(11, 2, "second"));
+    socket.feed(line(11, 3, "third"));
+    socket.feed(line(11, 4, "fourth"));
+    socket.feed(line(11, 5, "fifth"));
+
+    await untilBurstWatch(clock);
+    clock.advance(SEED_SETTLE_MS + SEED_QUIESCENCE_MS);
+
+    const records = await collected;
+
+    assert.deepEqual(records.map((record) => record.message), [ "third", "fourth", "fifth" ], "a seed that holds the count must serve it when the download has failed");
+  });
+
+  test("fails with the download's error when the download fails and the seed holds fewer lines than asked", async () => {
+
+    // The download fails and the seed holds fewer lines than the count asks for, so neither source can serve: the seed-only phase gives up at the hard cap, and the
+    // error says how many of the most recent lines the stream did hold, carrying the download's actionable error as its cause.
+    const clock = new TestClock(WINDOW_HORIZON);
+    const seed = [ line(11, 1, "first"), line(11, 2, "second") ];
+    const socket = new ScriptedSocket(seed);
+    const download = windowFetch({ mode: "reject" });
+
+    await using client = windowClient(download.fetch, socket, clock);
+
+    const collected = collect(client.tail({ mode: "history", quantity: seed.length + 1 }));
+
+    await settleUntil(() => clock.requested.includes(SEED_WINDOW_MAX_MS), { description: "the seed-only phase to arm once the download has failed" });
+    clock.advance(SEED_WINDOW_MAX_MS);
+
+    await assert.rejects(collected, (error: unknown) => {
+
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "Only the most recent " + seed.length.toString() + " lines are available from the live stream, and the whole-file download that " +
+        "would serve more failed");
+      assert.ok(error.cause instanceof Error);
+      assert.match(error.cause.message, /no log file/i, "the download's own error must be carried as the cause");
+
+      return true;
+    });
+  });
+
+  test("an aborted count surfaces the download's error untouched rather than a line-count shortfall", async () => {
+
+    // The caller abandons the request while the download is still in flight. The download fails with the caller's reason, and since the call was ended by its own
+    // caller, that reason surfaces as it is rather than dressed as a shortfall of lines.
+    const clock = new TestClock(WINDOW_HORIZON);
+    const socket = new ScriptedSocket([ line(11, 1, "first"), line(11, 2, "second") ]);
+    const download = windowFetch({ mode: "open" });
+    const caller = new AbortController();
+    const reason = new Error("The caller gave up.");
+
+    await using client = windowClient(download.fetch, socket, clock);
+
+    const collected = collect(client.tail({ mode: "history", quantity: 3 }, { signal: caller.signal }));
+
+    await settleUntil(() => download.downloadStarted(), { description: "the speculative download to start" });
+    caller.abort(reason);
+    await settleUntil(() => clock.requested.includes(SEED_WINDOW_MAX_MS), { description: "the seed-only phase to arm once the download has failed" });
+    clock.advance(SEED_WINDOW_MAX_MS);
+
+    await assert.rejects(collected, (error: unknown) => error === reason);
   });
 });

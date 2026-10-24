@@ -3,15 +3,17 @@
  * logclient/cli-run.test.ts: Unit tests for runHblog - arg/credential/request mapping, output formatting, color precedence, EPIPE, exit codes, signals, redaction.
  */
 import type { CliStream, RunHblogOptions } from "./cli-run.ts";
+import { DOWNLOAD_STALL_MS, SEED_QUIESCENCE_MS, SEED_SETTLE_MS } from "./settings.ts";
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
-import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
+import { TestLogSocket, TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
 import { USAGE, runHblog } from "./cli-run.ts";
 import { describe, test } from "node:test";
-import { errnoError, settle } from "../testing/index.ts";
+import { drainClock, errnoError, settle, settleUntil } from "../testing/index.ts";
 import { LogSocket } from "./socket.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { openDownload } from "./rest.helpers.ts";
 import { readFile } from "node:fs/promises";
 
 // A capturing CliStream double. Records every chunk written so a test asserts the exact output, exposes a settable `isTTY`, and supports `on`/`off` hooks for the stdout
@@ -134,14 +136,15 @@ class CaptureStream implements CliStream {
   }
 }
 
-// Build a `fetch` double. Auth endpoints (login/noauth) answer with a token; the REST log download answers with the supplied lines, or rejects with `downloadError`
-// when one is provided (to exercise the failure and redaction paths). Every requested URL is captured for assertions on which channel/credential ran.
-function fakeFetch(options: { downloadError?: Error; lines?: readonly string[] } = {}): { calls: string[]; fetch: typeof fetch } {
+// Build a `fetch` double. Auth endpoints (login/noauth) answer with a token; the REST log download answers with the supplied lines, rejects with `downloadError`
+// when one is provided (to exercise the failure and redaction paths), or, given `quietAfter`, delivers that text and then goes quiet, the way a server that stops
+// partway through does. Every requested URL is captured for assertions on which channel/credential ran.
+function fakeFetch(options: { downloadError?: Error; lines?: readonly string[]; quietAfter?: string } = {}): { calls: string[]; fetch: typeof fetch } {
 
   const calls: string[] = [];
   const lines = options.lines ?? [];
 
-  const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 
     const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
 
@@ -152,6 +155,11 @@ function fakeFetch(options: { downloadError?: Error; lines?: readonly string[] }
       if(options.downloadError !== undefined) {
 
         throw options.downloadError;
+      }
+
+      if(options.quietAfter !== undefined) {
+
+        return openDownload({ chunks: [options.quietAfter], signal: init?.signal ?? undefined }).response;
       }
 
       return new Response(lines.map((line) => line + "\n").join(""), { status: 200 });
@@ -202,6 +210,9 @@ function makeOptions(overrides: Partial<RunHblogOptions> & { argv: readonly stri
     env: {},
     homedir: "/home/dev",
     readFile: missingFileReadFile,
+    // A parked socket double by default, so a run that opens the live stream - a line count does, beside its download - never dials a real server. A test that drives
+    // the stream passes its own factory.
+    socketFactory: new TestLogSocketFactory(),
     // 0o100600 is a regular file (S_IFREG) with owner-only (0600) permissions, picked so the config loader's group/world-readable permissions warning stays silent for
     // any test that overrides `readFile` with a real config.
     stat: async (): Promise<{ readonly mode: number }> => ({ mode: 0o100600 }),
@@ -453,6 +464,7 @@ describe("runHblog - request and credential mapping (history channel)", () => {
 
   test("a numeric -n retains only the most recent N lines", async () => {
 
+    // The default socket double delivers nothing, so the live stream cannot cover the count and the download serves its most recent lines.
     const { fetch } = fakeFetch({ lines: [ "[t] [P] one", "[t] [P] two", "[t] [P] three", "[t] [P] four" ] });
     const { options, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "-n", "2" ], fetch });
 
@@ -461,6 +473,48 @@ describe("runHblog - request and credential mapping (history channel)", () => {
     const lines = stdout.text.split("\n").filter((line) => line.length > 0);
 
     assert.deepEqual(lines, [ "[t] [P] three", "[t] [P] four" ], "a numeric -n must retain only the most recent N lines");
+  });
+
+  test("a numeric -n is served from the live stream's seed while the server's download goes quiet", async () => {
+
+    // The server sends nothing on the download, the way a server that stalls it does, while the live stream's seed holds the lines. The count is covered from the seed
+    // and the download superseded, so the run ends cleanly once the opening burst has, long before the download's stall bound.
+    const clock = new TestClock();
+    const socket = new TestLogSocket({ lines: [ "[6/29/2026, 12:00:00 PM] [P] one", "[6/29/2026, 12:00:01 PM] [P] two", "[6/29/2026, 12:00:02 PM] [P] three",
+      "[6/29/2026, 12:00:03 PM] [P] four" ] });
+    const { fetch } = fakeFetch({ quietAfter: "" });
+    const { options, stderr, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "-n", "2" ], clock, fetch, socketFactory: new TestLogSocketFactory(socket) });
+
+    const run = runHblog(options);
+
+    await settleUntil(() => clock.requested.includes(SEED_QUIESCENCE_MS), { description: "the burst watch to arm once the seed covers the count" });
+    clock.advance(SEED_SETTLE_MS + SEED_QUIESCENCE_MS);
+
+    assert.equal(await run, 0, "a count the seed covers must succeed while the download is silent");
+    assert.equal(stdout.text, "[6/29/2026, 12:00:02 PM] [P] three\n[6/29/2026, 12:00:03 PM] [P] four\n", "the seed's most recent lines must be written");
+    assert.equal(stderr.text, "", "a seed-served count must report nothing on stderr");
+  });
+
+  test("a numeric -n deeper than the live stream holds says how many lines it does hold when the download stalls", async () => {
+
+    // The live stream's seed holds fewer lines than asked for, so the count rests on the download, and the server sends nothing on it. Once the stall bound fires,
+    // the failure names how many of the most recent lines are available without the download, so the next request can ask for that many.
+    const clock = new TestClock();
+    const seed = [ "[6/29/2026, 12:00:00 PM] [P] one", "[6/29/2026, 12:00:01 PM] [P] two" ];
+    const { fetch } = fakeFetch({ quietAfter: "" });
+    const { options, stderr, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "-n", (seed.length + 1).toString() ], clock, fetch,
+      socketFactory: new TestLogSocketFactory(new TestLogSocket({ lines: seed })) });
+
+    const run = runHblog(options);
+
+    await settleUntil(() => clock.requested.includes(DOWNLOAD_STALL_MS), { description: "the download to wait on the silent server" });
+    await drainClock(clock);
+
+    assert.equal(await run, 1, "a count neither source can serve must fail");
+    assert.equal(stdout.text, "", "nothing may be written when the count cannot be served");
+    assert.equal(stderr.text, "Error: Only the most recent " + seed.length.toString() + " lines are available from the live stream, and the whole-file download that " +
+      "would serve more failed: " +
+      "Log download stalled - the server sent no data for " + (DOWNLOAD_STALL_MS / 1000).toString() + " seconds.\n", "the failure must name the lines available");
   });
 
   test("--follow selects the socket channel (no REST download)", async () => {
@@ -653,6 +707,30 @@ describe("runHblog - failures, EPIPE, and signals", () => {
 
     assert.equal(code, 1, "a connection failure must exit 1");
     assert.match(stderr.text, /connection refused/, "the failure message must be surfaced");
+    assert.ok(!stderr.text.includes("The output is incomplete"), "a failure before any record arrived wrote nothing, so it needs no incomplete-output notice");
+  });
+
+  test("a download that goes quiet partway fails at the stall bound and says where the received log ends", async () => {
+
+    // The server sends whole entries and part of another, then goes quiet. The plugin filter keeps only Alpha's lines, while the last entry received is Beta's: the
+    // notice names where the received log ends rather than where the filtered output does, because that boundary is what tells a reader what the capture lacks.
+    const clock = new TestClock();
+    const kept = "[4/21/2026, 7:55:19 PM] [Alpha] opening\n[4/21/2026, 7:55:20 PM] [Alpha] steady\n";
+    const { fetch } = fakeFetch({ quietAfter: kept + "[4/21/2026, 7:55:21 PM] [Beta] closing\n[4/21/2026, 7:55:22 PM] [Alpha] cut off mid-line" });
+    const { options, stderr, stdout } = makeOptions({ argv: [ "--token", "abc.jwt", "--all", "--plugin", "Alpha" ], clock, fetch });
+
+    const run = runHblog(options);
+
+    await settleUntil(() => stdout.text.includes("steady"), { description: "the entries the server sent to reach stdout" });
+    clock.advance(DOWNLOAD_STALL_MS);
+
+    const code = await run;
+
+    assert.equal(code, 1, "a stalled download must exit 1");
+    assert.equal(stdout.text, kept, "only the whole entries the filter keeps may be written");
+    assert.match(stderr.text, /^Error: Log download stalled - the server sent no data for \d+ seconds\.$/m, "the stall must be reported as such");
+    assert.match(stderr.text, /^The output is incomplete - the last log entry received is from 4\/21\/2026, 7:55:21 PM\.$/m,
+      "the notice must name the last entry received, ahead of the filter");
   });
 
   test("the token is redacted from an error message", async () => {

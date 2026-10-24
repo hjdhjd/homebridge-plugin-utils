@@ -5,6 +5,7 @@
  */
 import { assertNoUnhandledRejections, present, settle } from "../testing/index.ts";
 import { describe, test } from "node:test";
+import { openDownload, recordingFetch } from "./rest.helpers.ts";
 import { DOWNLOAD_STALL_MS } from "./settings.ts";
 import type { DownloadLogOptions } from "./rest.ts";
 import type { OpenDownload } from "./rest.helpers.ts";
@@ -12,35 +13,9 @@ import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { downloadLog } from "./rest.ts";
 import { onAbort } from "../util.ts";
-import { openDownload } from "./rest.helpers.ts";
 
 // The connection target plus token every test reuses. The download flow builds `http://localhost:8581/api/platform-tools/hb-service/log/download?colour=yes`.
 const TARGET = { host: "localhost", port: 8581, token: "raw.jwt" };
-
-// A captured fetch call: the request init and the URL string the download flow produced.
-interface FetchCall {
-
-  init: RequestInit | undefined;
-  url: string;
-}
-
-// Build an injected `fetch` double that captures the request and returns a caller-supplied response. The captured call lets a test assert the URL, the colour=yes
-// query, and the Authorization header.
-function fakeFetch(responder: (url: string, init: RequestInit | undefined) => Response): { calls: FetchCall[]; fetch: typeof fetch } {
-
-  const calls: FetchCall[] = [];
-
-  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-
-    const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
-
-    calls.push({ init, url });
-
-    return responder(url, init);
-  }) as typeof fetch;
-
-  return { calls, fetch: fetchImpl };
-}
 
 // Build a 200 `Response` whose body streams the supplied text chunks one at a time, so a test can exercise the splitter's cross-chunk reassembly. The chunks are encoded
 // to bytes (the production code decodes with a streaming `TextDecoder`), so a multi-byte sequence can be split across chunk boundaries in a test that wants to.
@@ -187,7 +162,7 @@ describe("downloadLog - request shape", () => {
 
   test("requests colour=yes with the bearer token", async () => {
 
-    const { calls, fetch } = fakeFetch(() => streamingResponse([ "one\n", "two\n" ]));
+    const { calls, fetch } = recordingFetch(() => streamingResponse([ "one\n", "two\n" ]));
 
     await collect({ ...TARGET, fetch });
 
@@ -202,7 +177,7 @@ describe("downloadLog - request shape", () => {
 
   test("builds an https URL when tls is set", async () => {
 
-    const { calls, fetch } = fakeFetch(() => streamingResponse(["x\n"]));
+    const { calls, fetch } = recordingFetch(() => streamingResponse(["x\n"]));
 
     await collect({ ...TARGET, fetch, tls: true });
 
@@ -218,7 +193,7 @@ describe("downloadLog - streaming and splitting", () => {
   test("yields each complete line across chunk boundaries", async () => {
 
     // The first line is split across the first two chunks; the splitter must reassemble it.
-    const { fetch } = fakeFetch(() => streamingResponse([ "[ts] [Plug] hel", "lo world\n[ts] [Plug] second\n" ]));
+    const { fetch } = recordingFetch(() => streamingResponse([ "[ts] [Plug] hel", "lo world\n[ts] [Plug] second\n" ]));
 
     const lines = await collect({ ...TARGET, fetch });
 
@@ -228,7 +203,7 @@ describe("downloadLog - streaming and splitting", () => {
   test("flushes the final unterminated line at end-of-response", async () => {
 
     // The last line has no trailing newline. Without the end-of-response flush it would be stranded in the splitter's carry; the flush must surface it.
-    const { fetch } = fakeFetch(() => streamingResponse([ "first\n", "last line with no newline" ]));
+    const { fetch } = recordingFetch(() => streamingResponse([ "first\n", "last line with no newline" ]));
 
     const lines = await collect({ ...TARGET, fetch });
 
@@ -238,7 +213,7 @@ describe("downloadLog - streaming and splitting", () => {
   test("flushes a final line that ends exactly on a lone line-feed", async () => {
 
     // A chunk ending on a lone line-feed is withheld by the splitter pending a possible cross-chunk pair. At end-of-response the flush must surface that final line.
-    const { fetch } = fakeFetch(() => streamingResponse(["alpha\nbeta\n"]));
+    const { fetch } = recordingFetch(() => streamingResponse(["alpha\nbeta\n"]));
 
     const lines = await collect({ ...TARGET, fetch });
 
@@ -262,7 +237,7 @@ describe("downloadLog - streaming and splitting", () => {
       }
     });
 
-    const { fetch } = fakeFetch(() => new Response(body, { status: 200 }));
+    const { fetch } = recordingFetch(() => new Response(body, { status: 200 }));
 
     const lines = await collect({ ...TARGET, fetch });
 
@@ -271,7 +246,7 @@ describe("downloadLog - streaming and splitting", () => {
 
   test("yields nothing for an empty body", async () => {
 
-    const { fetch } = fakeFetch(() => streamingResponse([]));
+    const { fetch } = recordingFetch(() => streamingResponse([]));
 
     const lines = await collect({ ...TARGET, fetch });
 
@@ -283,7 +258,7 @@ describe("downloadLog - error mapping", () => {
 
   test("maps a 400 to a clear 'no log file on disk; use --follow' error", async () => {
 
-    const { fetch } = fakeFetch(() => new Response("Bad Request", { status: 400 }));
+    const { fetch } = recordingFetch(() => new Response("Bad Request", { status: 400 }));
 
     await assert.rejects(collect({ ...TARGET, fetch }), (error: unknown) => {
 
@@ -297,7 +272,7 @@ describe("downloadLog - error mapping", () => {
 
   test("surfaces a non-400 error status with the status code", async () => {
 
-    const { fetch } = fakeFetch(() => new Response("Server Error", { status: 503, statusText: "Service Unavailable" }));
+    const { fetch } = recordingFetch(() => new Response("Server Error", { status: 503, statusText: "Service Unavailable" }));
 
     await assert.rejects(collect({ ...TARGET, fetch }), (error: unknown) => {
 
@@ -311,7 +286,7 @@ describe("downloadLog - error mapping", () => {
   test("surfaces a null body as an error", async () => {
 
     // A 204 (No Content) is a 2xx-ok response with no body: `new Response(null, { status: 204 })` yields a null `.body`, which must surface as an error.
-    const { fetch } = fakeFetch(() => new Response(null, { status: 204 }));
+    const { fetch } = recordingFetch(() => new Response(null, { status: 204 }));
 
     await assert.rejects(collect({ ...TARGET, fetch }), (error: unknown) => {
 

@@ -7,13 +7,14 @@ import { DOWNLOAD_STALL_MS, SEED_QUIESCENCE_MS, SEED_SETTLE_MS } from "./setting
 import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts";
 import { TestLogSocket, TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
 import { USAGE, runHblog } from "./cli-run.ts";
+import { deferredUiServer, logResponse, openDownload, uiServer } from "./rest.helpers.ts";
 import { describe, test } from "node:test";
 import { drainClock, errnoError, settle, settleUntil } from "../testing/index.ts";
 import { LogSocket } from "./socket.ts";
+import type { RecordingFetch } from "./rest.helpers.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { openDownload } from "./rest.helpers.ts";
 import { readFile } from "node:fs/promises";
 
 // A capturing CliStream double. Records every chunk written so a test asserts the exact output, exposes a settable `isTTY`, and supports `on`/`off` hooks for the stdout
@@ -139,42 +140,22 @@ class CaptureStream implements CliStream {
 // Build a `fetch` double. Auth endpoints (login/noauth) answer with a token; the REST log download answers with the supplied lines, rejects with `downloadError`
 // when one is provided (to exercise the failure and redaction paths), or, given `quietAfter`, delivers that text and then goes quiet, the way a server that stops
 // partway through does. Every requested URL is captured for assertions on which channel/credential ran.
-function fakeFetch(options: { downloadError?: Error; lines?: readonly string[]; quietAfter?: string } = {}): { calls: string[]; fetch: typeof fetch } {
+function fakeFetch(options: { downloadError?: Error; lines?: readonly string[]; quietAfter?: string } = {}): RecordingFetch {
 
-  const calls: string[] = [];
-  const lines = options.lines ?? [];
+  return uiServer(async (init): Promise<Response> => {
 
-  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    if(options.downloadError !== undefined) {
 
-    const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
-
-    calls.push(url);
-
-    if(url.includes("/log/download")) {
-
-      if(options.downloadError !== undefined) {
-
-        throw options.downloadError;
-      }
-
-      if(options.quietAfter !== undefined) {
-
-        return openDownload({ chunks: [options.quietAfter], signal: init?.signal ?? undefined }).response;
-      }
-
-      return new Response(lines.map((line) => line + "\n").join(""), { status: 200 });
+      throw options.downloadError;
     }
 
-    // An auth endpoint: answer with a token body. Bracket-notation keys keep the snake_case wire names from tripping the camelcase lint rule in test source.
-    const body: Record<string, unknown> = {};
+    if(options.quietAfter !== undefined) {
 
-    body["access_token"] = "fresh.jwt";
-    body["token_type"] = "Bearer";
+      return openDownload({ chunks: [options.quietAfter], signal: init?.signal ?? undefined }).response;
+    }
 
-    return new Response(JSON.stringify(body), { status: 200 });
-  }) as typeof fetch;
-
-  return { calls, fetch: fetchImpl };
+    return logResponse(options.lines ?? []);
+  });
 }
 
 // Build a LogSocketFactory that constructs a REAL LogSocket driven by an injected WebSocket double, with a near-zero backoff. Unlike the TestLogSocket double (which has
@@ -368,8 +349,8 @@ describe("runHblog - request and credential mapping (history channel)", () => {
 
     assert.equal(code, 0, "a completed history retrieval must exit 0");
     assert.equal(factory.createCalls.length, 0, "history mode must not construct a socket");
-    assert.ok(calls.some((url) => url.includes("/log/download")), "history mode must hit the REST download endpoint");
-    assert.equal(calls.filter((url) => url.includes("/api/auth")).length, 0, "a token credential must not hit any auth endpoint");
+    assert.ok(calls.some((call) => call.url.includes("/log/download")), "history mode must hit the REST download endpoint");
+    assert.equal(calls.filter((call) => call.url.includes("/api/auth")).length, 0, "a token credential must not hit any auth endpoint");
     assert.equal(stdout.text.split("\n").filter((line) => line.length > 0).length, 3, "all three history lines must be written to stdout");
   });
 
@@ -381,7 +362,7 @@ describe("runHblog - request and credential mapping (history channel)", () => {
     const code = await runHblog(options);
 
     assert.equal(code, 0);
-    assert.ok(calls.some((url) => url.includes("/api/auth/login")), "a password credential must authenticate via the login endpoint");
+    assert.ok(calls.some((call) => call.url.includes("/api/auth/login")), "a password credential must authenticate via the login endpoint");
   });
 
   test("an empty environment token yields to the config file's credential pair, which authenticates via the login endpoint", async () => {
@@ -393,7 +374,7 @@ describe("runHblog - request and credential mapping (history channel)", () => {
     const code = await runHblog(options);
 
     assert.equal(code, 0);
-    assert.ok(calls.some((url) => url.includes("/api/auth/login")),
+    assert.ok(calls.some((call) => call.url.includes("/api/auth/login")),
       "the file's credential pair must reach the login endpoint once the empty environment token yields");
   });
 
@@ -409,7 +390,7 @@ describe("runHblog - request and credential mapping (history channel)", () => {
 
       const code = await runHblog(options);
 
-      assert.ok(calls.some((url) => url.includes("/api/auth/noauth")), "with every credential field yielding, the run must take the no-auth arm");
+      assert.ok(calls.some((call) => call.url.includes("/api/auth/noauth")), "with every credential field yielding, the run must take the no-auth arm");
       assert.equal(code, 0, "an empty " + variable + " must not be refused as supplied credential material");
     });
   }
@@ -448,7 +429,7 @@ describe("runHblog - request and credential mapping (history channel)", () => {
     const code = await runHblog(options);
 
     assert.equal(code, 0);
-    assert.ok(calls.some((url) => url.includes("/api/auth/noauth")), "no credential must use the noauth endpoint");
+    assert.ok(calls.some((call) => call.url.includes("/api/auth/noauth")), "no credential must use the noauth endpoint");
   });
 
   test("a --port value reaches the resolved request", async () => {
@@ -459,7 +440,7 @@ describe("runHblog - request and credential mapping (history channel)", () => {
     const code = await runHblog(options);
 
     assert.equal(code, 0);
-    assert.ok(calls.some((url) => url.includes(":9999")), "a supplied --port must reach the resolved request");
+    assert.ok(calls.some((call) => call.url.includes(":9999")), "a supplied --port must reach the resolved request");
   });
 
   test("a numeric -n retains only the most recent N lines", async () => {
@@ -534,7 +515,7 @@ describe("runHblog - request and credential mapping (history channel)", () => {
 
     assert.equal(code, 0, "a clean SIGINT-terminated follow must exit 0");
     assert.ok(wsFactory.sockets.length >= 1, "--follow must construct a socket");
-    assert.equal(calls.filter((url) => url.includes("/log/download")).length, 0, "--follow must not hit the REST download endpoint");
+    assert.equal(calls.filter((call) => call.url.includes("/log/download")).length, 0, "--follow must not hit the REST download endpoint");
   });
 });
 
@@ -914,35 +895,6 @@ describe("runHblog - backpressure", () => {
   });
 });
 
-// Build a `fetch` double whose REST log-download resolves only when the returned `resolveHistory` is invoked, mirroring client.test.ts. The deferred history lets a
-// follow-history test buffer the socket's full seed before history finishes, making the socket-first stitch ordering deterministic rather than timing-dependent.
-function deferredFetch(historyLines: readonly string[]): { fetch: typeof fetch; resolveHistory: () => void } {
-
-  const gate: PromiseWithResolvers<void> = Promise.withResolvers();
-
-  const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
-
-    const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
-
-    if(url.includes("/log/download")) {
-
-      await gate.promise;
-
-      return new Response(historyLines.map((line) => line + "\n").join(""), { status: 200 });
-    }
-
-    // An auth endpoint: answer with a token. Bracket-notation keys keep the snake_case wire names from tripping the camelcase lint rule in test source.
-    const body: Record<string, unknown> = {};
-
-    body["access_token"] = "fresh.jwt";
-    body["token_type"] = "Bearer";
-
-    return new Response(JSON.stringify(body), { status: 200 });
-  }) as typeof fetch;
-
-  return { fetch: fetchImpl, resolveHistory: (): void => gate.resolve() };
-}
-
 describe("runHblog - time range", () => {
 
   test("--help lists the Time range section with --since and --until", async () => {
@@ -1043,7 +995,7 @@ describe("runHblog - time range", () => {
       return socket;
     } };
 
-    const { fetch, resolveHistory } = deferredFetch(history);
+    const { fetch, resolveHistory } = deferredUiServer(history);
     const stdout = new CaptureStream();
     const { options } = makeOptions({ argv: [ "--token", "abc.jwt", "--since", "1h", "--follow" ], clock: new TestClock(now), fetch, socketFactory, stdout });
 

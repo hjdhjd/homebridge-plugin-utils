@@ -7,101 +7,20 @@ import type { LogSocketFactory, LogSocketInit, LogSocketLike } from "./socket.ts
 import { SEED_QUIESCENCE_MS, SEED_SETTLE_MS, SEED_WINDOW_MAX_MS } from "./settings.ts";
 import { TestLogSocketFactory, TestWebSocketFactory } from "./socket-double.ts";
 import { assertNoUnhandledRejections, settle, settleUntil, silentLog, waitUntil } from "../testing/index.ts";
+import { deferredUiServer, logResponse, openDownload, requestUrl, uiServer } from "./rest.helpers.ts";
 import { describe, test } from "node:test";
 import { HomebridgeLogClient } from "./client.ts";
 import type { LogRecord } from "./types.ts";
 import { LogSocket } from "./socket.ts";
+import type { RecordingFetch } from "./rest.helpers.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
-import { openDownload } from "./rest.helpers.ts";
 
-// A captured fetch call: the URL the auth or REST transport produced. Enough to assert which transport ran.
-interface FetchCall {
+// A UI server double whose log download answers at once with `historyLines`. The captured calls let a test assert whether the REST channel was exercised at all.
+function immediateFetch(historyLines: readonly string[] = []): RecordingFetch {
 
-  url: string;
-}
-
-// Build a server-shaped auth success body carrying an access token, assembled with bracket-notation keys so the snake_case wire field names do not trip the camelcase
-// lint rule in test source (the production auth code reads these same fields via string index access for the same reason).
-function tokenBody(token: string): Record<string, unknown> {
-
-  const body: Record<string, unknown> = {};
-
-  body["access_token"] = token;
-  body["expires_in"] = 28800;
-  body["token_type"] = "Bearer";
-
-  return body;
-}
-
-// Build a 200 `Response` whose body streams the supplied raw log lines (terminated, so the splitter yields each as a complete line). Used as the REST history payload.
-function logResponse(lines: readonly string[]): Response {
-
-  const encoder = new TextEncoder();
-  const text = lines.map((line) => line + "\n").join("");
-
-  const body = new ReadableStream<Uint8Array>({
-
-    start(controller): void {
-
-      controller.enqueue(encoder.encode(text));
-      controller.close();
-    }
-  });
-
-  return new Response(body, { status: 200 });
-}
-
-// Build a `fetch` double whose REST log-download responses resolve only when the returned `resolveHistory` is invoked. Auth endpoints (login/noauth) resolve
-// immediately with a token so the token-provider closure never blocks. The deferred history lets a follow-history test buffer the socket's full seed before history
-// finishes, making the socket-first ordering deterministic rather than timing-dependent.
-function deferredFetch(historyLines: readonly string[]): { calls: FetchCall[]; fetch: typeof fetch; resolveHistory: () => void } {
-
-  const calls: FetchCall[] = [];
-  const gate: PromiseWithResolvers<void> = Promise.withResolvers();
-
-  const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
-
-    const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
-
-    calls.push({ url });
-
-    // The REST history download waits behind the gate so a test controls when it finishes; auth endpoints answer immediately with a token.
-    if(url.includes("/log/download")) {
-
-      await gate.promise;
-
-      return logResponse(historyLines);
-    }
-
-    return new Response(JSON.stringify(tokenBody("fresh.jwt")), { status: 200 });
-  }) as typeof fetch;
-
-  return { calls, fetch: fetchImpl, resolveHistory: (): void => gate.resolve() };
-}
-
-// Build a `fetch` double whose REST log-download responds immediately (no gate). Auth endpoints answer with a token. The captured calls let a test assert whether
-// the REST channel was exercised at all.
-function immediateFetch(historyLines: readonly string[] = []): { calls: FetchCall[]; fetch: typeof fetch } {
-
-  const calls: FetchCall[] = [];
-
-  const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
-
-    const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
-
-    calls.push({ url });
-
-    if(url.includes("/log/download")) {
-
-      return logResponse(historyLines);
-    }
-
-    return new Response(JSON.stringify(tokenBody("fresh.jwt")), { status: 200 });
-  }) as typeof fetch;
-
-  return { calls, fetch: fetchImpl };
+  return uiServer(() => logResponse(historyLines));
 }
 
 // Collect up to `limit` records from a stream, breaking once the limit is reached (which disposes the stream's per-call socket via the generator's `finally`). When
@@ -232,7 +151,7 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
     const { TestLogSocket } = await import("./socket-double.ts");
     const preset = new TestLogSocket({ lines: seedLines });
     const factory = new TestLogSocketFactory(preset);
-    const { fetch, resolveHistory } = deferredFetch(historyLines);
+    const { fetch, resolveHistory } = deferredUiServer(historyLines);
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
@@ -283,7 +202,7 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
     };
 
     const factory: LogSocketFactory = { create: (): LogSocketLike => socket };
-    const { fetch, resolveHistory } = deferredFetch([ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C" ]);
+    const { fetch, resolveHistory } = deferredUiServer([ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C" ]);
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
@@ -319,7 +238,7 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
     const { TestLogSocket } = await import("./socket-double.ts");
     const preset = new TestLogSocket({ lines: seedLines });
     const factory = new TestLogSocketFactory(preset);
-    const { fetch, resolveHistory } = deferredFetch(historyLines);
+    const { fetch, resolveHistory } = deferredUiServer(historyLines);
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
@@ -359,7 +278,7 @@ describe("HomebridgeLogClient - follow-history socket-first stitch", () => {
     };
 
     const factory: LogSocketFactory = { create: (): LogSocketLike => socket };
-    const { fetch, resolveHistory } = deferredFetch([ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C" ]);
+    const { fetch, resolveHistory } = deferredUiServer([ "[6/29/2026, 12:00:00 PM] [P] A", "[6/29/2026, 12:00:00 PM] [P] B", "[6/29/2026, 12:00:00 PM] [P] C" ]);
 
     await using client = new HomebridgeLogClient({ credentials: { kind: "token", token: "raw.jwt" }, fetch, log: silentLog(), socketFactory: factory });
 
@@ -499,7 +418,7 @@ describe("HomebridgeLogClient - token lifecycle", () => {
 
     const fetchImpl = ((input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 
-      const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
+      const url = requestUrl(input);
       const signal = init?.signal;
 
       logins.push(url);
@@ -718,19 +637,7 @@ function windowFetch(options: { gate?: Promise<void>; historyLines?: readonly st
   let downloadSignal: AbortSignal | undefined;
   let started = false;
 
-  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-
-    const url = (typeof input === "string") ? input : (input instanceof URL) ? input.href : input.url;
-
-    if(!url.includes("/log/download")) {
-
-      const body: Record<string, unknown> = {};
-
-      body["access_token"] = "fresh.jwt";
-      body["token_type"] = "Bearer";
-
-      return new Response(JSON.stringify(body), { status: 200 });
-    }
+  const { fetch: fetchImpl } = uiServer(async (init): Promise<Response> => {
 
     started = true;
     downloadSignal = init?.signal ?? undefined;
@@ -755,7 +662,7 @@ function windowFetch(options: { gate?: Promise<void>; historyLines?: readonly st
     }
 
     return download.response;
-  }) as typeof fetch;
+  });
 
   return { downloadAbortReason: (): unknown => (downloadSignal?.aborted === true) ? downloadSignal.reason : undefined, downloadStarted: (): boolean => started,
     fetch: fetchImpl };
@@ -913,7 +820,8 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     const clock = new TestClock(WINDOW_HORIZON);
 
     // The download fails before any seed line, so the gate enters Phase 2; the fed seed line (11:00) does NOT reach back to `since` (10:00), so the seed cannot cover
-    // the deep window either. With neither source able to serve, Phase 2 surfaces the download's actionable error rather than serving a partial window.
+    // the deep window either. With neither source able to serve, Phase 2 surfaces the failure rather than serving a partial window: it names how far back the stream
+    // reaches, carrying the download's actionable error as its cause.
     const socket = new ScriptedSocket([]);
     const download = windowFetch({ mode: "reject" });
 
@@ -924,7 +832,9 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
     const rejection = assert.rejects(collect(stream), (error: unknown) => {
 
       assert.ok(error instanceof Error);
-      assert.match(error.message, /no log file/i, "the surfaced error must be the download's actionable message");
+      assert.equal(error.message, "The live stream reaches back only to 6/29/2026, 11:00:00 AM, and the whole-file download that would serve earlier lines failed");
+      assert.ok(error.cause instanceof Error);
+      assert.match(error.cause.message, /no log file/i, "the download's actionable message must be carried as the cause");
 
       return true;
     });
@@ -1154,7 +1064,7 @@ describe("HomebridgeLogClient - window channel (hedged seed)", () => {
 
       await using deepClient = windowClient(deepDownload.fetch, deepSocket, clock);
 
-      await assert.rejects(collect(deepClient.tail({ follow: false, mode: "window", since: epochAt(10, 0), until: null })), /no log file/i);
+      await assert.rejects(collect(deepClient.tail({ follow: false, mode: "window", since: epochAt(10, 0), until: null })), /reaches back only to/);
     });
   });
 

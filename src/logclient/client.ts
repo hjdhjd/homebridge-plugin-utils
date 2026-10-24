@@ -463,31 +463,13 @@ export class HomebridgeLogClient implements AsyncDisposable {
       // A count is covered once this line brings the stream to `quantity`. The recent seed can never cover all of history, so that request has coverage ruled out.
       const decide = (quantity === "all") ? null : (): SeedVerdict => (((buffered.length + 1) >= quantity) ? "covers" : "undecided");
 
-      // A count the stream fell short of rests on the download alone, so a failed download is reported with how many of the most recent lines the stream did hold -
-      // the count a caller can still ask for without the download. An abort is the caller's own ending, a request for everything has no smaller count to offer, and a
-      // stream that held nothing offers no count at all, so each of those surfaces the download's error untouched.
-      const shortfall = (error: unknown): unknown => {
-
-        if(callSignal.aborted || (quantity === "all") || (buffered.length === 0)) {
-
-          return error;
-        }
-
-        return new Error("Only the most recent " + buffered.length.toString() + ((buffered.length === 1) ? " line is" : " lines are") +
-          " available from the live stream, and the whole-file download that would serve more failed", { cause: error });
-      };
+      // What the stream held, for a failed download: how many of the most recent lines it carried - the count a caller can still ask for without the download. A request
+      // for everything has no smaller count to offer, and a stream that held nothing offers none at all.
+      const shortfall = (): Nullable<string> => ((quantity === "all") || (buffered.length === 0)) ? null : "Only the most recent " + buffered.length.toString() +
+        ((buffered.length === 1) ? " line is" : " lines are") + " available from the live stream, and the whole-file download that would serve more failed";
 
       const hedge = this.#startHedge(quantity, callSignal);
-      let gate: HedgedSeedGateResult;
-
-      try {
-
-        gate = await this.#hedgedSeedGate({ buffered, decide, hedge, horizonNow, liveIterator });
-      } catch(error: unknown) {
-
-        throw shortfall(error);
-      }
-
+      const gate = await this.#awaitDownload(this.#hedgedSeedGate({ buffered, decide, hedge, horizonNow, liveIterator }), callSignal, shortfall);
       let { liveDone, pendingNext } = gate;
 
       if(gate.served === "seed") {
@@ -529,15 +511,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
         yield* (quantity === "all") ? buffered : buffered.slice(Math.max(0, buffered.length - quantity));
       } else {
 
-        let history: LogRecord[];
-
-        try {
-
-          history = await hedge.download;
-        } catch(error: unknown) {
-
-          throw shortfall(error);
-        }
+        const history = await this.#awaitDownload(hedge.download, callSignal, shortfall);
 
         // A one-shot is the download's most recent lines alone, exactly as the REST channel serves them; a follow joins them to the buffered stream at their overlap,
         // which never drops a distinct live line and may emit a bounded run of duplicates or a visible gap marker when no overlap is found.
@@ -624,8 +598,17 @@ export class HomebridgeLogClient implements AsyncDisposable {
       return (seedOldest < since) ? "covers" : "cannot";
     };
 
+    // What the stream held, for a failed download: how far back it reaches, read from the oldest line carrying a parseable timestamp - the earliest a window can open
+    // without the download. A stream that delivered no such line offers no reach at all.
+    const shortfall = (): Nullable<string> => {
+
+      const oldest = bufferedSeed.find((record) => (record.timestamp !== null) && (parseLogTimestamp(record.timestamp) !== null))?.timestamp ?? null;
+
+      return (oldest === null) ? null : "The live stream reaches back only to " + oldest + ", and the whole-file download that would serve earlier lines failed";
+    };
+
     const hedge = this.#startHedge("all", callSignal);
-    const gate = await this.#hedgedSeedGate({ buffered: bufferedSeed, decide, hedge, horizonNow, liveIterator });
+    const gate = await this.#awaitDownload(this.#hedgedSeedGate({ buffered: bufferedSeed, decide, hedge, horizonNow, liveIterator }), callSignal, shortfall);
 
     if(gate.served === "seed") {
 
@@ -663,7 +646,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
     // No-cover fallback: the seed cannot cover the window (or unbounded-below, or the download already completed). Await the download - if it errored, its actionable
     // message surfaces here - then join it with the buffered seed at their overlap and serve. `stitchLive` never drops a distinct live line.
-    const history = await hedge.download;
+    const history = await this.#awaitDownload(hedge.download, callSignal, shortfall);
 
     for(const record of stitchLive(history, bufferedSeed)) {
 
@@ -683,6 +666,22 @@ export class HomebridgeLogClient implements AsyncDisposable {
         // eslint-disable-next-line no-await-in-loop
         result = await liveIterator.next();
       }
+    }
+  }
+
+  // Await a seed-served channel's gate or its download, each of which fails only when the download does. The request may rest on the download alone, so a failure is
+  // reported with what the stream did hold, as `shortfall` words it, carrying the download's error as its cause. An abort is the caller's own ending, and a stream with
+  // nothing to offer has no description, so each of those surfaces the download's error untouched.
+  async #awaitDownload<T>(work: Promise<T>, callSignal: AbortSignal, shortfall: () => Nullable<string>): Promise<T> {
+
+    try {
+
+      return await work;
+    } catch(error: unknown) {
+
+      const description = callSignal.aborted ? null : shortfall();
+
+      throw (description === null) ? error : new Error(description, { cause: error });
     }
   }
 
@@ -822,8 +821,11 @@ export class HomebridgeLogClient implements AsyncDisposable {
         const record = parseLogLine(result.value);
         const verdict = decide(record);
 
-        // The seed cannot cover the request and the download failed - surface the actionable error.
+        // The seed cannot cover the request and the download failed - surface the actionable error. The deciding line is kept, without issuing another pull, so the
+        // error can say what the stream held.
         if(verdict === "cannot") {
+
+          buffered.push(record);
 
           throw latchedError;
         }

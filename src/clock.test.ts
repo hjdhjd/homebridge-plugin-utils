@@ -13,9 +13,11 @@
  * delays, the unref it accepts and ignores because a virtual timeline has no process to hold open, the window past the ceiling that is an ordinary entry on a
  * timeline with none, the infinite span that registers no entry, and the NaN span that comes due a millisecond out so the timeline stays numeric), plus the
  * cancellable deadline armDeadline builds on a clock's own timer (its reason a consumer cannot tell apart from the platform's, its release on disposal on each
- * clock, its span carried past the ceiling, its infinite span that never aborts, and its unreferenced timer that lets a process exit with a deadline still armed).
+ * clock, its span carried past the ceiling, its infinite span that never aborts, and its unreferenced timer that lets a process exit with a deadline still armed),
+ * plus the macrotask yield beside the contract (it resolves only once the nextTick and microtask queues have drained, and mock timers replacing setImmediate and
+ * setTimeout cannot park it).
  */
-import { TIMER_DELAY_MAX_MS, armDeadline, systemClock } from "./clock.ts";
+import { TIMER_DELAY_MAX_MS, armDeadline, systemClock, yieldMacrotask } from "./clock.ts";
 import { describe, test } from "node:test";
 import { makeScratchRoot, settle, waitUntil } from "./testing/index.ts";
 import type { Clock } from "./clock.ts";
@@ -1627,5 +1629,53 @@ describe("armDeadline - a cancellable deadline on a clock's own timer", () => {
     assert.equal(released.stdout, "released\n", "having armed and released it first; stderr: " + released.stderr);
     assert.equal(armed.code, 0, "the child that left its deadline armed must reach its own exit as well; stderr: " + armed.stderr);
     assert.equal(armed.stdout, "armed\n", "having armed it first; stderr: " + armed.stderr);
+  });
+});
+
+describe("yieldMacrotask - the yield beside the clock contract", () => {
+
+  test("resolves only once the nextTick and microtask queues have drained, a tick queued from inside a microtask included", async () => {
+
+    // This is the order a corked stream depends on: its uncork is a tick queued while a write runs, and the caller's continuation is a chain of microtasks. Each
+    // queue is fed here, the tick queue from inside the microtask queue as well, and the yield must resolve behind every entry.
+    const order: string[] = [];
+
+    process.nextTick(() => {
+
+      order.push("tick");
+    });
+
+    queueMicrotask(() => {
+
+      order.push("microtask");
+
+      process.nextTick(() => {
+
+        order.push("tick from a microtask");
+      });
+    });
+
+    await yieldMacrotask();
+
+    order.push("yield");
+
+    assert.equal(order.length, 4, "every entry queued ahead of the yield must have run");
+    assert.equal(order.at(-1), "yield", "and the yield must resolve behind all of them");
+  });
+
+  test("reaches the queue while mock timers replace setImmediate and setTimeout, so no harness can park it", async (t) => {
+
+    // Real immediates, one queued behind the other, are armed before the mock takes the globals, so the row ends on its own whichever way the yield goes rather
+    // than waiting out the runner's timeout: a parked yield loses the race to them, while a live one resolves on the turn the first of them runs.
+    const realImmediate = globalThis.setImmediate;
+    const parked = new Promise<string>((resolve) => {
+
+      realImmediate(() => realImmediate(() => resolve("parked")));
+    });
+
+    t.mock.timers.enable({ apis: [ "setImmediate", "setTimeout" ] });
+
+    assert.equal(await Promise.race([ yieldMacrotask().then(() => "yielded"), parked ]), "yielded",
+      "the yield is bound to the platform's own setImmediate, so a harness that replaces the timers afterwards must not park it");
   });
 });

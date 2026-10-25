@@ -28,7 +28,6 @@
  *
  * @module
  */
-import { setTimeout as delay, setImmediate as flushImmediate } from "node:timers/promises";
 import { hasErrorCode, noOpLog } from "../util.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import type { HomebridgePluginLogging } from "../util.ts";
@@ -36,10 +35,12 @@ import type { Server } from "node:net";
 import type { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import { format } from "node:util";
 import { join } from "node:path";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
+import { yieldMacrotask } from "../clock.ts";
 
 /* The shipped doubles, aggregated from their physical homes, and the guard machinery and type-level assertion helpers that live in this directory alongside the
  * helpers below. Each module is re-exported wholesale rather than symbol-by-symbol, because the module on the other side already curates what it publishes and a
@@ -444,10 +445,10 @@ export async function waitUntil(predicate: () => boolean, { description, pollMs 
 /**
  * Yield to the macrotask queue `turns` times, so the continuations a test has already released have run by the time it looks at what they did.
  *
- * Each turn yields one macrotask, which drains the entire microtask cascade first: a chain of promise continuations - an attempt's rejection, the checks that follow it,
- * the clock registration those checks arm - comes to rest before the caller looks. One turn is the default, and it is enough for any cascade that stays in promise-land;
- * a caller names more turns only when its subject's cascade crosses more than one macrotask boundary of its own, a handshake whose steps each schedule the next being
- * the usual case. A `turns` of zero yields nothing at all.
+ * Each turn is one {@link clock!yieldMacrotask | yieldMacrotask}, which drains the entire microtask cascade first: a chain of promise continuations - an attempt's
+ * rejection, the checks that follow it, the clock registration those checks arm - comes to rest before the caller looks. One turn is the default, and it is enough for
+ * any cascade that stays in promise-land; a caller names more turns only when its subject's cascade crosses more than one macrotask boundary of its own, a handshake
+ * whose steps each schedule the next being the usual case. A `turns` of zero yields nothing at all.
  *
  * @param turns - How many macrotask boundaries to cross. Defaults to 1.
  *
@@ -468,7 +469,7 @@ export async function settle(turns = 1): Promise<void> {
 
     // The yield is the whole point of the loop, so its awaits cannot be batched...each turn has to reach the queue before the next one is crossed.
     // eslint-disable-next-line no-await-in-loop
-    await flushImmediate();
+    await yieldMacrotask();
   }
 }
 

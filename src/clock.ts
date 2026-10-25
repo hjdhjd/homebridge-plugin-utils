@@ -31,11 +31,14 @@
  * rejecting on the production clock with the primitive's own `AbortError`, and nothing holds the process open on its account. The contract states each rule, so a
  * consumer states the delay it means and never clamps for the platform.
  *
+ * Beside the contract sits {@link yieldMacrotask}, a yield to the event loop's next turn. It measures no time, so it is no member of the contract and no clock can
+ * hold it back.
+ *
  * This module imports `node:timers/promises` and is therefore Node-only (not browser-safe), like `util.ts`. A browser-targeted consumer cannot resolve that import.
  *
  * @module
  */
-import timersPromises from "node:timers/promises";
+import timersPromises, { setImmediate as platformImmediate } from "node:timers/promises";
 
 /**
  * The injectable clock contract: the platform time primitives time-dependent code reads. A consumer holds a `Clock` rather than calling `Date.now()` /
@@ -144,10 +147,11 @@ function neverElapses(ms: number): boolean {
 
 /* Arm one platform timer - a one-shot or an interval - and apply the process-hold policy to it. Every timer the production clock arms goes through this one site, the
  * chain's hops included, so the policy a consumer stated reaches every hop. The bare `setTimeout` / `setInterval` identifiers resolve to the GLOBAL callback timers,
- * because the module's only `node:timers/promises` import is the module object, and reading them inside the function body rather than binding them at module scope
- * is what keeps them harness-visible: a harness that replaces the globals, `node:test` `mock.timers` among them, observes every timer the production clock arms, hops
- * included, so a consumer suite driving mock timers keeps working through this clock. An `unref` forwards to the handle's own `unref()`, the platform's own
- * mechanism, so the clock states the policy it was handed and adds none of its own.
+ * because the module binds nothing from `node:timers/promises` under their names - only the module object, and the yield's `setImmediate` under a name of its
+ * own - and reading them inside the function body rather than binding them at module scope is what keeps them harness-visible: a harness that replaces the
+ * globals, `node:test` `mock.timers` among them, observes every timer the production clock arms, hops included, so a consumer suite driving mock timers keeps
+ * working through this clock. An `unref` forwards to the handle's own `unref()`, the platform's own mechanism, so the clock states the policy it was handed and
+ * adds none of its own.
  */
 function armPlatformTimer(callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): NodeJS.Timeout {
 
@@ -363,4 +367,32 @@ export function armDeadline(ms: number, { clock = systemClock }: { clock?: Clock
   const timer = clock.schedule((): void => controller.abort(timeoutReason()), ms, { unref: true });
 
   return { [Symbol.dispose]: (): void => timer[Symbol.dispose](), signal: controller.signal };
+}
+
+/**
+ * Yield to the event loop's next turn: resolve once the `process.nextTick` queue and the microtask queue have drained, so work the platform deferred past the
+ * current turn has run by the time the caller continues. A stream that corks its writes and uncorks them on a deferred tick is the case it serves: a caller that
+ * destroys the stream as soon as a write resolves can lose those bytes, and one that yields first hands them to the socket.
+ *
+ * The yield sits beside the {@link Clock} contract rather than on it, because it measures no time. A `TestClock` holds every wait its contract arms until `advance`
+ * crosses it, so a yield routed through `delay` would park a caller that is waiting on the queue rather than on time until a test happened to move the clock, and a
+ * caller whose own deadline on that clock had already passed would hang there. The yield is the platform's `setImmediate`, bound when this module loads, so a
+ * harness that replaces the timer module's members afterwards, `node:test` mock timers among them, cannot park it any more than a clock can.
+ *
+ * @returns A promise that resolves on the event loop's next turn.
+ *
+ * @example
+ *
+ * ```ts
+ * // Let a write the stream has corked reach the socket before the stream is destroyed.
+ * await yieldMacrotask();
+ *
+ * stream.destroy();
+ * ```
+ *
+ * @category Utilities
+ */
+export async function yieldMacrotask(): Promise<void> {
+
+  await platformImmediate();
 }

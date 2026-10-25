@@ -30,6 +30,20 @@
  *   signal aborting after registration releasing its own entry and no other.
  * - Teardown: aborting releasing every registration and turning every later call into a no-op - the drivers' quiet answer among them - the recorded history
  *   surviving, and scope exit disposing through abort.
+ * - The final words: a registered word recorded while the double is live and the end aborting after it; a pre-aborted signal and an aborted double registering
+ *   nothing; the refusals in registration order with the offline refusal; a second end() handed the first one's promise; a handler calling end() handed that same
+ *   promise and run once, the end still aborting after it; an end and a disposal with nothing registered answering an empty array and aborting with the default
+ *   reason; end() after abort() answering an empty array; disposal stating the words; a word pending when an outside abort lands refusing with its reason and the
+ *   abort warning once; an abort, and an unawaited end() followed by an abort, each warning once, while an end, a disposal, and a registration its own signal
+ *   released warn nothing; an invalid grace refused synchronously; a registration made once the end has begun never invoked; a word that never settles refused at the
+ *   grace on a test clock and not before; a parked publish refused at the grace; a connect registration the end or the double's abort cuts short writing the cancelled
+ *   line the client logs too at debug, whatever it fails with once the double has aborted, and one failing on a timeout of its own keeping the error line; the testing
+ *   entry point, imported in a child process, loading neither mqtt nor the client, where importing the client loads mqtt; and the verbs held equal to the client's at
+ *   compile time.
+ * - The end's quiet: a word under the window recorded, issued at once or later; every other publish refused with the end's shutdown error, recording and counting
+ *   nothing and leaving the guarded form only its aborted line; an aborted publish signal and an outside abort still answering with their own reasons and a
+ *   change-gated repeat refused; the drivers running no handler and throwing no miss; a session restored running no registration; and a publish parked before
+ *   the end recording at release.
  * - Unsubscribe: the tuple recorded and every registration on the reconstructed topic released, with the empty-id guard short-circuiting.
  * - The drivers: deliver running every raw handler on the topic with a Buffer, invokeGet republishing on the parent topic and honoring the lever, and invokeSet
  *   passing the lowercased value, the raw value, and the double's signal; a suffix matching no live registration throwing with the registered topics of that kind
@@ -40,27 +54,23 @@
  *   the same tail, while a brace-free tail passes every verb untouched; and the abort and empty-id guards answering ahead of the refusal, so a torn-down double
  *   and an empty id stay no-ops rather than reaching it.
  */
+import type { Assert, Equal } from "./testing/index.ts";
+import { HbpuAbortError, composeSignals, isTimeoutReason } from "./util.ts";
 import { MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC } from "./mqtt-topics.ts";
-import { MqttOfflineError, guardedPublishReason } from "./mqtt-publish.ts";
-import { assertNoUnhandledRejections, capturingLog, errnoError, expectAt, settle } from "./testing/index.ts";
+import { MQTT_CONNECT_HANDLER_CANCELLED, MQTT_UNSAID_WORDS_WARNING, MqttOfflineError, guardedPublishReason } from "./mqtt-publish.ts";
+import { assertNoUnhandledRejections, capturingLog, errnoError, expectAt, linesAt, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
-import type { CapturingLog } from "./testing/index.ts";
-import { HbpuAbortError } from "./util.ts";
+import { format, promisify } from "node:util";
+import type { MqttClient } from "./mqttClient.ts";
+import { TestClock } from "./clock-double.ts";
 import { TestMqttClient } from "./mqtt-client-double.ts";
 import assert from "node:assert/strict";
-import { format } from "node:util";
+import { execFile } from "node:child_process";
 
 // The availability statement the lever's false-to-true edge records, in the shape `published` captures it. Declared once because every row that crosses that edge
 // asserts exactly this entry, and a row spelling it out for itself could disagree with the double and still pass. The tail is bare, since the double prefixes
 // nothing.
 const AVAILABILITY_RECORD = { payload: MQTT_AVAILABILITY_ONLINE, retain: true, topic: MQTT_AVAILABILITY_TOPIC };
-
-// Render every captured line at `level` the way the logger itself would, so a scenario asserts on the finished sentence rather than on the format string and its
-// arguments separately.
-function linesAt(log: CapturingLog, level: "debug" | "error" | "info" | "warn"): string[] {
-
-  return log.entries.filter((entry) => entry.level === level).map((entry) => format(entry.message, ...entry.params));
-}
 
 describe("TestMqttClient - publish", () => {
 
@@ -154,8 +164,8 @@ describe("TestMqttClient - publishGuarded", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
-      assert.deepEqual(linesAt(log, "debug"), []);
+      assert.deepEqual(linesAt(log.entries, "error"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
+      assert.deepEqual(linesAt(log.entries, "debug"), []);
       assert.equal(mqtt.rejectedPublishes, 1);
     });
   });
@@ -172,8 +182,8 @@ describe("TestMqttClient - publishGuarded", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
-      assert.deepEqual(linesAt(log, "error"), []);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish aborted: device1/status."]);
+      assert.deepEqual(linesAt(log.entries, "error"), []);
     });
   });
 
@@ -191,8 +201,8 @@ describe("TestMqttClient - publishGuarded", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
-      assert.deepEqual(linesAt(log, "error"), []);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish aborted: device1/status."]);
+      assert.deepEqual(linesAt(log.entries, "error"), []);
     });
   });
 
@@ -208,8 +218,8 @@ describe("TestMqttClient - publishGuarded", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish dropped while disconnected from the broker: device1/status."]);
-      assert.deepEqual(linesAt(log, "error"), []);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish dropped while disconnected from the broker: device1/status."]);
+      assert.deepEqual(linesAt(log.entries, "error"), []);
       assert.equal(mqtt.rejectedPublishes, 1);
     });
   });
@@ -229,8 +239,8 @@ describe("TestMqttClient - publishGuarded", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
-      assert.deepEqual(linesAt(log, "error"), []);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish aborted: device1/status."]);
+      assert.deepEqual(linesAt(log.entries, "error"), []);
       assert.equal(mqtt.aborted, false);
     });
   });
@@ -248,8 +258,8 @@ describe("TestMqttClient - publishGuarded", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
-      assert.deepEqual(linesAt(log, "error"), []);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish aborted: device1/status."]);
+      assert.deepEqual(linesAt(log.entries, "error"), []);
     });
   });
 
@@ -275,9 +285,9 @@ describe("TestMqttClient - publishGuarded", () => {
       await settle();
 
       // The consumer's own test sees what a consumer's log would see: the fault once, its repeat at debug, and a fault that reads differently in full again.
-      assert.deepEqual(linesAt(log, "error"), [ "Unable to publish to the MQTT topic device1/status: broker refused the message.",
+      assert.deepEqual(linesAt(log.entries, "error"), [ "Unable to publish to the MQTT topic device1/status: broker refused the message.",
         "Unable to publish to the MQTT topic device1/status: broker refused the credentials." ]);
-      assert.deepEqual(linesAt(log, "debug"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
       assert.equal(mqtt.rejectedPublishes, 3);
     });
   });
@@ -305,9 +315,9 @@ describe("TestMqttClient - publishGuarded", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic device1/status: write EPIPE."],
+      assert.deepEqual(linesAt(log.entries, "error"), ["Unable to publish to the MQTT topic device1/status: write EPIPE."],
         "one transport code is one reason, so only the first rejection reaches error level");
-      assert.deepEqual(linesAt(log, "debug"), ["Unable to publish to the MQTT topic device2/status: write EPIPE to a different topic."],
+      assert.deepEqual(linesAt(log.entries, "debug"), ["Unable to publish to the MQTT topic device2/status: write EPIPE to a different topic."],
         "the repeat under the same code is replayed at debug, naming its own topic");
     });
   });
@@ -389,7 +399,7 @@ describe("TestMqttClient - the change gate", () => {
 
       assert.deepEqual(mqtt.published, [], "a refused publish records nothing");
       assert.equal(mqtt.rejectedPublishes, 1);
-      assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
+      assert.deepEqual(linesAt(log.entries, "error"), ["Unable to publish to the MQTT topic device1/status: broker refused the message."]);
 
       mqtt.publishRejection = null;
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
@@ -468,7 +478,7 @@ describe("TestMqttClient - the change gate", () => {
       mqtt.publishGuarded(TOPIC, "on", { ifChanged: true });
       await settle();
 
-      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish aborted: device1/status."]);
       assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: TOPIC }],
         "a torn-down double records nothing, whatever the memory holds");
     });
@@ -785,7 +795,8 @@ describe("TestMqttClient - connection state", () => {
       assert.deepEqual(mqtt.published, [], "a refused publish records nothing");
       assert.equal(mqtt.rejectedPublishes, 1);
 
-      // The client reads its session state before anything else, so the double does too: with both refusals armed the offline one is what a caller sees.
+      // The client reads its session state before anything a broker could answer, so the double does too: with the lever armed while disconnected, the offline
+      // refusal is what a caller sees.
       mqtt.publishRejection = new Error("broker refused the message");
 
       await assert.rejects(mqtt.publish("device1/status", "on"), MqttOfflineError);
@@ -797,8 +808,8 @@ describe("TestMqttClient - connection state", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish dropped while disconnected from the broker: device1/status."]);
-      assert.deepEqual(linesAt(log, "error"), []);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish dropped while disconnected from the broker: device1/status."]);
+      assert.deepEqual(linesAt(log.entries, "error"), []);
 
       mqtt.connected = true;
 
@@ -977,7 +988,7 @@ describe("TestMqttClient - connect notification", () => {
 
       assert.equal(recorded, 1, "the registration between the two faulting ones must still run");
 
-      const failures = linesAt(log, "error");
+      const failures = linesAt(log.entries, "error");
 
       assert.equal(failures.length, 2, "each faulting handler must leave exactly one failure line, observed: " + failures.join(" | "));
       assert.ok(failures.every((line) => line.startsWith("The MQTT connect handler failed: ")),
@@ -1193,8 +1204,8 @@ describe("TestMqttClient - the publish hold", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "debug"), ["MQTT publish aborted: device1/status."]);
-      assert.deepEqual(linesAt(log, "error"), []);
+      assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish aborted: device1/status."]);
+      assert.deepEqual(linesAt(log.entries, "error"), []);
       assert.deepEqual(mqtt.published, []);
     });
   });
@@ -1535,6 +1546,716 @@ describe("TestMqttClient - teardown", () => {
   });
 });
 
+// Register a word that holds the end open until the row releases it, recording the window the end hands it.
+function holdEnd(mqtt: TestMqttClient): { readonly release: () => void; readonly windows: AbortSignal[] } {
+
+  const gate: PromiseWithResolvers<void> = Promise.withResolvers();
+  const windows: AbortSignal[] = [];
+
+  mqtt.onEnd((signal) => {
+
+    windows.push(signal);
+
+    return gate.promise;
+  });
+
+  return { release: () => gate.resolve(), windows };
+}
+
+describe("TestMqttClient - final words", () => {
+
+  /* The graceful end on the double, row for row with the client's own suite wherever the double can observe the row: the word recorded while the double is still
+   * live, the refusals in registration order, the promise a repeat call is handed, the window an outside abort closes, a parked publish refused at the grace, and
+   * the warning an abort logs when it leaves registered words unsaid. The double has no parent signal, so its abort is the one teardown that can warn here.
+   *
+   * The cut-short rows state the line a connect registration reaches when the end or the double's abort cuts it short, the one the client logs too, read from the shared
+   * module, beside the error line it keeps otherwise. The drivers hand a handler's failure to the test, so the connect pass is the one wrapped callback the double
+   * reports.
+   */
+
+  // The rendered warning for one unsaid registration, the line each warning row expects.
+  const UNSAID_ONE = format(MQTT_UNSAID_WORDS_WARNING, 1);
+
+  // The device-scope word every recording row registers, as the double records it.
+  const DEVICE_WORD = { payload: "offline", retain: true, topic: "device1/availability" };
+
+  // Register the device-scope word, publishing under the window the end hands it.
+  function registerDeviceWord(mqtt: TestMqttClient, init: { signal?: AbortSignal } = {}): void {
+
+    mqtt.onEnd((signal) => mqtt.publish(DEVICE_WORD.topic, DEVICE_WORD.payload, { retain: true, signal }), init);
+  }
+
+  test("records a registered word while the double is still live, then aborts, with no refusal", async () => {
+
+    const mqtt = new TestMqttClient();
+    const liveAtRecord: boolean[] = [];
+
+    mqtt.onEnd(async (signal) => {
+
+      await mqtt.publish(DEVICE_WORD.topic, DEVICE_WORD.payload, { retain: true, signal });
+      liveAtRecord.push(!mqtt.aborted);
+    });
+
+    assert.deepEqual(await mqtt.end(), [], "a word stated within the grace must leave no refusal");
+    assert.deepEqual(mqtt.published, [DEVICE_WORD], "the word must be recorded");
+    assert.deepEqual(liveAtRecord, [true], "while the double was still live, ahead of the end's own abort");
+    assert.equal(mqtt.aborted, true, "and the end must then abort the double");
+  });
+
+  test("a handler registered with an already-aborted signal is never invoked, and an aborted double registers nothing", async () => {
+
+    const mqtt = new TestMqttClient();
+    const aborted = new TestMqttClient();
+    const preAborted = new AbortController();
+
+    let invoked = 0;
+
+    preAborted.abort(new HbpuAbortError("shutdown"));
+    mqtt.onEnd(() => {
+
+      invoked++;
+    }, { signal: preAborted.signal });
+
+    aborted.abort();
+    aborted.onEnd(() => {
+
+      invoked++;
+    });
+
+    assert.deepEqual(await mqtt.end(), []);
+    assert.deepEqual(await aborted.end(), []);
+    assert.equal(invoked, 0, "neither registration may be held for an end to invoke");
+  });
+
+  test("refusals return in registration order, with the offline refusal for a word issued while the lever reads disconnected", async () => {
+
+    const mqtt = new TestMqttClient();
+    const thrown = new Error("the second handler threw.");
+    const rejected = new Error("the fourth handler rejected.");
+
+    mqtt.connected = false;
+
+    registerDeviceWord(mqtt);
+    mqtt.onEnd(() => {
+
+      throw thrown;
+    });
+    mqtt.onEnd(() => { /* A word with nothing left to say settles at once. */ });
+    mqtt.onEnd(async () => {
+
+      throw rejected;
+    });
+
+    const [ offline, ...rest ] = await mqtt.end();
+
+    assert.ok(offline instanceof MqttOfflineError, "the word issued with no session must refuse with MqttOfflineError, first, where it was registered");
+    assert.deepEqual(rest, [ thrown, rejected ], "and the other refusals must follow in registration order, with nothing for the word that settled");
+    assert.equal(mqtt.rejectedPublishes, 1, "the refused word is counted like any other refusal");
+  });
+
+  test("a second end() returns the identical promise, while the first is running and after it has finished", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    registerDeviceWord(mqtt);
+
+    const first = mqtt.end();
+
+    assert.equal(mqtt.end(), first, "a call during the end must be handed the first call's promise");
+    assert.deepEqual(await first, []);
+    assert.equal(mqtt.end(), first, "and so must one after it, though the double has aborted by then");
+  });
+
+  test("a handler that calls end() is handed the identical promise and runs once, and the end still completes with its own abort", async () => {
+
+    // The handler keeps what end() hands it and returns its word alone, because a handler awaiting end() would hold the end until the grace. The end has begun
+    // before the first handler runs, so the call inside the handler is a repeat call rather than a second end started inside the first.
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ log });
+    const inner: Promise<unknown[]>[] = [];
+
+    mqtt.onEnd((signal) => {
+
+      inner.push(mqtt.end());
+
+      return mqtt.publish(DEVICE_WORD.topic, DEVICE_WORD.payload, { retain: true, signal });
+    });
+
+    const outer = mqtt.end();
+
+    assert.deepEqual(await outer, [], "the word the handler stated must leave no refusal");
+    assert.equal(inner.length, 1, "the handler must run once");
+    assert.equal(inner[0], outer, "and the call it made must be handed the outer call's promise");
+    assert.deepEqual(mqtt.published, [DEVICE_WORD], "the word must be recorded once");
+    assert.throws(() => mqtt.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" },
+      "and the end must complete with its own abort, the one that provokes the will on the client");
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "which leaves nothing unsaid to warn about");
+  });
+
+  test("with no end registration, end() and disposal each resolve an empty array, abort with the default reason, and warn nothing", async () => {
+
+    const log = capturingLog();
+    const ended = new TestMqttClient({ log });
+    const disposed = new TestMqttClient({ log });
+
+    assert.deepEqual(await ended.end(), [], "an end with nothing registered has nothing to refuse");
+
+    await disposed[Symbol.asyncDispose]();
+
+    for(const mqtt of [ ended, disposed ]) {
+
+      assert.throws(() => mqtt.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" }, "the end must abort with the default reason");
+    }
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "and an abort holding no registration must add no warning");
+  });
+
+  test("end() after abort() resolves an empty array and invokes nothing", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    let invoked = 0;
+
+    mqtt.onEnd(() => {
+
+      invoked++;
+    });
+
+    mqtt.abort();
+
+    assert.deepEqual(await mqtt.end(), []);
+    assert.equal(invoked, 0, "the abort released every registration, so the end has nothing to state");
+  });
+
+  test("disposal states the words before the double aborts", async () => {
+
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ log });
+
+    // Scope-bound ownership is how a consumer holds the double, so the disposal worth proving is the one the scope exit fires.
+    const owned = async (): Promise<void> => {
+
+      await using scopedClient = mqtt;
+
+      registerDeviceWord(scopedClient);
+    };
+
+    await owned();
+
+    assert.deepEqual(mqtt.published, [DEVICE_WORD], "disposal must state the registered word");
+    assert.equal(mqtt.aborted, true, "and then abort the double");
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "with nothing unsaid to warn about, since the abort was the end's own");
+  });
+
+  test("a word still pending when the double is aborted from outside refuses with the abort's reason, the end resolves, and the warning logs once", async () => {
+
+    // The handler waits on a gate before it publishes, as the client's row does, so it is still pending when the abort lands.
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ log });
+    const gate: PromiseWithResolvers<void> = Promise.withResolvers();
+    const reason = new HbpuAbortError("failed");
+
+    mqtt.onEnd(async (signal) => {
+
+      await gate.promise;
+      await mqtt.publish(DEVICE_WORD.topic, DEVICE_WORD.payload, { retain: true, signal });
+    });
+
+    const ending = mqtt.end();
+
+    await settle();
+    mqtt.abort(reason);
+
+    assert.deepEqual(await ending, [reason], "the window closes on the outside abort, so the pending word must refuse with that abort's own reason");
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "the abort was not the end's own, so it must warn once");
+
+    gate.resolve();
+    await settle();
+
+    assert.deepEqual(mqtt.published, [], "the publish the released gate lets through must record nothing on the aborted double");
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "and must add no warning");
+  });
+
+  test("abort() with a registration held warns once and states nothing", () => {
+
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ log });
+
+    let invoked = 0;
+
+    mqtt.onEnd(() => {
+
+      invoked++;
+    });
+
+    mqtt.abort();
+    mqtt.abort();
+
+    assert.equal(invoked, 0, "an abort states no word");
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "and with a registration held it must warn once, a second abort adding nothing");
+  });
+
+  test("end() left unawaited and followed by abort() in the same turn warns once", async () => {
+
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ log });
+
+    let invoked = 0;
+
+    mqtt.onEnd(() => {
+
+      invoked++;
+    });
+
+    const ending = mqtt.end();
+
+    mqtt.abort();
+
+    assert.deepEqual(await ending, [], "the end must still resolve, and never throw");
+    assert.equal(invoked, 1, "the end invoked the handler before the abort landed");
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "and the abort, landing while the end was still running, must warn once");
+  });
+
+  test("end(), disposal, and a registration released by its own signal before the abort warn nothing", async () => {
+
+    const log = capturingLog();
+    const ended = new TestMqttClient({ log });
+    const disposed = new TestMqttClient({ log });
+    const released = new TestMqttClient({ log });
+    const device = new AbortController();
+
+    ended.onEnd(() => { /* Stated by the end. */ });
+    disposed.onEnd(() => { /* Stated by the disposal. */ });
+    released.onEnd(() => { /* Released by its own signal. */ }, { signal: device.signal });
+
+    await ended.end();
+    await disposed[Symbol.asyncDispose]();
+
+    device.abort(new HbpuAbortError("shutdown"));
+    released.abort();
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "an end's own abort, and an abort holding no registration, have nothing unsaid to warn about");
+  });
+
+  test("an invalid grace throws TypeError synchronously and leaves the double live", () => {
+
+    const mqtt = new TestMqttClient();
+
+    for(const grace of [ 0, -1, Number.NaN, Infinity ]) {
+
+      assert.throws(() => mqtt.end({ grace }), { constructor: TypeError, message: "TestMqttClient: `grace` must be a positive, finite number of milliseconds." },
+        "a grace of " + String(grace) + " must be refused at the call");
+    }
+
+    assert.equal(mqtt.aborted, false, "a refused grace must leave the double as it was");
+  });
+
+  test("a registration onEnd makes once end() has begun is never invoked, from outside the end and from inside a handler alike", async () => {
+
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ log });
+
+    let late = 0;
+
+    mqtt.onEnd(() => {
+
+      mqtt.onEnd(() => {
+
+        late++;
+      });
+    });
+
+    const ending = mqtt.end();
+
+    mqtt.onEnd(() => {
+
+      late++;
+    });
+
+    assert.deepEqual(await ending, []);
+    assert.equal(late, 0, "the end had already settled which handlers it invokes, so neither late registration may run");
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "and the end's own abort clears the late registrations without a warning");
+  });
+
+  test("on a test clock, a handler that never settles refuses with the deadline's reason once the clock passes the grace, and not before", async () => {
+
+    const clock = new TestClock();
+    const mqtt = new TestMqttClient({ clock });
+
+    let settled = false;
+
+    mqtt.onEnd(() => new Promise<void>(() => { /* Never settles. */ }));
+
+    const ending = mqtt.end({ grace: 500 });
+
+    void ending.then(() => {
+
+      settled = true;
+    });
+
+    clock.advance(499);
+    await settle();
+
+    assert.equal(settled, false, "the end must still be waiting a millisecond short of the grace");
+    assert.equal(mqtt.aborted, false, "and the double must still be live");
+
+    clock.advance(1);
+
+    const [refusal] = await ending;
+
+    assert.ok(isTimeoutReason(refusal), "the word unsettled at the grace must refuse with the deadline's TimeoutError");
+    assert.equal(mqtt.aborted, true, "and the end must then abort the double");
+  });
+
+  test("a publish parked by holdPublishes is refused at the grace with the deadline's reason and records nothing", async () => {
+
+    // A parked publish stands for a write the broker never acknowledges, which is where the client refuses a word at the grace, and the double refuses it the same
+    // way because the publish waits on its gate under the window's signal.
+    const clock = new TestClock();
+    const mqtt = new TestMqttClient({ clock });
+    const release = mqtt.holdPublishes();
+
+    registerDeviceWord(mqtt);
+
+    const ending = mqtt.end({ grace: 500 });
+
+    clock.advance(500);
+
+    const [refusal] = await ending;
+
+    assert.ok(isTimeoutReason(refusal), "the parked word must refuse with the deadline's TimeoutError at the grace");
+    assert.deepEqual(mqtt.published, [], "and record nothing");
+
+    release();
+    await settle();
+
+    assert.deepEqual(mqtt.published, [], "the release after the end frees nothing, since the parked word has already been refused");
+  });
+
+  test("while the end is under way, a connect registration already running whose publish it refuses writes the client's debug cancelled line", async () => {
+
+    // The registration runs on the lever's false-to-true edge ahead of the end and waits on the gate, so the publish it issues once the row opens the gate meets an
+    // end stating its words, under no signal of the window's, while the double's own signal is still live.
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ clock: new TestClock(), log });
+    const proceed: PromiseWithResolvers<void> = Promise.withResolvers();
+
+    let running = false;
+
+    mqtt.onConnect(async () => {
+
+      running = true;
+
+      await proceed.promise;
+      await mqtt.publish("device1/state", "restated");
+    });
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    assert.equal(running, true, "the registration must be running ahead of the end");
+
+    const { release } = holdEnd(mqtt);
+    const ending = mqtt.end({ grace: 500 });
+
+    proceed.resolve();
+    await settle();
+
+    assert.deepEqual(linesAt(log.entries, "debug").filter((line) => line.startsWith("The MQTT connect handler")), [MQTT_CONNECT_HANDLER_CANCELLED],
+      "the registration the end cut short must write the cancelled line the client logs too, at debug");
+    assert.deepEqual(linesAt(log.entries, "error"), [], "and never the error line");
+
+    release();
+
+    assert.deepEqual(await ending, []);
+  });
+
+  test("outside the end and before any abort, a connect registration failing with HbpuAbortError timeout writes the error line naming timeout", async () => {
+
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ log });
+
+    mqtt.onConnect(async () => {
+
+      throw new HbpuAbortError("timeout");
+    });
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.deepEqual(linesAt(log.entries, "error"), ["The MQTT connect handler failed: timeout."], "a timeout of the registration's own must reach the error line");
+    assert.deepEqual(linesAt(log.entries, "debug").filter((line) => line.startsWith("The MQTT connect handler")), [], "and must not read as cancelled");
+  });
+
+  test("once the double has aborted, a running connect registration failing with a plain Error writes the debug cancelled line, not its error line", async () => {
+
+    // The registration runs on the lever's false-to-true edge and waits on the gate, so the error it throws once the row opens the gate is no HbpuAbortError and
+    // lands after the double's own signal has aborted, with its end never begun. The double has no parent signal, so its own abort is the one way to reach this.
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ log });
+    const proceed: PromiseWithResolvers<void> = Promise.withResolvers();
+
+    let running = false;
+
+    mqtt.onConnect(async () => {
+
+      running = true;
+
+      await proceed.promise;
+
+      throw new Error("the device went away.");
+    });
+
+    mqtt.connected = false;
+    mqtt.connected = true;
+
+    assert.equal(running, true, "the registration must be running ahead of the abort");
+
+    mqtt.abort();
+    proceed.resolve();
+    await settle();
+
+    assert.deepEqual(linesAt(log.entries, "debug").filter((line) => line.startsWith("The MQTT connect handler")), [MQTT_CONNECT_HANDLER_CANCELLED],
+      "the registration the abort cut short must write the cancelled line the client logs too, at debug");
+    assert.deepEqual(linesAt(log.entries, "error"), [], "and never the error line, whatever it failed with");
+  });
+
+  test("the double and the module it shares with the client load neither mqtt nor the client at runtime, so the testing entry point stays broker-free", async () => {
+
+    /* A child process imports the testing entry point under a resolve hook that records every URL the process resolves, so an edge reached through another module and
+     * a dynamic import that runs while the entry point loads are seen as readily as a direct one, and a type-only import, which type stripping erases, is never
+     * resolved at all. The child then imports the client, which is the control: the same hook must see it load mqtt. A child is the arrangement because this suite's
+     * own process has already loaded the testing entry point, so a hook registered inside this row would see none of its resolutions, and a run sharing one process
+     * across files would have loaded the client as well. The child's deadline turns one that never exits into a failed row rather than a hung suite.
+     */
+    const CHILD_EXIT_BOUND_MS = 10000;
+    const source = [
+
+      "import { registerHooks } from 'node:module';",
+      "const resolved = [];",
+      "registerHooks({ resolve: (specifier, context, nextResolve) => {",
+      "  const result = nextResolve(specifier, context);",
+      "  resolved.push(result.url);",
+      "  return result;",
+      "} });",
+      "await import(" + JSON.stringify(new URL("./testing/index.ts", import.meta.url).href) + ");",
+      "const entry = [...resolved];",
+      "await import(" + JSON.stringify(new URL("./mqttClient.ts", import.meta.url).href) + ");",
+      "process.stdout.write(JSON.stringify({ client: resolved.slice(entry.length), entry }));"
+    ].join("\n");
+
+    const { stdout } = await promisify(execFile)(process.execPath, [ "--input-type=module", "--eval", source ], { timeout: CHILD_EXIT_BOUND_MS });
+    const { client, entry } = JSON.parse(stdout) as { client: string[]; entry: string[] };
+    const loads = (urls: string[], fragment: string): boolean => urls.some((url) => url.includes(fragment));
+
+    assert.equal(loads(entry, "/node_modules/mqtt/"), false, "the testing entry point must not load mqtt at runtime");
+    assert.equal(loads(entry, "/src/mqttClient.ts"), false, "nor the client");
+    assert.ok(loads(entry, "/src/mqtt-client-double.ts") && loads(entry, "/src/mqtt-publish.ts"),
+      "while the hook must be seen to record the entry point loading the double and the module it shares with the client");
+    assert.ok(loads(client, "/node_modules/mqtt/"), "and the control: importing the client must be seen to load mqtt");
+  });
+});
+
+describe("TestMqttClient - the end's quiet", () => {
+
+  /* What the end keeps quiet while it states the words, row for row with the client's own suite: a word under the window recorded, every other publish refused
+   * with nothing recorded or counted, the drivers answering without running a handler, a session restored running no registration, and a publish parked before
+   * the end recording at release. Each row holds the end open on a word it settles itself, with the grace on a TestClock no row advances.
+   */
+
+  // The refusal every publish the end does not admit rejects with.
+  const SHUTDOWN = { constructor: HbpuAbortError, name: "shutdown" };
+
+  test("while the end states its words, a publish under the window it handed is recorded, issued at once or later, and passed through composeSignals", async () => {
+
+    // The first word is issued as the handler is invoked, before it awaits anything, so it meets an end that has already recorded its window. The second is
+    // issued once the row lets the handler go on, under the window passed through composeSignals with nothing beside it, which hands the window itself back.
+    const mqtt = new TestMqttClient({ clock: new TestClock() });
+    const gate: PromiseWithResolvers<void> = Promise.withResolvers();
+
+    mqtt.onEnd(async (signal) => {
+
+      const first = mqtt.publish("device1/first", "said", { retain: true, signal });
+
+      await gate.promise;
+      await first;
+      await mqtt.publish("device1/second", "said", { retain: true, signal: composeSignals(signal, undefined) });
+    });
+
+    const ending = mqtt.end({ grace: 500 });
+
+    gate.resolve();
+
+    assert.deepEqual(await ending, [], "every word was admitted, so none leaves a refusal");
+    assert.deepEqual(mqtt.published, [ { payload: "said", retain: true, topic: "device1/first" }, { payload: "said", retain: true, topic: "device1/second" } ],
+      "each word must be recorded");
+    assert.throws(() => mqtt.signal.throwIfAborted(), SHUTDOWN, "and the end must still complete with its own abort");
+  });
+
+  test("while the end states its words, a publish under no signal or another is refused with shutdown, records nothing, leaving only the aborted line", async () => {
+
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ clock: new TestClock(), log });
+    const { release, windows } = holdEnd(mqtt);
+    const ending = mqtt.end({ grace: 500 });
+    const window = expectAt(windows, 0, "the window the end handed its word");
+
+    // The refusal lever is armed as well, so a publish that got past the end's admission to the double's own would answer with the lever's error and be counted.
+    mqtt.publishRejection = new Error("broker refused the message");
+
+    await assert.rejects(mqtt.publish("device1/status", "on"), SHUTDOWN, "a publish carrying no signal must be refused");
+    await assert.rejects(mqtt.publish("device1/status", "on", { signal: new AbortController().signal }), SHUTDOWN, "and so must one carrying an unrelated signal");
+    await assert.rejects(mqtt.publish("device1/status", "on", { signal: composeSignals(window, new AbortController().signal) }), SHUTDOWN,
+      "and one carrying a signal composed from the window and another, which is a fresh signal rather than the window");
+
+    mqtt.publishGuarded("device1/status", "on");
+    await settle();
+
+    assert.deepEqual(mqtt.published, [], "no refused publish may be recorded");
+    assert.equal(mqtt.rejectedPublishes, 0, "and none may be counted, since the end's refusal is no broker's answer");
+    assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish aborted: device1/status."], "the guarded form must write the aborted line and nothing else");
+    assert.deepEqual([ ...linesAt(log.entries, "warn"), ...linesAt(log.entries, "error") ], [], "and a refusal is no fault, so nothing reaches warn or error");
+
+    mqtt.publishRejection = null;
+    release();
+
+    assert.deepEqual(await ending, []);
+  });
+
+  test("while the end states its words, an aborted publish signal or double answers with its own reason, and a change-gated repeat is refused", async () => {
+
+    const mqtt = new TestMqttClient({ clock: new TestClock() });
+
+    holdEnd(mqtt);
+
+    await mqtt.publish("device1/status", "on", { ifChanged: true });
+
+    const ending = mqtt.end({ grace: 500 });
+    const own = new AbortController();
+    const ownReason = new HbpuAbortError("closed");
+
+    own.abort(ownReason);
+
+    await assert.rejects(mqtt.publish("device1/status", "on", { signal: own.signal }), (error: unknown) => error === ownReason,
+      "an aborted publish signal must answer with its own reason, ahead of the end's admission");
+    await assert.rejects(mqtt.publish("device1/status", "on", { ifChanged: true }), SHUTDOWN,
+      "a change-gated repeat outside the window must be refused, never resolved on the strength of the publish ahead of the end");
+
+    const outside = new HbpuAbortError("failed");
+
+    mqtt.abort(outside);
+
+    await assert.rejects(mqtt.publish("device1/status", "on"), (error: unknown) => error === outside,
+      "and an aborted double must answer with its abort's reason rather than the end's");
+    assert.deepEqual(await ending, [outside], "the held word refuses with the outside abort's reason");
+    assert.equal(mqtt.published.length, 1, "and only the publish ahead of the end was recorded");
+  });
+
+  test("while the end states its words, deliver, invokeGet and invokeSet run no handler, getter or setter, publish no get response, and throw no miss", async () => {
+
+    const mqtt = new TestMqttClient({ clock: new TestClock() });
+    const invoked: string[] = [];
+    const { release } = holdEnd(mqtt);
+
+    mqtt.subscribe("device1/status", () => {
+
+      invoked.push("raw");
+    });
+    mqtt.subscribeGet("device1/power", "Power", () => {
+
+      invoked.push("get");
+
+      return "on";
+    });
+    mqtt.subscribeSet("device1/power", "Power", () => {
+
+      invoked.push("set");
+    });
+
+    const ending = mqtt.end({ grace: 500 });
+
+    await mqtt.deliver("device1/status", "during");
+
+    assert.equal(await mqtt.invokeGet("device1/power/get"), undefined, "the get driver must answer without running the getter");
+
+    await mqtt.invokeSet("device1/power/set", "ON");
+
+    // A suffix nothing is registered on throws its miss on a live double, so answering quietly here is the driver returning ahead of any lookup.
+    assert.equal(await mqtt.invokeGet("device9/missing/get"), undefined, "an unmatched get suffix must answer quietly");
+
+    await mqtt.invokeSet("device9/missing/set", "ON");
+
+    assert.deepEqual(invoked, [], "no driver may reach a handler, a getter or a setter while the end states its words");
+    assert.deepEqual(mqtt.published, [], "and no get response may be recorded");
+    assert.equal(mqtt.subscriptions.length, 3, "though every registration is still held, so the quiet is the end's and not a release");
+
+    release();
+
+    assert.deepEqual(await ending, []);
+  });
+
+  test("a session restored while the end states its words records nothing, writes the aborted line for the availability tail, and runs no registration", async () => {
+
+    const log = capturingLog();
+    const mqtt = new TestMqttClient({ clock: new TestClock(), log });
+
+    let connects = 0;
+
+    mqtt.onConnect(() => {
+
+      connects++;
+    });
+
+    mqtt.connected = false;
+
+    const { release } = holdEnd(mqtt);
+    const ending = mqtt.end({ grace: 500 });
+
+    mqtt.connected = true;
+    await settle();
+
+    assert.equal(connects, 0, "the restored edge must run no connect registration while the end states its words");
+    assert.deepEqual(mqtt.published, [], "and must record no availability statement");
+    assert.deepEqual(linesAt(log.entries, "debug"), ["MQTT publish aborted: availability."], "since the end refuses it onto the aborted line");
+
+    release();
+
+    assert.deepEqual(await ending, []);
+  });
+
+  test("a publish parked by holdPublishes before the end began records at release while the end states its words", async () => {
+
+    // The end's admission answers when a publish is issued, as the client's does for a write it has already handed to mqtt.js, so a publish parked ahead of the
+    // end faces only the signal, session and lever admissions at release.
+    const mqtt = new TestMqttClient({ clock: new TestClock() });
+    const releasePublishes = mqtt.holdPublishes();
+    const parked = mqtt.publish("device1/status", "on");
+    const { release } = holdEnd(mqtt);
+    const ending = mqtt.end({ grace: 500 });
+
+    releasePublishes();
+    await parked;
+
+    assert.deepEqual(mqtt.published, [{ payload: "on", retain: false, topic: "device1/status" }], "the parked publish must record at release");
+
+    release();
+
+    assert.deepEqual(await ending, []);
+  });
+});
+
+/* Compile-time parity of the graceful end's verbs with the client's. These never run - the function is never called, and its leading underscore marks it, with its
+ * bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during
+ * `npm run typecheck`, so a double whose onEnd or end drifts from the client's signature fails the build here rather than at a consumer's injection site.
+ */
+const _endParityExercises = (): void => {
+
+  type _OnEndMatchesClient = Assert<Equal<TestMqttClient["onEnd"], MqttClient["onEnd"]>>;
+  type _EndMatchesClient = Assert<Equal<TestMqttClient["end"], MqttClient["end"]>>;
+};
+
 describe("TestMqttClient - unsubscribe", () => {
 
   test("records the tuple and releases every registration on the reconstructed topic", () => {
@@ -1799,7 +2520,7 @@ describe("TestMqttClient - the unresolved-placeholder refusal", () => {
 
       await settle();
 
-      assert.deepEqual(linesAt(log, "error"), ["Unable to publish to the MQTT topic relay/{output}/state: TestMqttClient: the topic " +
+      assert.deepEqual(linesAt(log.entries, "error"), ["Unable to publish to the MQTT topic relay/{output}/state: TestMqttClient: the topic " +
         "\"relay/{output}/state\" carries a brace; a placeholder must be resolved through resolveMqttTopic before the topic is used."]);
       assert.deepEqual(mqtt.published, []);
     });

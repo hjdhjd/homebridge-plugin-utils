@@ -1,31 +1,36 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * mqttClient.test.ts: Unit tests for the AsyncDisposable MqttClient - composed connection lifetime, signal-driven publish / subscribe semantics, the offline publish
- * posture and the connection state behind it, the guarded fire-and-forget publish, the change-gated publish option and the session-bound memory behind it,
- * subscribeSet handler-timeout, transport-error routing, and AsyncDisposable wiring. Tests run against a real in-process aedes broker on an ephemeral localhost
- * port (the same architectural pattern the rest of HBPU uses for tests of subsystems that wrap external substrates - real spawn for FfmpegProcess, real UDP for
- * RtpDemuxer, real DOM for the webUI).
- * Transport-level errno paths (ECONNREFUSED, ECONNRESET, ENOTFOUND) exercise real network failures; the error-routing switch is covered by direct invocation of the
- * pure {@link routeMqttBrokerError} helper, mirroring how `parseFfmpegCodecs` is tested directly with fixture strings while the spawn-end-to-end path is covered by
- * the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
+ * posture and the connection state behind it, the guarded fire-and-forget publish, the change-gated publish option and the session-bound memory behind it, subscribeSet
+ * handler-timeout, transport-error routing, the graceful end that states a plugin's final words ahead of the will, the quiet it keeps over every other publish and every
+ * inbound dispatch while it states them, the cancelled line a callback or a get response the end or the abort cuts short reaches in place of its error line, and the
+ * warning a teardown logs when it leaves the words unsaid, and AsyncDisposable wiring. Tests run against a real in-process aedes broker on an ephemeral localhost port
+ * (the same architectural pattern the rest of HBPU uses for tests of subsystems that wrap external substrates - real spawn for FfmpegProcess, real UDP for RtpDemuxer,
+ * real DOM for the webUI). Transport-level errno paths (ECONNREFUSED, ECONNRESET, ENOTFOUND) exercise real network failures; the error-routing switch is covered by
+ * direct invocation of the pure {@link routeMqttBrokerError} helper, mirroring how `parseFfmpegCodecs` is tested directly with fixture strings while the spawn-end-to-end
+ * path is covered by the FFmpeg integration suite that auto-enables when an FFmpeg binary is on PATH.
  */
 import type { Assert, CapturingLog, Equal } from "./testing/index.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
+import { HbpuAbortError, composeSignals, isTimeoutReason } from "./util.ts";
 import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC } from "./mqtt-topics.ts";
+import { MQTT_CONNECT_HANDLER_CANCELLED, MQTT_UNSAID_WORDS_WARNING, MqttOfflineError } from "./mqtt-publish.ts";
 import { MqttClient, brokerErrorReason, createMqttClient, logGetterPublishOutcome, mqttConnectionSettings, mqttFeatureOptions, redactBrokerUrl,
   redactKnownBrokerUrl, routeMqttBrokerError } from "./mqttClient.ts";
-import { assertNoUnhandledRejections, capturingLog, errnoError, formatLogEntry, listenOnLoopback, logCount, loggedAt, silentLog, stopListening,
-  waitUntil } from "./testing/index.ts";
+import { assertNoUnhandledRejections, capturingLog, errnoError, expectAt, formatLogEntry, linesAt, listenOnLoopback, logCount, loggedAt, settle, silentLog,
+  stopListening, waitUntil } from "./testing/index.ts";
 import { awaitClientConnected, awaitConnect, firstRendered, logContains, recordClientPublishes, recordRetainedStoreCompletions, recordSubscribes,
   recordWireUnsubscribes, startTestBroker, waitForLog } from "./mqtt.helpers.ts";
 import { describe, test } from "node:test";
+import type { Clock } from "./clock.ts";
 import { FeatureOptions } from "./featureOptions.ts";
-import { HbpuAbortError } from "./util.ts";
-import { MqttOfflineError } from "./mqtt-publish.ts";
+import type { TestBroker } from "./mqtt.helpers.ts";
+import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { connect } from "mqtt";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
+import { format } from "node:util";
 import { once } from "node:events";
 
 // Per-test event-loop settling window. After awaiting a deterministic broker event, this short delay lets any speculative-but-erroneous additional packet (the kind
@@ -49,6 +54,7 @@ const AVAILABILITY_OFFLINE_RECORD = { payload: MQTT_AVAILABILITY_OFFLINE, retain
 interface ClientOverrides {
 
   brokerUrl?: string;
+  clock?: Clock;
   log?: CapturingLog;
   reconnectInterval?: number;
   signal?: AbortSignal;
@@ -64,6 +70,7 @@ function makeClient(overrides: ClientOverrides = {}): MqttClient {
     topicPrefix: "test"
   }, {
 
+    clock: overrides.clock,
     signal: overrides.signal
   });
 }
@@ -93,9 +100,12 @@ async function startResetServer(): Promise<{ url: string } & AsyncDisposable> {
 // itself owns still runs for real - the topic expansion, the cancellation-versus-failure decision, and the log routing.
 class FailingPublishClient extends MqttClient {
 
+  // The value every publish rejects with, which a row that needs a rejection of another shape replaces.
+  public failure: Error = new Error("broker refused the message.");
+
   public override async publish(): Promise<void> {
 
-    throw new Error("broker refused the message.");
+    throw this.failure;
   }
 }
 
@@ -286,7 +296,7 @@ describe("MqttClient - publishGuarded", () => {
       await waitUntil(() => (log.entries.filter((entry) => entry.level === "error").length >= 2),
         { description: "both guarded publish failures to be reported", timeoutMs: 5000 });
 
-      const failures = log.entries.filter((entry) => entry.level === "error").map((entry) => formatLogEntry(entry));
+      const failures = linesAt(log.entries, "error");
 
       assert.deepEqual(failures, [ "Unable to publish to the MQTT topic test/device1/status: broker refused the message.",
         "Unable to publish to the MQTT topic " + AVAILABILITY_ONLINE_RECORD.topic + ": broker refused the message." ]);
@@ -511,7 +521,7 @@ describe("MqttClient - offline publish posture", () => {
       await waitForLog(log, (entry) => (entry.level === "debug") &&
         logContains("MQTT publish dropped while disconnected from the broker: test/device1/status.")(entry));
 
-      const debugLines = log.entries.filter((entry) => entry.level === "debug").map((entry) => formatLogEntry(entry));
+      const debugLines = linesAt(log.entries, "debug");
       const traceIndex = debugLines.indexOf("MQTT publish: test/device1/status.");
       const dropIndex = debugLines.indexOf("MQTT publish dropped while disconnected from the broker: test/device1/status.");
 
@@ -858,7 +868,7 @@ describe("MqttClient - change-gated publish", () => {
 
     await delay(SETTLE_MS);
 
-    const debugLines = log.entries.filter((entry) => entry.level === "debug").map((entry) => formatLogEntry(entry));
+    const debugLines = linesAt(log.entries, "debug");
 
     assert.equal(debugLines.filter((line) => line === "MQTT publish: " + FULL_TOPIC + ".").length, 1,
       "a suppressed publish must leave no trace of its own, observed: " + JSON.stringify(debugLines));
@@ -2203,7 +2213,7 @@ describe("MqttClient - connect / close edge flag", () => {
 
     assert.ok(connectLog, "connect must emit the \"Connected to ...\" log line");
 
-    const fullMessage = connectLog.message + " " + connectLog.params.map((param) => String(param)).join(" ");
+    const fullMessage = formatLogEntry(connectLog);
 
     assert.ok(fullMessage.includes("REDACTED"), "the password segment of the broker URL must be redacted in the log output");
     assert.ok(!fullMessage.includes("secretpass"), "the raw password must never appear in any log line");
@@ -2379,8 +2389,7 @@ describe("MqttClient - connect notification", () => {
     await waitUntil(() => recorded === 1, { description: "the registration after the throwing one to run", timeoutMs: CONNECT_WAIT_MS });
     await waitForLog(log, logContains("The MQTT connect handler failed"));
 
-    const failed = log.entries.filter((entry) => (entry.level === "error") && logContains("The MQTT connect handler failed")(entry));
-    const failures = failed.map((entry) => formatLogEntry(entry));
+    const failures = linesAt(log.entries, "error").filter((line) => line.includes("The MQTT connect handler failed"));
 
     assert.equal(failures.length, 1, "a throwing handler must leave exactly one failure line");
     assert.ok(failures[0]?.includes("connect-handler-boom"), "the failure line must carry the thrown message, observed: " + String(failures[0]));
@@ -2645,6 +2654,1015 @@ describe("MqttClient - availability", () => {
 
     assert.deepEqual(await readRetained(broker.url, AVAILABILITY_OFFLINE_RECORD.topic), AVAILABILITY_OFFLINE_RECORD,
       "a subscriber attaching after the teardown must read the retained offline statement the will produced");
+  });
+});
+
+// A gate the row opens itself, which its scope also opens on the way out, so a row that fails before opening it still lets whatever waits on it go on.
+function disposableGate(): { readonly open: () => void; readonly promise: Promise<void> } & Disposable {
+
+  const gate: PromiseWithResolvers<void> = Promise.withResolvers();
+
+  return { open: () => gate.resolve(), promise: gate.promise, [Symbol.dispose]: () => gate.resolve() };
+}
+
+// Register a word that holds the end open until the row releases it, recording the window the end hands it.
+function holdEnd(client: MqttClient): { readonly release: () => void; readonly windows: AbortSignal[] } & Disposable {
+
+  const gate = disposableGate();
+  const windows: AbortSignal[] = [];
+
+  client.onEnd((signal) => {
+
+    windows.push(signal);
+
+    return gate.promise;
+  });
+
+  return { release: gate.open, windows, [Symbol.dispose]: gate.open };
+}
+
+// Publish one message from the broker's side, resolving once the broker has handed it to every subscriber, which is the point a client's dispatch follows.
+async function publishFromBroker(broker: TestBroker, topic: string, payload: string): Promise<void> {
+
+  const delivered: PromiseWithResolvers<void> = Promise.withResolvers();
+
+  broker.aedes.publish({ cmd: "publish", dup: false, payload: Buffer.from(payload), qos: 0, retain: false, topic }, () => delivered.resolve());
+
+  await delivered.promise;
+}
+
+// How long a row waits for the broker to record the client's will.
+const WILL_WAIT_MS = 5000;
+
+// Wait for the broker to record the will, whose payload alone tells it apart from the session's own statement on the same topic.
+async function awaitWill(recorder: { readonly entries: readonly { payload: string; topic: string }[] }): Promise<void> {
+
+  await waitUntil(() => recorder.entries.some((entry) => (entry.topic === AVAILABILITY_OFFLINE_RECORD.topic) &&
+    (entry.payload === AVAILABILITY_OFFLINE_RECORD.payload)), { description: "the broker to publish the client's will", timeoutMs: WILL_WAIT_MS });
+}
+
+describe("MqttClient - final words", () => {
+
+  /* The graceful end, against a real broker wherever the wire is the subject: a word registered with onEnd reaching the broker's retained store ahead of the will,
+   * the refusals end() answers with, the promise a repeat call is handed, and the warning a teardown logs when it leaves registered words unsaid. The warning rows
+   * need no wire and run on the unreachable address, and the grace row runs on a TestClock, which the yield after the words never consults.
+   *
+   * The cut-short rows state the line a raw handler, a setter, a connect handler and a get response reach when the end or the client's abort cuts them short, beside the
+   * error line each keeps otherwise. A row that needs the end under way holds it open on a word it settles itself, with the grace on a TestClock no row advances, as the
+   * end's-quiet rows do, and every gate it holds is disposable and declared after the client, so a row that fails still lets the end complete.
+   */
+  const END_WAIT_MS = 5000;
+
+  // The device-scope word every wire row registers, as the broker's recorder captures it once stated.
+  const DEVICE_WORD_RECORD = { payload: MQTT_AVAILABILITY_OFFLINE, retain: true, topic: "test/device1/availability" };
+
+  // The rendered warning for one unsaid registration, the line each warning row expects.
+  const UNSAID_ONE = format(MQTT_UNSAID_WORDS_WARNING, 1);
+
+  // Register the device-scope word, publishing under the window the end hands it.
+  function registerDeviceWord(client: MqttClient, init: { signal?: AbortSignal } = {}): void {
+
+    client.onEnd((signal) => client.publish("device1/availability", MQTT_AVAILABILITY_OFFLINE, { retain: true, signal }), init);
+  }
+
+  test("a registered word reaches the retained store before the will", async () => {
+
+    /* The order is the row. end() is called after an await, so it runs in a microtask continuation, the frame where a word mqtt.js has resolved but not yet
+     * uncorked is lost to a teardown on the same turn, and only the yield after the words carries it to the socket. The recorder reads pipeline completions, and
+     * every packet here is retained, so each takes the same store hop and completes in the order it arrived.
+     */
+    await using broker = await startTestBroker();
+
+    const completions = recordRetainedStoreCompletions(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    registerDeviceWord(client);
+
+    await awaitClientConnected(client);
+    await waitUntil(() => (completions.entries.length >= 1), { description: "the session's own statement to reach the retained store", timeoutMs: END_WAIT_MS });
+
+    const refusals = await client.end();
+
+    await awaitWill(completions);
+
+    assert.deepEqual(refusals, [], "a word stated within the grace must leave no refusal");
+    assert.deepEqual(completions.entries, [ AVAILABILITY_ONLINE_RECORD, DEVICE_WORD_RECORD, AVAILABILITY_OFFLINE_RECORD ],
+      "the device's word must reach the retained store ahead of the will, which the end still provokes");
+  });
+
+  test("a handler registered with an already-aborted signal is never invoked", async () => {
+
+    await using broker = await startTestBroker();
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    const preAborted = new AbortController();
+
+    let invoked = 0;
+
+    preAborted.abort(new HbpuAbortError("shutdown"));
+    client.onEnd(() => {
+
+      invoked++;
+    }, { signal: preAborted.signal });
+
+    await awaitClientConnected(client);
+
+    assert.deepEqual(await client.end(), [], "a registration that was never held leaves nothing to state and nothing to refuse");
+    assert.equal(invoked, 0, "a pre-aborted signal must register nothing for the end to invoke");
+    assert.equal(client.aborted, true, "and the end must still tear the client down");
+  });
+
+  test("refusals return in registration order, with the offline refusal for a word issued on a dropped session", async () => {
+
+    // The broker goes away first, so the session is gone when the words are issued: the publish refuses offline at once rather than waiting out the grace, and the
+    // refusals after it hold their places around it.
+    const log = capturingLog();
+    const broker = await startTestBroker();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    await awaitClientConnected(client);
+    await broker[Symbol.asyncDispose]();
+    await waitForLog(log, logContains("Connection closed"));
+
+    const thrown = new Error("the second handler threw.");
+    const rejected = new Error("the fourth handler rejected.");
+
+    registerDeviceWord(client);
+    client.onEnd(() => {
+
+      throw thrown;
+    });
+    client.onEnd(() => { /* A word with nothing left to say settles at once. */ });
+    client.onEnd(async () => {
+
+      throw rejected;
+    });
+
+    const [ offline, ...rest ] = await client.end();
+
+    assert.ok(offline instanceof MqttOfflineError, "the word issued on the dropped session must refuse with MqttOfflineError, first, where it was registered");
+    assert.deepEqual(rest, [ thrown, rejected ], "and the other refusals must follow in registration order, with nothing for the word that settled");
+  });
+
+  test("a second end() returns the identical promise, while the first is running and after it has finished", async () => {
+
+    await using broker = await startTestBroker();
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    registerDeviceWord(client);
+
+    await awaitClientConnected(client);
+
+    const first = client.end();
+
+    assert.equal(client.end(), first, "a call during the end must be handed the first call's promise");
+    assert.deepEqual(await first, []);
+    assert.equal(client.end(), first, "and so must one after it, though the client has torn down by then");
+  });
+
+  test("a handler that calls end() is handed the identical promise and runs once, and the end completes with the will", async () => {
+
+    // The handler keeps what end() hands it and returns its word alone, because a handler awaiting end() would hold the end until the grace. The end has begun
+    // before the first handler runs, so the call inside the handler is a repeat call rather than a second end started inside the first.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    const inner: Promise<unknown[]>[] = [];
+
+    client.onEnd((signal) => {
+
+      inner.push(client.end());
+
+      return client.publish("device1/availability", MQTT_AVAILABILITY_OFFLINE, { retain: true, signal });
+    });
+
+    await awaitClientConnected(client);
+
+    const outer = client.end();
+
+    assert.deepEqual(await outer, [], "the word the handler stated must leave no refusal");
+
+    await awaitWill(publishes);
+
+    assert.equal(inner.length, 1, "the handler must run once");
+    assert.equal(inner[0], outer, "and the call it made must be handed the outer call's promise");
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, DEVICE_WORD_RECORD, AVAILABILITY_OFFLINE_RECORD ],
+      "the word must reach the broker once, and the will must still follow it");
+  });
+
+  test("with no end registration, end() and disposal each resolve an empty array, abort with the default reason, and warn nothing", async () => {
+
+    const log = capturingLog();
+    const ended = makeClient({ log });
+    const disposed = makeClient({ log });
+
+    assert.deepEqual(await ended.end(), [], "an end with nothing registered has nothing to refuse");
+
+    await disposed[Symbol.asyncDispose]();
+
+    for(const client of [ ended, disposed ]) {
+
+      assert.throws(() => client.signal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" }, "the end must abort with the default reason");
+    }
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "and a teardown holding no registration must add no warning");
+  });
+
+  test("end() after abort() resolves an empty array and invokes nothing", async () => {
+
+    await using broker = await startTestBroker();
+    await using client = makeClient({ brokerUrl: broker.url });
+
+    let invoked = 0;
+
+    client.onEnd(() => {
+
+      invoked++;
+    });
+
+    await awaitClientConnected(client);
+
+    client.abort();
+
+    assert.deepEqual(await client.end(), [], "an aborted client has already torn down, so its end answers at once with nothing");
+    assert.equal(invoked, 0, "and states nothing, since the abort released every registration");
+  });
+
+  test("disposal states the words before the will", async () => {
+
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+    const log = capturingLog();
+
+    // Scope-bound ownership is how a plugin holds the client, so the disposal worth proving is the one the scope exit fires.
+    const owned = async (): Promise<void> => {
+
+      await using client = makeClient({ brokerUrl: broker.url, log });
+
+      registerDeviceWord(client);
+
+      await awaitClientConnected(client);
+    };
+
+    await owned();
+    await awaitWill(publishes);
+
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, DEVICE_WORD_RECORD, AVAILABILITY_OFFLINE_RECORD ],
+      "disposal must state the device's word, and the will must still follow it");
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "and the end's own teardown must leave nothing unsaid to warn about");
+  });
+
+  test("a word still pending when the client is aborted from outside refuses with the abort's reason, the end resolves, and the warning logs once", async () => {
+
+    // The handler waits on a gate before it publishes, so it is still pending when the abort lands: a publish issued at once would resolve on the spot and leave the
+    // abort nothing to refuse. The gate is released afterwards to show the late publish changes nothing.
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    const gate: PromiseWithResolvers<void> = Promise.withResolvers();
+    const reason = new HbpuAbortError("failed");
+
+    client.onEnd(async (signal) => {
+
+      await gate.promise;
+      await client.publish("device1/availability", MQTT_AVAILABILITY_OFFLINE, { retain: true, signal });
+    });
+
+    await awaitClientConnected(client);
+
+    const ending = client.end();
+
+    await settle();
+    client.abort(reason);
+
+    assert.deepEqual(await ending, [reason], "the window closes on the external abort, so the pending word must refuse with that abort's own reason");
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "the abort was not the end's own, so the teardown must warn once");
+
+    gate.resolve();
+    await settle();
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "and the publish the released gate lets through must add nothing");
+  });
+
+  test("abort() and a parent signal's abort with a registration held each warn once and state nothing", () => {
+
+    const log = capturingLog();
+    const parent = new AbortController();
+    const direct = makeClient({ log });
+    const parented = makeClient({ log, signal: parent.signal });
+
+    let invoked = 0;
+
+    for(const client of [ direct, parented ]) {
+
+      client.onEnd(() => {
+
+        invoked++;
+      });
+    }
+
+    direct.abort();
+    direct.abort();
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "an abort with a registration held must warn once, and a second abort must add nothing");
+
+    parent.abort(new HbpuAbortError("shutdown"));
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [ UNSAID_ONE, UNSAID_ONE ], "a parent signal's abort with a registration held must warn once too");
+    assert.equal(invoked, 0, "neither teardown may state a word");
+  });
+
+  test("end() left unawaited and followed by abort() in the same turn warns once", async () => {
+
+    // The likeliest misorder: the end is started but not waited for, so its words are issued and the abort beside it tears down before they reach the socket.
+    const log = capturingLog();
+    const client = makeClient({ log });
+
+    let invoked = 0;
+
+    client.onEnd(() => {
+
+      invoked++;
+    });
+
+    const ending = client.end();
+
+    client.abort();
+
+    assert.deepEqual(await ending, [], "the end must still resolve, and never throw");
+    assert.equal(invoked, 1, "the end invoked the handler before the abort landed");
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "and the abort, landing while the end was still running, must warn once");
+  });
+
+  test("end(), disposal, and a registration released by its own signal before the abort warn nothing", async () => {
+
+    const log = capturingLog();
+    const ended = makeClient({ log });
+    const disposed = makeClient({ log });
+    const released = makeClient({ log });
+    const device = new AbortController();
+
+    ended.onEnd(() => { /* Stated by the end. */ });
+    disposed.onEnd(() => { /* Stated by the disposal. */ });
+    released.onEnd(() => { /* Released by its own signal. */ }, { signal: device.signal });
+
+    await ended.end();
+    await disposed[Symbol.asyncDispose]();
+
+    device.abort(new HbpuAbortError("shutdown"));
+    released.abort();
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "an end's own teardown, and a teardown holding no registration, have nothing unsaid to warn about");
+  });
+
+  test("an invalid grace throws TypeError synchronously and leaves the client live", async () => {
+
+    await using client = makeClient();
+
+    for(const grace of [ 0, -1, Number.NaN, Infinity ]) {
+
+      assert.throws(() => client.end({ grace }), { constructor: TypeError, message: "MqttClient: `grace` must be a positive, finite number of milliseconds." },
+        "a grace of " + String(grace) + " must be refused at the call");
+    }
+
+    assert.equal(client.aborted, false, "a refused grace must leave the client as it was");
+  });
+
+  test("a registration onEnd makes once end() has begun is never invoked, from outside the end and from inside a handler alike", async () => {
+
+    const log = capturingLog();
+    const client = makeClient({ log });
+
+    let late = 0;
+
+    client.onEnd(() => {
+
+      client.onEnd(() => {
+
+        late++;
+      });
+    });
+
+    const ending = client.end();
+
+    client.onEnd(() => {
+
+      late++;
+    });
+
+    assert.deepEqual(await ending, []);
+    assert.equal(late, 0, "the end had already settled which handlers it invokes, so neither late registration may run");
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "and the end's own teardown clears the late registrations without a warning");
+  });
+
+  test("on a test clock, a handler that never settles refuses with the deadline's reason once the clock passes the grace, and not before", async () => {
+
+    // The deadline is the clock's, and the yield after it is not, so stepping the clock past the grace is all it takes for the end to finish.
+    const clock = new TestClock();
+    const log = capturingLog();
+    const client = makeClient({ clock, log });
+
+    let settled = false;
+
+    client.onEnd(() => new Promise<void>(() => { /* Never settles. */ }));
+
+    const ending = client.end({ grace: 500 });
+
+    void ending.then(() => {
+
+      settled = true;
+    });
+
+    clock.advance(499);
+    await settle();
+
+    assert.equal(settled, false, "the end must still be waiting a millisecond short of the grace");
+    assert.equal(client.aborted, false, "and the client must still be live");
+
+    clock.advance(1);
+
+    const [refusal] = await ending;
+
+    assert.ok(isTimeoutReason(refusal), "the word unsettled at the grace must refuse with the deadline's TimeoutError");
+    assert.equal(client.aborted, true, "and the end must then tear the client down");
+    assert.deepEqual(linesAt(log.entries, "warn"), [], "with nothing unsaid to warn about, since the teardown was the end's own");
+  });
+
+  test("while the end is under way, a raw handler and a connect handler already running whose publish it refuses each write their debug cancelled line", async () => {
+
+    // Each handler is invoked ahead of the end - the connect handler by the first session, the raw handler by a message - and waits on the gate, so the publish
+    // it issues once the row opens the gate meets an end stating its words, under no signal of the window's, while the client's own signal is still live.
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, clock: new TestClock(), log });
+
+    let running = 0;
+
+    using proceed = disposableGate();
+    using hold = holdEnd(client);
+
+    client.onConnect(async () => {
+
+      running++;
+
+      await proceed.promise;
+      await client.publish("device1/state", "restated");
+    });
+
+    await awaitClientConnected(client);
+
+    const subscribeRoundTrip = once(broker.aedes, "subscribe");
+
+    client.subscribe("device1/command", async () => {
+
+      running++;
+
+      await proceed.promise;
+      await client.publish("device1/state", "done");
+    });
+
+    await subscribeRoundTrip;
+    await publishFromBroker(broker, "test/device1/command", "go");
+    await waitUntil(() => (running === 2), { description: "the raw and connect handlers to be running ahead of the end", timeoutMs: END_WAIT_MS });
+
+    // Each handler's report, whatever its level, so the wait below ends on a wrong line as readily as on the right one.
+    const leads = [ "MQTT: handler for", "The MQTT connect handler" ];
+    const reports = (): string[] => log.entries.map(formatLogEntry).filter((line) => leads.some((lead) => line.startsWith(lead)));
+    const ending = client.end({ grace: 500 });
+
+    proceed.open();
+
+    await waitUntil(() => (reports().length === 2), { description: "each handler to report how it ended", timeoutMs: END_WAIT_MS });
+
+    assert.equal(logCount(log.entries, "debug", "MQTT: handler for test/device1/command was cancelled before completion."), 1,
+      "the raw handler must write its cancelled line at debug, once");
+    assert.equal(logCount(log.entries, "debug", MQTT_CONNECT_HANDLER_CANCELLED), 1, "and so must the connect handler");
+    assert.deepEqual(linesAt(log.entries, "error"), [], "and neither may reach the error line");
+
+    hold.release();
+
+    assert.deepEqual(await ending, []);
+  });
+
+  test("outside the end and before any abort, a setter, a raw handler and a connect handler failing with HbpuAbortError timeout write their error line", async () => {
+
+    // The raw handler runs on a client of its own, because a client's consumer memory weighs each fault against the one before it, and the setter's identical
+    // timeout beside it would replay as a repeat at debug.
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+    const subscribed = recordSubscribes(broker);
+
+    await using setterClient = makeClient({ brokerUrl: broker.url, log });
+    await using rawClient = makeClient({ brokerUrl: broker.url, log });
+
+    setterClient.onConnect(async () => {
+
+      throw new HbpuAbortError("timeout");
+    });
+
+    await awaitClientConnected(setterClient);
+    await awaitClientConnected(rawClient);
+
+    setterClient.subscribeSet("device1/power", "Power", async () => {
+
+      throw new HbpuAbortError("timeout");
+    });
+    rawClient.subscribe("device1/command", async () => {
+
+      throw new HbpuAbortError("timeout");
+    });
+
+    // Each callback's report, whatever its level, so the wait below ends on a wrong line as readily as on the right one.
+    const leads = [ "MQTT: error setting Power", "MQTT: set handler for Power", "MQTT: handler for test/device1/command", "The MQTT connect handler" ];
+    const reports = (): string[] => log.entries.map(formatLogEntry).filter((line) => leads.some((lead) => line.startsWith(lead)));
+
+    await waitUntil(() => (subscribed.length >= 2), { description: "the broker to record the set and raw subscriptions", timeoutMs: END_WAIT_MS });
+    await publishFromBroker(broker, "test/device1/power/set", "on");
+    await publishFromBroker(broker, "test/device1/command", "go");
+    await waitUntil(() => (reports().length === 3), { description: "every callback to report how it ended", timeoutMs: END_WAIT_MS });
+
+    assert.deepEqual(linesAt(log.entries, "error").toSorted(),
+      [ "MQTT: error setting Power to on: timeout.", "MQTT: handler for test/device1/command threw: timeout.", "The MQTT connect handler failed: timeout." ],
+      "a timeout of each callback's own must reach its error line, naming the reason");
+    assert.equal(log.entries.map(formatLogEntry).filter((line) => line.includes("cancelled before completion")).length, 0, "and none may read as cancelled");
+  });
+
+  test("once the client has aborted, a raw handler failing with an HbpuAbortError writes its debug cancelled line, not its error line", async () => {
+
+    // The handler is invoked ahead of the abort and waits on the gate, so the publish it issues once the row opens the gate meets a client whose own signal has
+    // aborted while its end never began, and rejects with the abort's reason.
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    let running = false;
+
+    using proceed = disposableGate();
+
+    await awaitClientConnected(client);
+
+    const subscribeRoundTrip = once(broker.aedes, "subscribe");
+
+    client.subscribe("device1/command", async () => {
+
+      running = true;
+
+      await proceed.promise;
+      await client.publish("device1/state", "done");
+    });
+
+    await subscribeRoundTrip;
+    await publishFromBroker(broker, "test/device1/command", "go");
+    await waitUntil(() => running, { description: "the handler to be running ahead of the abort", timeoutMs: END_WAIT_MS });
+
+    client.abort();
+    proceed.open();
+
+    await waitForLog(log, logContains("MQTT: handler for test/device1/command"));
+
+    assert.deepEqual(linesAt(log.entries, "debug").filter((line) => line.startsWith("MQTT: handler for")),
+      ["MQTT: handler for test/device1/command was cancelled before completion."], "the handler the abort cut short must write its cancelled line at debug");
+    assert.deepEqual(linesAt(log.entries, "error"), [], "and never its error line");
+  });
+
+  test("after abort() or a parent signal's bare abort(), a raw and a connect handler failing with a plain Error each write their debug cancelled line", async () => {
+
+    // Each client's handlers are invoked ahead of its abort - the connect handler by the first session, the raw handler by a message - and wait on the gate, so the
+    // error each throws once the row opens the gate is no HbpuAbortError and lands after the client's own signal has aborted, with its end never begun.
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+    const parent = new AbortController();
+    const subscribed = recordSubscribes(broker);
+
+    await using direct = makeClient({ brokerUrl: broker.url, log });
+    await using parented = makeClient({ brokerUrl: broker.url, log, signal: parent.signal });
+
+    let running = 0;
+
+    using proceed = disposableGate();
+
+    const fail = async (): Promise<void> => {
+
+      running++;
+
+      await proceed.promise;
+
+      throw new Error("the device went away.");
+    };
+
+    direct.onConnect(fail);
+    parented.onConnect(fail);
+
+    await awaitClientConnected(direct);
+    await awaitClientConnected(parented);
+
+    direct.subscribe("device1/command", fail);
+    parented.subscribe("device2/command", fail);
+
+    await waitUntil(() => (subscribed.length >= 2), { description: "the broker to record every raw subscription", timeoutMs: END_WAIT_MS });
+    await publishFromBroker(broker, "test/device1/command", "go");
+    await publishFromBroker(broker, "test/device2/command", "go");
+    await waitUntil(() => (running === 4), { description: "every handler to be running ahead of the aborts", timeoutMs: END_WAIT_MS });
+
+    // Each handler's report, whatever its level, so the wait below ends on a wrong line as readily as on the right one.
+    const leads = [ "MQTT: handler for", "The MQTT connect handler" ];
+    const reports = (lines: string[]): string[] => lines.filter((line) => leads.some((lead) => line.startsWith(lead)));
+
+    direct.abort();
+    parent.abort();
+    proceed.open();
+
+    await waitUntil(() => (reports(log.entries.map(formatLogEntry)).length === 4), { description: "every handler to report how it ended", timeoutMs: END_WAIT_MS });
+
+    const cancelled = [ "MQTT: handler for test/device1/command was cancelled before completion.",
+      "MQTT: handler for test/device2/command was cancelled before completion.", MQTT_CONNECT_HANDLER_CANCELLED, MQTT_CONNECT_HANDLER_CANCELLED ];
+
+    assert.deepEqual(reports(linesAt(log.entries, "debug")).toSorted(), cancelled.toSorted(),
+      "each handler an abort cut short must write its cancelled line at debug");
+    assert.deepEqual(linesAt(log.entries, "error"), [], "and none may reach the error line, whatever it failed with");
+  });
+
+  test("once the client has aborted outside the end, a connect handler failing with an HbpuAbortError writes its debug cancelled line, not its error line", async () => {
+
+    // The handler is invoked by the first session and waits on the gate, so the publish it issues once the row opens the gate meets a client whose own signal has
+    // aborted while its end never began, and rejects with the abort's reason.
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, log });
+
+    let running = false;
+
+    using proceed = disposableGate();
+
+    client.onConnect(async () => {
+
+      running = true;
+
+      await proceed.promise;
+      await client.publish("device1/state", "restated");
+    });
+
+    await awaitClientConnected(client);
+    await waitUntil(() => running, { description: "the connect handler to be running ahead of the abort", timeoutMs: END_WAIT_MS });
+
+    client.abort();
+    proceed.open();
+
+    await waitForLog(log, logContains("The MQTT connect handler"));
+
+    assert.deepEqual(linesAt(log.entries, "debug").filter((line) => line.startsWith("The MQTT connect handler")), [MQTT_CONNECT_HANDLER_CANCELLED],
+      "the connect handler the abort cut short must write its cancelled line at debug");
+    assert.deepEqual(linesAt(log.entries, "error"), [], "and never its error line");
+  });
+
+  test("a get response the end refuses writes its debug cancelled line, while one failing outside the end and before any abort keeps its error line", async () => {
+
+    /* The getter begins the end itself, so the response it hands back is issued while the end states its words, under no signal of the window's, while the client's
+     * own signal is still live: no /get is dispatched once the end has begun, so a getter that begins it is the order in which the end refuses a response. The
+     * second client's publish is substituted, as the getter's repeat row substitutes it, so its responses fail outside the end and before any abort, first with an
+     * HbpuAbortError of their own and then with a plain error.
+     */
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+    const failingLog = capturingLog();
+    const subscribed = recordSubscribes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url, clock: new TestClock(), log });
+    await using failing = new FailingPublishClient({ brokerUrl: broker.url, log: failingLog, reconnectInterval: 0, topicPrefix: "test" });
+
+    const endings: Promise<unknown[]>[] = [];
+
+    using hold = holdEnd(client);
+
+    await awaitClientConnected(client);
+    await awaitClientConnected(failing);
+
+    client.subscribeGet("device1/power", "Power", () => {
+
+      endings.push(client.end({ grace: 500 }));
+
+      return "on";
+    });
+    failing.subscribeGet("device2/power", "Power", () => "on");
+
+    await waitUntil(() => (subscribed.length >= 2), { description: "the broker to record every get subscription", timeoutMs: END_WAIT_MS });
+
+    // Each response's report, whatever its level, so each wait below ends on a wrong line as readily as on the right one.
+    const leads = [ "MQTT: get response for Power", "MQTT: failed to publish Power status", "MQTT: Power status published" ];
+    const reports = (lines: string[]): string[] => lines.filter((line) => leads.some((lead) => line.startsWith(lead)));
+
+    await publishFromBroker(broker, "test/device1/power/get", "true");
+    await waitUntil(() => (reports(log.entries.map(formatLogEntry)).length === 1), { description: "the refused response to report how it ended",
+      timeoutMs: END_WAIT_MS });
+
+    assert.deepEqual(reports(linesAt(log.entries, "debug")), ["MQTT: get response for Power was cancelled before completion."],
+      "the response the end refused must write its cancelled line at debug");
+    assert.deepEqual(linesAt(log.entries, "error"), [], "and never an error line");
+
+    failing.failure = new HbpuAbortError("timeout");
+    await publishFromBroker(broker, "test/device2/power/get", "true");
+    await waitUntil(() => (reports(failingLog.entries.map(formatLogEntry)).length === 1), { description: "the first failing response to report how it ended",
+      timeoutMs: END_WAIT_MS });
+
+    failing.failure = new Error("broker refused the message.");
+    await publishFromBroker(broker, "test/device2/power/get", "true");
+    await waitUntil(() => (reports(failingLog.entries.map(formatLogEntry)).length === 2), { description: "the second failing response to report how it ended",
+      timeoutMs: END_WAIT_MS });
+
+    assert.deepEqual(reports(linesAt(failingLog.entries, "error")),
+      [ "MQTT: failed to publish Power status: timeout.", "MQTT: failed to publish Power status: broker refused the message." ],
+      "a response failing outside the end and before any abort must keep its error line, an HbpuAbortError of its own among them");
+    assert.equal(loggedAt(failingLog.entries, "debug", "MQTT: get response for Power"), false, "and neither may read as cancelled");
+
+    hold.release();
+
+    assert.deepEqual(await expectAt(endings, 0, "the end the getter began"), [], "the held word must still let the end complete");
+  });
+});
+
+describe("MqttClient - the end's quiet", () => {
+
+  /* What the end keeps quiet while it states the words, against a real broker: a word under the window sent, every other publish refused with nothing sent, every
+   * inbound message left undispatched, a session re-established during the grace running no connect handler, and a setter the end cut short reported as a
+   * cancellation. Each row holds the end open on a word it settles itself, with the grace on a TestClock no row advances, so the window stays open for as long
+   * as the row needs it and closes only when the row lets it.
+   *
+   * Every gate a row holds is disposable and declared after the client, so the row's scope opens it before the client's own disposal runs. A row whose assertion
+   * fails then still lets the end complete and the sockets close, where a gate left shut would hold the client's disposal on a word nothing settles and a grace
+   * the row's clock never reaches, and the suite with it.
+   */
+  const QUIET_WAIT_MS = 5000;
+
+  // The refusal every publish the end does not admit rejects with.
+  const SHUTDOWN = { constructor: HbpuAbortError, name: "shutdown" };
+
+  test("while the end states its words, a publish under the window it handed is sent, issued at once or later, and passed through composeSignals alone", async () => {
+
+    // The first word is issued as the handler is invoked, before it awaits anything, so it meets an end that has already recorded its window. The second is
+    // issued once the row lets the handler go on, under the window passed through composeSignals with nothing beside it, which hands the window itself back.
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url, clock: new TestClock() });
+
+    using gate = disposableGate();
+
+    client.onEnd(async (signal) => {
+
+      const first = client.publish("device1/first", "said", { retain: true, signal });
+
+      await gate.promise;
+      await first;
+      await client.publish("device1/second", "said", { retain: true, signal: composeSignals(signal, undefined) });
+    });
+
+    await awaitClientConnected(client);
+    await waitUntil(() => (publishes.entries.length >= 1), { description: "the session's own statement to reach the broker", timeoutMs: QUIET_WAIT_MS });
+
+    const ending = client.end({ grace: 500 });
+
+    gate.open();
+
+    assert.deepEqual(await ending, [], "every word was admitted, so none leaves a refusal");
+
+    await awaitWill(publishes);
+
+    assert.deepEqual(publishes.entries,
+      [ AVAILABILITY_ONLINE_RECORD, { payload: "said", retain: true, topic: "test/device1/first" }, { payload: "said", retain: true, topic: "test/device1/second" },
+        AVAILABILITY_OFFLINE_RECORD ],
+      "each word must reach the broker, and the end must still complete with the will");
+  });
+
+  test("while the end states its words, a publish under no signal or another is refused with shutdown, sends nothing, and leaves only the aborted line", async () => {
+
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, clock: new TestClock(), log });
+
+    using hold = holdEnd(client);
+
+    await awaitClientConnected(client);
+    await waitUntil(() => (publishes.entries.length >= 1), { description: "the session's own statement to reach the broker", timeoutMs: QUIET_WAIT_MS });
+
+    const ending = client.end({ grace: 500 });
+    const window = expectAt(hold.windows, 0, "the window the end handed its word");
+
+    await assert.rejects(client.publish("device1/status", "on"), SHUTDOWN, "a publish carrying no signal must be refused");
+    await assert.rejects(client.publish("device1/status", "on", { signal: new AbortController().signal }), SHUTDOWN, "and so must one carrying an unrelated signal");
+    await assert.rejects(client.publish("device1/status", "on", { signal: composeSignals(window, new AbortController().signal) }), SHUTDOWN,
+      "and one carrying a signal composed from the window and another, which is a fresh signal rather than the window");
+
+    client.publishGuarded("device1/status", "on");
+    await settle();
+
+    // The admission answers ahead of the trace, so not one of the refused publishes left its trace line, and the guarded one left the aborted line alone.
+    assert.deepEqual(linesAt(log.entries, "debug").filter((line) => line.includes("device1/status")), ["MQTT publish aborted: test/device1/status."],
+      "the guarded form must write the aborted line and nothing else, with no trace line for any refused publish");
+    assert.deepEqual([ ...linesAt(log.entries, "warn"), ...linesAt(log.entries, "error") ], [], "and a refusal is no fault, so nothing reaches warn or error");
+
+    hold.release();
+
+    assert.deepEqual(await ending, []);
+
+    await awaitWill(publishes);
+
+    assert.deepEqual(publishes.entries, [ AVAILABILITY_ONLINE_RECORD, AVAILABILITY_OFFLINE_RECORD ], "no refused publish may reach the broker, ahead of the will");
+  });
+
+  test("while the end states its words, an aborted publish signal or client answers with its own reason, and a change-gated repeat is refused", async () => {
+
+    await using broker = await startTestBroker();
+    await using client = makeClient({ brokerUrl: broker.url, clock: new TestClock() });
+
+    // The held word is never released here: the outside abort below closes its window, and the scope releases it only if the row fails before that.
+    using hold = holdEnd(client);
+
+    await awaitClientConnected(client);
+    await client.publish("device1/status", "on", { ifChanged: true });
+
+    const ending = client.end({ grace: 500 });
+    const own = new AbortController();
+    const ownReason = new HbpuAbortError("closed");
+
+    own.abort(ownReason);
+
+    await assert.rejects(client.publish("device1/status", "on", { signal: own.signal }), (error: unknown) => error === ownReason,
+      "an aborted publish signal must answer with its own reason, ahead of the end's admission");
+    await assert.rejects(client.publish("device1/status", "on", { ifChanged: true }), SHUTDOWN,
+      "a change-gated repeat outside the window must be refused, never resolved on the strength of the publish ahead of the end");
+
+    const outside = new HbpuAbortError("failed");
+
+    client.abort(outside);
+
+    await assert.rejects(client.publish("device1/status", "on"), (error: unknown) => error === outside,
+      "and an aborted client must answer with its abort's reason rather than the end's");
+    assert.deepEqual(await ending, [outside], "the held word refuses with the outside abort's reason");
+  });
+
+  test("while the end states its words, an inbound message, a /get true and a /set reach no handler, getter or setter, and no get response is published", async () => {
+
+    await using broker = await startTestBroker();
+
+    const publishes = recordClientPublishes(broker);
+    const subscribed = recordSubscribes(broker);
+
+    await using client = makeClient({ brokerUrl: broker.url, clock: new TestClock() });
+
+    const invoked: string[] = [];
+
+    using hold = holdEnd(client);
+
+    await awaitClientConnected(client);
+
+    client.subscribe("device1/status", () => {
+
+      invoked.push("raw");
+    });
+    client.subscribeGet("device1/power", "Power", () => {
+
+      invoked.push("get");
+
+      return "on";
+    });
+    client.subscribeSet("device1/power", "Power", () => {
+
+      invoked.push("set");
+    });
+
+    await waitUntil(() => (subscribed.length >= 3), { description: "the broker to record every subscription", timeoutMs: QUIET_WAIT_MS });
+
+    // A message ahead of the end is the control: the raw handler runs, so the silence below is the end's and not a subscription that never took.
+    await publishFromBroker(broker, "test/device1/status", "before");
+    await waitUntil(() => (invoked.length === 1), { description: "the control message to reach the raw handler", timeoutMs: QUIET_WAIT_MS });
+
+    const ending = client.end({ grace: 500 });
+
+    await publishFromBroker(broker, "test/device1/status", "during");
+    await publishFromBroker(broker, "test/device1/power/get", "true");
+    await publishFromBroker(broker, "test/device1/power/set", "on");
+    await delay(SETTLE_MS);
+
+    assert.deepEqual(invoked, ["raw"], "no message delivered while the end states its words may reach a handler, a getter or a setter");
+
+    hold.release();
+
+    assert.deepEqual(await ending, []);
+    assert.equal(publishes.entries.some((entry) => entry.topic === "test/device1/power"), false, "and no get response may be published");
+  });
+
+  test("a session re-established while the end states its words writes its connected and aborted lines and runs no connect handler", async () => {
+
+    // The outage precedent the availability suite uses: dispose the broker, wait for the close line, and stand a fresh one up on the port the client is still
+    // reconnecting to. The end begins ahead of the outage, so the whole reconnect lands inside the window its held word keeps open.
+    const log = capturingLog();
+    const broker = await startTestBroker();
+    const port = Number.parseInt(new URL(broker.url).port, 10);
+
+    let connects = 0;
+
+    await using client = makeClient({ brokerUrl: broker.url, clock: new TestClock(), log, reconnectInterval: 1 });
+
+    client.onConnect(() => {
+
+      connects++;
+    });
+
+    using hold = holdEnd(client);
+
+    await awaitClientConnected(client);
+    await waitUntil(() => (connects === 1), { description: "the first connect to reach the registration", timeoutMs: QUIET_WAIT_MS });
+
+    const ending = client.end({ grace: 500 });
+
+    await broker[Symbol.asyncDispose]();
+    await waitForLog(log, logContains("Connection closed"));
+
+    await using returned = await startTestBroker({ port });
+
+    const afterOutage = recordClientPublishes(returned);
+
+    await waitUntil(() => (logCount(log.entries, "info", "Connected to") === 2), { description: "the session to be re-established during the end",
+      timeoutMs: QUIET_WAIT_MS });
+    await waitUntil(() => loggedAt(log.entries, "debug", "MQTT publish aborted: test/availability."),
+      { description: "the refused availability statement to reach the aborted line", timeoutMs: QUIET_WAIT_MS });
+    await delay(SETTLE_MS);
+
+    assert.equal(connects, 1, "the re-established session must run no connect handler while the end states its words");
+    assert.deepEqual(afterOutage.entries, [], "and the refused availability statement must never reach the returning broker");
+    assert.equal(logCount(log.entries, "debug", "MQTT publish: test/availability."), 1,
+      "the refusal answers ahead of the trace, so only the first session's statement left a trace line");
+
+    hold.release();
+
+    assert.deepEqual(await ending, []);
+  });
+
+  test("a setter already running when the end begins that fails on a refused publish is reported as cancelled, never as an error", async () => {
+
+    // The setter restates the value it was asked for under the signal it was handed, which is not the end's window, so the end refuses it while the client's own
+    // signal is still live. That refusal is a cancellation, and the setter's report has to say so.
+    await using broker = await startTestBroker();
+
+    const log = capturingLog();
+
+    await using client = makeClient({ brokerUrl: broker.url, clock: new TestClock(), log });
+
+    let started = false;
+
+    using proceed = disposableGate();
+    using hold = holdEnd(client);
+
+    await awaitClientConnected(client);
+
+    const subscribeRoundTrip = once(broker.aedes, "subscribe");
+
+    client.subscribeSet("device1/power", "Power", async (value, _raw, signal) => {
+
+      started = true;
+
+      await proceed.promise;
+      await client.publish("device1/power", value, { signal });
+    });
+
+    await subscribeRoundTrip;
+    await publishFromBroker(broker, "test/device1/power/set", "on");
+    await waitUntil(() => started, { description: "the setter to be running ahead of the end", timeoutMs: QUIET_WAIT_MS });
+
+    const ending = client.end({ grace: 500 });
+
+    proceed.open();
+
+    await waitForLog(log, (entry) => (entry.level === "warn") && logContains("was cancelled before completion")(entry));
+
+    assert.deepEqual(linesAt(log.entries, "warn"), ["MQTT: set handler for Power was cancelled before completion."], "the setter must be reported as cancelled, once");
+    assert.deepEqual(linesAt(log.entries, "error"), [], "and never on the error line");
+
+    hold.release();
+
+    assert.deepEqual(await ending, []);
   });
 });
 
@@ -3171,7 +4189,7 @@ describe("MqttClient - the unresolved-placeholder refusal", () => {
 
       await waitForLog(log, (entry) => entry.level === "error");
 
-      const failures = log.entries.filter((entry) => entry.level === "error").map((entry) => formatLogEntry(entry));
+      const failures = linesAt(log.entries, "error");
 
       assert.deepEqual(failures, ["Unable to publish to the MQTT topic test/relay/{output}/state: MqttClient: the topic \"relay/{output}/state\" carries a brace; " +
         "a placeholder must be resolved through resolveMqttTopic before the topic is used."]);

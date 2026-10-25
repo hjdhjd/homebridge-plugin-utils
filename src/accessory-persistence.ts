@@ -111,10 +111,12 @@ function isBridged(accessory: PlatformAccessory): boolean {
  * because Homebridge keeps accepting saves while its plugins wind down but a process on its way out gives a timer no time to come due. The helper's place among the
  * plugin's own shutdown listeners therefore never matters: a change made before the shutdown save goes out with it, and one made after is saved on its own.
  *
- * Nothing else tells the helper a change happened, by design. The plugin marks wherever it changes what the cache holds: where its service wrappers see
- * {@link service!acquireService | acquireService} or {@link service!validService | validService} answer an `"attached"` or `"removed"` transition, and where it writes
- * a setting into an accessory's context. Live device state, a motion or contact reading, belongs on characteristics, which the device reports again after a restart, so
- * it never passes through here.
+ * Nothing else tells the helper a change happened, by design. The plugin marks wherever it changes what the cache holds: where a service gate,
+ * {@link service!acquireService | acquireService} or {@link service!validService | validService}, or a characteristic gate,
+ * {@link service!validCharacteristic | validCharacteristic} or {@link service!updatePresenceCharacteristic | updatePresenceCharacteristic}, answers a transition
+ * {@link service!presenceChanged | presenceChanged} reads as a change, where a name helper, {@link service!setAccessoryName | setAccessoryName} or
+ * {@link service!setServiceName | setServiceName}, answers true, and where it writes a setting into an accessory's context. Live device state, a motion or
+ * contact reading, belongs on characteristics, which the device reports again after a restart, so it never passes through here.
  *
  * @example
  *
@@ -125,7 +127,7 @@ function isBridged(accessory: PlatformAccessory): boolean {
  * // A service wrapper saw a service attached or removed.
  * const { transition } = validService({ accessory, name, serviceType, validate });
  *
- * if((transition === "attached") || (transition === "removed")) {
+ * if(presenceChanged(transition)) {
  *
  *   this.platform.persistence.persist(accessory);
  * }
@@ -202,10 +204,10 @@ export class AccessoryPersistence {
 
   /**
    * Mark an accessory changed so the save window carries it, first merging `changes` into its context when given. Call it wherever the plugin changes what the cache
-   * holds for the accessory: a service attached or removed, or a setting written into its context.
+   * holds for the accessory, at each place the {@link AccessoryPersistence} class documentation names.
    *
    * @typeParam C   - The accessory's context type, inferred from `accessory` alone, so `changes` is checked against the fields the plugin declares for it.
-   * @param accessory - The accessory whose services or context changed.
+   * @param accessory - The accessory whose cached state changed.
    * @param changes   - Context fields to set before the accessory is marked.
    */
   public persist<C extends UnknownContext>(accessory: PlatformAccessory<C>, changes?: NoInfer<Partial<C>>): void {

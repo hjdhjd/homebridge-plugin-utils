@@ -14,8 +14,8 @@ import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, W
 import { CharacteristicWarningType, HAPStatus } from "./homebridge-enums.ts";
 import { HomeKitRequestError, hapStatus, loadHomebridge, triggerGet, watchServerWarnings } from "./testing/index.ts";
 import type { PresenceReading, PresenceTransition, ValidCharacteristicOptions, ValidServiceOptions } from "./service.ts";
-import { acquireService, capabilityGate, findService, getServiceName, notResponding, setAccessoryName, setServiceName, updatePresenceCharacteristic,
-  updateServices, validCharacteristic, validService } from "./service.ts";
+import { acquireService, capabilityGate, findService, getServiceName, notResponding, presenceChanged, setAccessoryName, setServiceName,
+  updatePresenceCharacteristic, updateServices, validCharacteristic, validService } from "./service.ts";
 import { describe, test } from "node:test";
 import type { Nullable } from "./util.ts";
 import assert from "node:assert/strict";
@@ -69,7 +69,7 @@ function informationServiceOf(accessory: PlatformAccessory): Service {
  * is what proves a hold wrote nothing - the value HomeKit holds cannot tell a hold apart from a write of the same number. `service-configurationChange` answers
  * an attach and a detach alike, so an unchanged count is what proves a pass that removed nothing also attached nothing.
  */
-function presenceFixture(): { changes: () => number; configurations: () => number; pass: (reachable: boolean) => void;
+function presenceFixture(): { changes: () => number; configurations: () => number; pass: (reachable: boolean) => PresenceTransition;
   reading: (next: PresenceReading) => void; service: Service; } {
 
   const service = createAccessory().addService(hap.Service.AirQualitySensor, "Air");
@@ -91,7 +91,7 @@ function presenceFixture(): { changes: () => number; configurations: () => numbe
 
     changes: (): number => changes,
     configurations: (): number => configurations,
-    pass: (reachable: boolean): void => updatePresenceCharacteristic({ characteristic: hap.Characteristic.PM2_5Density, reachable,
+    pass: (reachable: boolean): PresenceTransition => updatePresenceCharacteristic({ characteristic: hap.Characteristic.PM2_5Density, reachable,
       read: () => holder.reading, service }),
     reading: (next: PresenceReading): void => {
 
@@ -649,17 +649,17 @@ describe("acquireService - name characteristic management", () => {
 
   test("adds Name to the optional catalog when the service supports Name but does not include it by default", () => {
 
-    // Coverage for the Name-add branch in acquireService (the `serviceHasName` top-up). Most HAP services include Name in their default optionalCharacteristics, so
-    // the branch's body rarely fires in real usage. We trigger it deliberately by subclassing a HAP service whose UUID is in `hasNameUUIDs` (Switch) and removing
-    // Name from its optional catalog before acquireService inspects it. The function must then call addOptionalCharacteristic(Name) and the optional catalog must
-    // carry Name afterwards.
+    // Coverage for the Name-add branch in setServiceName, which acquireService reaches through it (the `serviceHasName` top-up). Most HAP services include Name
+    // in their default optionalCharacteristics, so the branch's body rarely fires in real usage. We trigger it deliberately by subclassing a HAP service whose UUID
+    // is in `hasNameUUIDs` (Switch) and removing Name from its optional catalog before setServiceName inspects it. The function must then call
+    // addOptionalCharacteristic(Name) and the optional catalog must carry Name afterwards.
     class SwitchWithoutNameOptional extends hap.Service.Switch {
 
       constructor(displayName?: string, subtype?: string) {
 
         super(displayName, subtype);
 
-        // Strip Name out of the optional catalog so the add-Name branch in acquireService has work to do. HAP declares the catalog as a mutable `Characteristic[]`,
+        // Strip Name out of the optional catalog so the add-Name branch in setServiceName has work to do. HAP declares the catalog as a mutable `Characteristic[]`,
         // so we rewrite it in place through the declared type.
         const optional = this.optionalCharacteristics;
         const nameUuid = hap.Characteristic.Name.UUID;
@@ -680,10 +680,11 @@ describe("acquireService - name characteristic management", () => {
 
   test("throws when the constructed service has no characteristics (defensive guard)", () => {
 
-    // Coverage for acquireService's defensive `if(!first)` throw (`new Error("Service has no characteristics; ...")`) in service.ts. Real HAP services always
-    // construct with at least one required characteristic, so this branch never fires under normal usage; the guard exists because `noUncheckedIndexedAccess`
-    // requires a defensive check on `service.characteristics[0]` and the explicit throw makes the unreachability assumption surface loudly if ever violated. We
-    // exercise it by subclassing a HAP service and forcibly clearing its characteristics array before acquireService inspects it.
+    // Coverage for getCharacteristicConstructor's defensive `if(!first)` throw (`new Error("Service has no characteristics; ...")`) in service.ts, which
+    // acquireService reaches through setServiceName. Real HAP services always construct with at least one required characteristic, so this branch never fires under
+    // normal usage; the guard exists because `noUncheckedIndexedAccess` requires a defensive check on `service.characteristics[0]` and the explicit throw makes the
+    // unreachability assumption surface loudly if ever violated. We exercise it by subclassing a HAP service and forcibly clearing its characteristics array before
+    // setServiceName inspects it.
     class CharacteristicLessSwitch extends hap.Service.Switch {
 
       constructor(displayName?: string, subtype?: string) {
@@ -1015,6 +1016,61 @@ describe("validCharacteristic", () => {
   });
 });
 
+/* Each row produces its transition through a real gate and reads the predicate against the service's own configuration count. HAP raises
+ * `service-configurationChange` on an attach and on a detach alike, the moves a gate can make in what HAP serializes for the service, so the count beside each
+ * answer is the observable the predicate's meaning is held to: a change answers true where the count moved, and false where it stood still.
+ */
+describe("presenceChanged", () => {
+
+  test("an attached transition is a change, matching the configuration change the attach raised", () => {
+
+    const { configurations, gate } = gateFixture();
+    const transition = gate(true);
+
+    assert.equal(transition, "attached");
+    assert.equal(presenceChanged(transition), true, "an attach must read as a change");
+    assert.equal(configurations(), 1, "and the attach must have raised a configuration change");
+  });
+
+  test("a removed transition is a change, matching the configuration change the removal raised", () => {
+
+    const { configurations, gate } = gateFixture();
+
+    gate(true);
+
+    const before = configurations();
+    const transition = gate(false);
+
+    assert.equal(transition, "removed");
+    assert.equal(presenceChanged(transition), true, "a removal must read as a change");
+    assert.equal(configurations(), before + 1, "and the removal must have raised a configuration change");
+  });
+
+  test("a kept transition is no change, matching a service that raised no configuration change", () => {
+
+    const { configurations, gate } = gateFixture();
+
+    gate(true);
+
+    const before = configurations();
+    const transition = gate(true);
+
+    assert.equal(transition, "kept");
+    assert.equal(presenceChanged(transition), false, "a keep must read as no change");
+    assert.equal(configurations(), before, "and the keep must have raised no configuration change");
+  });
+
+  test("an absent transition is no change, matching a service that raised no configuration change", () => {
+
+    const { configurations, gate } = gateFixture();
+    const transition = gate(false);
+
+    assert.equal(transition, "absent");
+    assert.equal(presenceChanged(transition), false, "an absence must read as no change");
+    assert.equal(configurations(), 0, "and the absence must have raised no configuration change");
+  });
+});
+
 describe("capabilityGate", () => {
 
   test("the user toggle is absolute: a false toggle removes the service across every capability and existence cell", () => {
@@ -1059,8 +1115,8 @@ describe("updatePresenceCharacteristic", () => {
     const { pass, reading, service } = presenceFixture();
 
     reading({ state: "reported", value: 3 });
-    pass(true);
 
+    assert.equal(pass(true), "attached", "a reported reading on a service without the characteristic must answer attached");
     assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a reported reading must attach the characteristic");
     assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must write the value the reading carries");
 
@@ -1082,8 +1138,8 @@ describe("updatePresenceCharacteristic", () => {
     const written = changes();
 
     reading({ state: "pending" });
-    pass(true);
 
+    assert.equal(pass(true), "kept", "a pending reading on a service carrying the characteristic must answer kept");
     assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a pending reading must keep the characteristic");
     assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must leave the value HomeKit already holds");
     assert.equal(changes(), written, "and must write nothing");
@@ -1102,11 +1158,30 @@ describe("updatePresenceCharacteristic", () => {
     const written = changes();
 
     reading({ state: "absent" });
-    pass(false);
 
+    assert.equal(pass(false), "kept", "an unreachable device whose service carries the characteristic must answer kept");
     assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "an unreachable device must keep the characteristic");
     assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must keep the value HomeKit already holds");
     assert.equal(changes(), written, "and must write nothing");
+  });
+
+  test("a hold on a service that never carried the characteristic attaches nothing and answers absent", () => {
+
+    // Each form of the hold on a service with nothing to hold: a pending reading on a reachable device, and an absent reading on a device that cannot be seen.
+    // A hold changes nothing, so no pass may answer an attach or a removal, and the unchanged configuration count is what proves no pass materialized the
+    // characteristic on its way to that answer.
+    const { configurations, pass, reading, service } = presenceFixture();
+    const configured = configurations();
+
+    reading({ state: "pending" });
+
+    assert.equal(pass(true), "absent", "a pending reading on a service without the characteristic must answer absent");
+
+    reading({ state: "absent" });
+
+    assert.equal(pass(false), "absent", "an unreachable device whose service lacks the characteristic must answer absent");
+    assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), false, "a hold must not attach the characteristic");
+    assert.equal(configurations(), configured, "and no pass may raise a configuration change");
   });
 
   test("an absent reading on a reachable device removes the characteristic", () => {
@@ -1119,8 +1194,8 @@ describe("updatePresenceCharacteristic", () => {
     pass(true);
 
     reading({ state: "absent" });
-    pass(true);
 
+    assert.equal(pass(true), "removed", "an absent reading on a reachable device whose service carries the characteristic must answer removed");
     assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), false, "an absent reading on a reachable device must remove the characteristic");
   });
 
@@ -1132,8 +1207,8 @@ describe("updatePresenceCharacteristic", () => {
     const configured = configurations();
 
     reading({ state: "absent" });
-    pass(true);
 
+    assert.equal(pass(true), "absent", "an absent reading on a reachable device whose service lacks the characteristic must answer absent");
     assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), false, "a service that never carried the characteristic must not gain it");
     assert.equal(configurations(), configured, "and the pass must raise no configuration change at all");
   });
@@ -1145,14 +1220,16 @@ describe("updatePresenceCharacteristic", () => {
     const { pass, reading, service } = presenceFixture();
 
     reading({ state: "reported", value: 3 });
-    pass(true);
+
+    assert.equal(pass(true), "attached", "the first reported reading must answer attached");
 
     reading({ state: "absent" });
-    pass(true);
+
+    assert.equal(pass(true), "removed", "the absent reading must answer removed");
 
     reading({ state: "reported", value: 5 });
-    pass(true);
 
+    assert.equal(pass(true), "attached", "a reported reading after the removal must answer attached again");
     assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a reported reading must re-attach the characteristic");
     assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 5, "and must write the value the new reading carries");
 
@@ -1171,8 +1248,8 @@ describe("updatePresenceCharacteristic", () => {
     service.addCharacteristic(hap.Characteristic.PM2_5Density).updateValue(4);
 
     reading({ state: "reported", value: 6 });
-    pass(true);
 
+    assert.equal(pass(true), "kept", "a reported reading on a service already carrying the characteristic must answer kept");
     assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 6, "a reported pass must write over the value the characteristic carried");
 
     reading({ state: "reported", value: 11 });
@@ -1187,8 +1264,8 @@ describe("updatePresenceCharacteristic", () => {
     const { pass, reading, service } = presenceFixture();
 
     reading({ state: "reported", value: 3 });
-    pass(false);
 
+    assert.equal(pass(false), "attached", "a reported reading on an unreachable device must still answer attached");
     assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a reported reading must attach whatever reachability says");
     assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must write the value the reading carries");
 
@@ -1321,6 +1398,199 @@ describe("setServiceName", () => {
     assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Rocket Lamp");
     assert.equal(readNamedCharacteristic(service, "Name"), "Rocket Lamp");
   });
+
+  test("answers false and raises no change when the display name and each name characteristic the service kind supports already carry the name", () => {
+
+    // The accessory's record of changes is the observer: HAP raises a change for every write, an unchanged value included, so an empty record proves nothing was
+    // written. A Fan supports Name alone, so its comparison must never reach for a ConfiguredName.
+    const accessory = createAccessory();
+    const toggle = accessory.addService(hap.Service.Switch, "Porch Switch");
+    const fan = accessory.addService(hap.Service.Fan, "Porch Fan");
+
+    setServiceName(toggle, "Porch Switch");
+    accessory.clearObservations();
+
+    const counts = [ toggle.characteristics.length, fan.characteristics.length ];
+
+    assert.equal(setServiceName(toggle, "Porch Switch"), false, "a service carrying the name everywhere its kind supports one answers false");
+    assert.equal(setServiceName(fan, "Porch Fan"), false, "and so does one whose kind supports only Name");
+    assert.deepEqual(accessory.changes, [], "no change was raised, so nothing was written");
+    assert.deepEqual([ toggle.characteristics.length, fan.characteristics.length ], counts, "and no comparison attached a characteristic");
+    assert.equal(readNamedCharacteristic(fan, "ConfiguredName"), undefined, "the Fan still lacks the ConfiguredName its kind does not support");
+    assert.deepEqual(accessory.warnings, [], "and HAP warned of nothing added outside a catalog");
+  });
+
+  test("answers true and writes only the display name when it alone differs", () => {
+
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Switch, "Porch Switch");
+
+    setServiceName(service, "Porch Switch");
+    service.displayName = "Elsewhere";
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(service, "Porch Switch"), true);
+    assert.equal(service.displayName, "Porch Switch");
+    assert.deepEqual(accessory.changes, [], "each name characteristic already carried the name, so none was written");
+  });
+
+  test("answers true and writes only the ConfiguredName when it alone differs", () => {
+
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Switch, "Porch Switch");
+
+    setServiceName(service, "Porch Switch");
+    service.updateCharacteristic(hap.Characteristic.ConfiguredName, "Elsewhere");
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(service, "Porch Switch"), true);
+    assert.deepEqual(accessory.changesOn(service).map(({ characteristic, newValue }) => [ characteristic.UUID, newValue ]),
+      [[ hap.Characteristic.ConfiguredName.UUID, "Porch Switch" ]], "the one write is the ConfiguredName's");
+  });
+
+  test("answers true and writes only the Name when it alone differs", () => {
+
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Switch, "Porch Switch");
+
+    setServiceName(service, "Porch Switch");
+    service.updateCharacteristic(hap.Characteristic.Name, "Elsewhere");
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(service, "Porch Switch"), true);
+    assert.deepEqual(accessory.changesOn(service).map(({ characteristic, newValue }) => [ characteristic.UUID, newValue ]),
+      [[ hap.Characteristic.Name.UUID, "Porch Switch" ]], "the one write is the Name's");
+  });
+
+  test("adds a ConfiguredName the service kind supports but the service lacks, answering true though every other name matches, then false", () => {
+
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Switch, "Porch Switch");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), undefined, "precondition: a new Switch lacks ConfiguredName");
+    assert.equal(readNamedCharacteristic(service, "Name"), "Porch Switch", "precondition: and carries its display name as its Name");
+
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(service, "Porch Switch"), true, "a missing ConfiguredName differs");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Porch Switch");
+    assert.deepEqual(accessory.changesOn(service).map(({ characteristic }) => characteristic.UUID), [hap.Characteristic.ConfiguredName.UUID],
+      "the Name already matched, so only the ConfiguredName was written");
+    assert.equal(setServiceName(service, "Porch Switch"), false, "and a repeat finds nothing to write");
+  });
+
+  test("an empty sanitized name answers false and writes nothing on a service, as setAccessoryName refuses one", () => {
+
+    // A service has to answer to something, so a name that sanitizes away entirely leaves every name the service carries in place.
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Switch, "Porch Switch");
+
+    setServiceName(service, "Porch Switch");
+    accessory.clearObservations();
+
+    const count = service.characteristics.length;
+
+    assert.equal(setServiceName(service, "\u{1F680}"), false);
+    assert.equal(service.displayName, "Porch Switch", "the display name keeps the name it had");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Porch Switch", "and so does the ConfiguredName");
+    assert.equal(readNamedCharacteristic(service, "Name"), "Porch Switch", "and the Name");
+    assert.deepEqual(accessory.changes, [], "no change was raised, so nothing was written");
+    assert.equal(service.characteristics.length, count, "and nothing was attached");
+  });
+
+  test("a name past HAP's 64-character limit is written once, cut to the limit with the end its cut exposes stripped, and a repeat answers false", () => {
+
+    // HAP cuts a string past its maximum length with a warning. The first name's 64th character is a space, so its stored form is the cut with that space stripped,
+    // and the lettered name's 64th character is a letter, so its stored form is exactly its cut at the limit, which a cut one character short would miss. A
+    // comparison against the whole name would never match what HAP stores and would write again on every refresh.
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Switch, "Porch Switch");
+    const name = "Front Yard Irrigation Zone Seven Beside the Garage Door and the Rose Garden Bed";
+    const stored = "Front Yard Irrigation Zone Seven Beside the Garage Door and the";
+    const lettered = "Back Yard Irrigation Zone Eleven Beside the Garage Door and Rose Garden Bed";
+
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(service, name), true);
+    assert.equal(service.displayName, name, "the display name carries the whole name");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), stored, "the ConfiguredName carries the form HAP keeps");
+    assert.equal(readNamedCharacteristic(service, "Name"), stored, "and so does the Name");
+    assert.deepEqual(accessory.changesOn(service).map(({ characteristic }) => characteristic.UUID), [ hap.Characteristic.ConfiguredName.UUID,
+      hap.Characteristic.Name.UUID ], "each name characteristic was written once");
+    assert.equal(accessory.warnings.length, 0, "HAP warned of no cut, because the value it was handed already fit");
+
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(service, name), false, "a repeat finds the stored form equal and writes nothing");
+    assert.deepEqual(accessory.changes, [], "so no change was raised");
+    assert.equal(setServiceName(service, lettered), true);
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), lettered.slice(0, 64), "the ConfiguredName carries exactly the lettered name's cut at the limit");
+    assert.equal(readNamedCharacteristic(service, "Name"), lettered.slice(0, 64), "and so does the Name");
+  });
+
+  test("a Valve built without the optional ConfiguredName HAP's catalog leaves out gains it registered and written, with no warning, and a repeat answers false " +
+    "with it registered once", () => {
+
+    // HAP's catalog leaves ConfiguredName out of a Valve's optional set, the shape a cached service carries when nothing registered it, and HAP warns as it attaches
+    // a characteristic outside that set. The rename registers it first. HAP's registration appends without checking, and the cache saves the optional set, so a
+    // repeat that registered again would grow it on every refresh.
+    const accessory = createAccessory();
+    const valve = accessory.addService(hap.Service.Valve, "Zone One");
+
+    assert.equal(optionalIncludes(valve, "ConfiguredName"), false, "precondition: the Valve's optional set lacks ConfiguredName");
+
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(valve, "Front Lawn"), true);
+    assert.equal(readNamedCharacteristic(valve, "ConfiguredName"), "Front Lawn");
+    assert.equal(readNamedCharacteristic(valve, "Name"), "Front Lawn");
+    assert.equal(optionalIncludes(valve, "ConfiguredName"), true, "the rename registered ConfiguredName before writing it");
+    assert.deepEqual(accessory.warnings.map(({ message }) => message), [], "and HAP warned of nothing added outside the catalog");
+    assert.equal(setServiceName(valve, "Front Lawn"), false, "a repeat finds nothing to write");
+    assert.equal(optionalCount(valve, "ConfiguredName"), 1, "and leaves ConfiguredName registered once");
+  });
+
+  test("a ConfiguredName whose maxLen the plugin set is written cut to that length with the end its cut exposes stripped, with no warning, and a repeat answers " +
+    "false", () => {
+
+    // HAP cuts a string past the characteristic's own maxLen, which a plugin may set below HAP's default, so the helper reads that length rather than the default.
+    // The first name's 32nd character is a space, so its stored form is the cut with that space stripped, and the Name, which keeps HAP's default, carries the
+    // whole name. The lettered name's 32nd character is a letter, so its stored form is exactly its cut at that maxLen, which a cut one character short would miss.
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Switch, "Porch Switch");
+    const name = "Back Yard Irrigation Zone Seven Beside the Garage";
+    const stored = "Back Yard Irrigation Zone Seven";
+    const lettered = "Back Yard Irrigation Zone Eleven Beside the Garage";
+
+    setServiceName(service, "Porch Switch");
+    service.getCharacteristic(hap.Characteristic.ConfiguredName).setProps({ maxLen: 32 });
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(service, name), true);
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), stored, "the ConfiguredName carries the cut its own maxLen allows");
+    assert.equal(readNamedCharacteristic(service, "Name"), name, "and the Name the whole name");
+    assert.deepEqual(accessory.warnings.map(({ message }) => message), [], "HAP warned of no cut, because the value it was handed already fit");
+    assert.equal(setServiceName(service, name), false, "a repeat finds the stored form equal and writes nothing");
+    assert.equal(setServiceName(service, lettered), true);
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), lettered.slice(0, 32), "the ConfiguredName carries exactly the lettered name's cut at its maxLen");
+  });
+
+  test("a ServiceLabel, a kind outside the name sets, has the Name it carries renamed and gains no ConfiguredName, then answers false", () => {
+
+    // Presence is read before any lookup, so a ConfiguredName the kind does not support is never attached, and the Name HAP seeded at construction is kept in step
+    // though the kind is outside the sets that decide what is added.
+    const accessory = createAccessory();
+    const label = accessory.addService(hap.Service.ServiceLabel, "Remote");
+
+    accessory.clearObservations();
+
+    assert.equal(setServiceName(label, "Scene Remote"), true);
+    assert.equal(readNamedCharacteristic(label, "Name"), "Scene Remote");
+    assert.equal(readNamedCharacteristic(label, "ConfiguredName"), undefined, "a kind outside the ConfiguredName set gains none");
+    assert.deepEqual(accessory.changesOn(label).map(({ characteristic }) => characteristic.UUID), [hap.Characteristic.Name.UUID], "the one write is the Name's");
+    assert.deepEqual(accessory.warnings.map(({ message }) => message), [], "and HAP warned of nothing added outside the catalog");
+    assert.equal(setServiceName(label, "Scene Remote"), false, "and a repeat finds nothing to write");
+  });
 });
 
 describe("setAccessoryName", () => {
@@ -1375,6 +1645,18 @@ describe("setAccessoryName", () => {
       "a rename never adds a second information service");
   });
 
+  test("a rename leaves the information service's required Name out of its optional set", () => {
+
+    // The information service requires Name, so HAP carries it from construction, and listing it as optional too would save that listing to the cache.
+    const accessory = createAccessory();
+    const information = informationServiceOf(accessory);
+
+    assert.equal(optionalCount(information, "Name"), 0, "precondition: a required Name is not listed as optional");
+    assert.equal(setAccessoryName(accessory, "Front Porch"), true);
+    assert.equal(readNamedCharacteristic(information, "Name"), "Front Porch");
+    assert.equal(optionalCount(information, "Name"), 0, "the rename registers no required characteristic as optional");
+  });
+
   test("an accessory with no services at all renames its display names and stops there", () => {
 
     // The reflection needs a service instance to reach HAP's static registry through, so an accessory carrying none has no information service to delegate to.
@@ -1384,8 +1666,7 @@ describe("setAccessoryName", () => {
 
     accessory.services.length = 0;
 
-    setAccessoryName(accessory, "Side Yard");
-
+    assert.equal(setAccessoryName(accessory, "Side Yard"), true, "the display-name writes are the whole of the change, and they are reported");
     assert.equal(accessory.displayName, "Side Yard");
     assert.equal(hapAccessory.displayName, "Side Yard");
   });
@@ -1407,6 +1688,147 @@ describe("setAccessoryName", () => {
     assert.equal(hapAccessory.displayName, "Garden Shed", "the HAP accessory keeps it too");
     assert.equal(readNamedCharacteristic(information, "Name"), "Garden Shed", "the information service is not blanked either");
     assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Garden Shed");
+  });
+
+  test("answers false, calls no display-name update and raises no change once every name already carries the name", (t) => {
+
+    // Homebridge's display-name setter is spied on, and the accessory's record of changes is the observer for the information service, where HAP raises a change for
+    // every write, an unchanged value included.
+    const accessory = createAccessory();
+
+    assert.equal(setAccessoryName(accessory, "Front Porch"), true, "precondition: the first rename wrote");
+
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+    const information = informationServiceOf(accessory);
+    const count = information.characteristics.length;
+
+    assert.equal(setAccessoryName(accessory, "Front Porch"), false);
+    assert.equal(update.mock.callCount(), 0, "the accessory's display names already carried the name, so Homebridge's setter was not called");
+    assert.deepEqual(accessory.changes, [], "no change was raised, so nothing was written");
+    assert.equal(information.characteristics.length, count, "and no comparison attached a characteristic");
+  });
+
+  test("calls the display-name update once and answers true when only the accessory's own display name differs", (t) => {
+
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
+
+    setAccessoryName(accessory, "Front Porch");
+    accessory.displayName = "Elsewhere";
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "Front Porch"), true);
+    assert.equal(update.mock.callCount(), 1);
+    assert.equal(accessory.displayName, "Front Porch");
+    assert.equal(hapAccessory.displayName, "Front Porch");
+    assert.deepEqual(accessory.changes, [], "the information service already carried the name, so it was not written");
+  });
+
+  test("calls the display-name update once and answers true when only the HAP accessory's display name differs", (t) => {
+
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
+
+    setAccessoryName(accessory, "Front Porch");
+    hapAccessory.displayName = "Elsewhere";
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "Front Porch"), true);
+    assert.equal(update.mock.callCount(), 1);
+    assert.equal(accessory.displayName, "Front Porch");
+    assert.equal(hapAccessory.displayName, "Front Porch");
+    assert.deepEqual(accessory.changes, [], "the information service already carried the name, so it was not written");
+  });
+
+  test("answers true and writes only the information service's display name when it alone differs", (t) => {
+
+    const accessory = createAccessory();
+    const information = informationServiceOf(accessory);
+
+    setAccessoryName(accessory, "Front Porch");
+    information.displayName = "Elsewhere";
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "Front Porch"), true);
+    assert.equal(update.mock.callCount(), 0, "the accessory's display names already carried the name");
+    assert.equal(information.displayName, "Front Porch");
+    assert.deepEqual(accessory.changes, [], "each name characteristic already carried the name, so none was written");
+  });
+
+  test("answers true and writes only the information service's ConfiguredName when it alone differs", (t) => {
+
+    const accessory = createAccessory();
+    const information = informationServiceOf(accessory);
+
+    setAccessoryName(accessory, "Front Porch");
+    information.updateCharacteristic(hap.Characteristic.ConfiguredName, "Elsewhere");
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "Front Porch"), true);
+    assert.equal(update.mock.callCount(), 0, "the accessory's display names already carried the name");
+    assert.deepEqual(accessory.changesOn(information).map(({ characteristic, newValue }) => [ characteristic.UUID, newValue ]),
+      [[ hap.Characteristic.ConfiguredName.UUID, "Front Porch" ]], "the one write is the ConfiguredName's");
+  });
+
+  test("answers true and writes only the information service's Name when it alone differs", (t) => {
+
+    const accessory = createAccessory();
+    const information = informationServiceOf(accessory);
+
+    setAccessoryName(accessory, "Front Porch");
+    information.updateCharacteristic(hap.Characteristic.Name, "Elsewhere");
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "Front Porch"), true);
+    assert.equal(update.mock.callCount(), 0, "the accessory's display names already carried the name");
+    assert.deepEqual(accessory.changesOn(information).map(({ characteristic, newValue }) => [ characteristic.UUID, newValue ]),
+      [[ hap.Characteristic.Name.UUID, "Front Porch" ]], "the one write is the Name's");
+  });
+
+  test("a fresh accessory whose display names and seeded Name already carry the name gains the missing ConfiguredName and answers true, then false", (t) => {
+
+    // HAP seeds the information service's Name with the display name, so a comparison reading the name back would find a fresh accessory already named and never add
+    // the ConfiguredName the Home app honors.
+    const accessory = createAccessory();
+    const information = informationServiceOf(accessory);
+
+    assert.equal(readNamedCharacteristic(information, "Name"), "TestAccessory", "precondition: HAP seeds the Name with the display name");
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), undefined, "precondition: and leaves ConfiguredName absent");
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "TestAccessory"), true, "the missing ConfiguredName differs");
+    assert.equal(update.mock.callCount(), 0, "the accessory's display names already carried the name");
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "TestAccessory");
+    assert.deepEqual(accessory.changesOn(information).map(({ characteristic }) => characteristic.UUID), [hap.Characteristic.ConfiguredName.UUID],
+      "the seeded Name already matched, so only the ConfiguredName was written");
+    assert.equal(setAccessoryName(accessory, "TestAccessory"), false, "and a repeat finds nothing to write");
+  });
+
+  test("a name with nothing left after sanitizing answers false, calls no display-name update and raises no change", (t) => {
+
+    const accessory = createAccessory();
+
+    setAccessoryName(accessory, "Garden Shed");
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "\u{1F680}"), false);
+    assert.equal(update.mock.callCount(), 0);
+    assert.deepEqual(accessory.changes, []);
   });
 });
 

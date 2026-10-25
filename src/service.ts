@@ -13,6 +13,9 @@ import { HAPStatus } from "./homebridge-enums.ts";
 import type { Nullable } from "./util.ts";
 import { sanitizeName } from "./homekit-name.ts";
 
+// The length HAP cuts a string characteristic's value to when the characteristic declares no `maxLen` of its own, warning as it cuts.
+const HAP_STRING_MAX_LENGTH = 64;
+
 // Cached Sets for O(1) service UUID lookups. Lazily initialized on first use.
 let requiresConfiguredNameUUIDs: Nullable<Set<string>> = null;
 let hasConfiguredNameUUIDs: Nullable<Set<string>> = null;
@@ -332,22 +335,7 @@ export function acquireService<T extends Service>({ accessory, name, onServiceCr
     // The type system expresses what the runtime requires: callers pass a Service subclass with the standard `(displayName?, subtype?)` constructor.
     service = new serviceType(sanitized, subtype);
 
-    const characteristic = getCharacteristicConstructor(service);
-
-    // HAP can pre-populate ConfiguredName in a freshly-constructed service's default optional set, so this guard prevents adding it a second time within this single
-    // construction. Re-acquisition of an already-existing service is a separate case, already gated by the `!service` check above.
-    if(!serviceRequiresConfiguredName(service) && serviceHasConfiguredName(service) &&
-      !service.optionalCharacteristics.some(x => (x.UUID === characteristic.ConfiguredName.UUID))) {
-
-      service.addOptionalCharacteristic(characteristic.ConfiguredName);
-    }
-
-    // Same duplicate-guard rationale as the ConfiguredName check above, applied to the Name characteristic.
-    if(!serviceRequiresName(service) && serviceHasName(service) && !service.optionalCharacteristics.some(x => (x.UUID === characteristic.Name.UUID))) {
-
-      service.addOptionalCharacteristic(characteristic.Name);
-    }
-
+    // setServiceName registers each name characteristic the kind supports and writes the name to it, so the service joins the accessory already named.
     setServiceName(service, sanitized);
 
     // The addition makes room when a subtype-less service joins subtyped siblings, so the service onServiceCreate receives is on the accessory with every
@@ -470,6 +458,49 @@ export function validService<T extends Service>({ accessory, name, onServiceCrea
  * @category Accessory
  */
 export type PresenceTransition = "absent" | "attached" | "kept" | "removed";
+
+/**
+ * Answer whether a presence gate changed what HAP serializes for the service, the question a persistence save keys on: `attached` and `removed` put something on
+ * or took something off, so the accessory cache holds a stale copy until it is saved, while `kept` and `absent` left the service as the gate found it.
+ *
+ * @param transition - The transition a presence gate answered. See {@link PresenceTransition}.
+ *
+ * @returns `true` for `"attached"` and `"removed"`, and `false` for `"kept"` and `"absent"`.
+ *
+ * @remarks
+ * A plugin that saves through {@link accessory-persistence!AccessoryPersistence | AccessoryPersistence} marks the accessory wherever a gate's answer reads `true`
+ * here, so every gate reaches the save through one spelling of the check rather than a comparison against the transition's literals at each call site.
+ *
+ * @example
+ * ```typescript
+ * // Save the accessory when the gate attached or removed the characteristic, and leave the cache alone when it kept or never had it.
+ * if(presenceChanged(validCharacteristic({ characteristic: Characteristic.StatusTampered, service, validate: tamperEnabled }))) {
+ *
+ *   this.platform.persistence.persist(accessory);
+ * }
+ * ```
+ *
+ * @category Accessory
+ */
+export function presenceChanged(transition: PresenceTransition): boolean {
+
+  // Every member below returns and the switch deliberately carries no default arm: with the union fully answered the compiler proves the switch total, so a member
+  // added to the union fails to compile here until it is placed on one side, rather than taking an answer no one chose for it.
+  switch(transition) {
+
+    case "attached":
+    case "removed": {
+
+      return true;
+    }
+
+    case "absent":
+    case "kept": {
+
+      return false;
+    }
+  }
+}
 
 /**
  * The inputs {@link validCharacteristic} reconciles one characteristic's presence from: the characteristic itself, the service it lives on, and the verdict
@@ -638,6 +669,10 @@ export interface PresenceCharacteristicOptions {
  *
  * @param options - The characteristic, its service, the read-through behind it, and the device's reachability. See {@link PresenceCharacteristicOptions}.
  *
+ * @returns The transition the call performed: `"attached"` or `"kept"` on a reported reading, `"kept"` or `"absent"` on a hold, and `"removed"` or `"absent"` on an
+ * absent reading from a reachable device. The characteristic is present afterward when the answer is `"attached"` or `"kept"`, and {@link presenceChanged} answers
+ * whether the call changed what HAP serializes. See {@link PresenceTransition}.
+ *
  * @remarks
  * Every outcome follows from one read of the reading. ADD or UPDATE: a reported reading attaches the characteristic and writes the value it carries, with no
  * reachability gate on this half, because the guarantee is asymmetric - the characteristic set never shrinks outside a real loss of the metric, while growth is
@@ -652,15 +687,26 @@ export interface PresenceCharacteristicOptions {
  * @example
  * ```typescript
  * // Follow one metric's liveness, mapping the sensor's own metric into a reading.
- * updatePresenceCharacteristic({ characteristic: Characteristic.PM2_5Density, reachable: this.isReachable, read: () => toReading(this.metric), service });
+ * const transition = updatePresenceCharacteristic({ characteristic: Characteristic.PM2_5Density, reachable: this.isReachable,
+ *   read: () => toReading(this.metric), service });
+ *
+ * // An attach or a removal changed what the accessory cache holds, so the accessory is marked for a save.
+ * if(presenceChanged(transition)) {
+ *
+ *   this.platform.persistence.persist(this.accessory);
+ * }
  * ```
  *
  * @see capabilityGate - the same asymmetry, applied to whether a service should exist at all.
  * @category Accessory
  */
-export function updatePresenceCharacteristic({ characteristic, reachable, read, service }: PresenceCharacteristicOptions): void {
+export function updatePresenceCharacteristic({ characteristic, reachable, read, service }: PresenceCharacteristicOptions): PresenceTransition {
 
   const reading = read();
+
+  // Read prior existence side-effect-free, before anything attaches...getCharacteristic would attach the very characteristic the removal branch is about to take off,
+  // and its answer looks the same whether it attached the characteristic or found it there, so this read is what tells an attach from a keep.
+  const present = service.testCharacteristic(characteristic);
 
   if(reading.state === "reported") {
 
@@ -675,20 +721,23 @@ export function updatePresenceCharacteristic({ characteristic, reachable, read, 
 
     service.updateCharacteristic(characteristic, reading.value);
 
-    return;
+    return present ? "kept" : "attached";
   }
 
   // A metric that is still reporting, or a device we cannot currently see, holds whatever HomeKit has.
   if((reading.state === "pending") || !reachable) {
 
-    return;
+    return present ? "kept" : "absent";
   }
 
-  // Read prior existence side-effect-free...getCharacteristic would attach the very characteristic this branch is about to remove.
-  if(service.testCharacteristic(characteristic)) {
+  if(present) {
 
     service.removeCharacteristic(service.getCharacteristic(characteristic));
+
+    return "removed";
   }
+
+  return "absent";
 }
 
 /**
@@ -915,26 +964,37 @@ export function getServiceName(service?: Service): string | undefined {
  * @param accessory - The accessory to rename.
  * @param name      - The new name to apply to the accessory.
  *
+ * @returns True when the call wrote anything, a display name or a characteristic, and false when every name already carried the sanitized name or nothing was
+ * left after sanitizing.
+ *
  * @remarks
  * An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to two names. This writes all
  * of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName` owns the accessory display names (the
  * `PlatformAccessory`'s own and the HAP accessory's beneath it), and {@link setServiceName} owns the AccessoryInformation service's `ConfiguredName` and `Name`
- * characteristics. `ConfiguredName` is what makes a rename stick in the Home app, since it is the name a user can edit there.
+ * characteristics. `ConfiguredName` is what makes a rename stick in the Home app, since it is the name a user can edit there, so whether to sync a device's name
+ * at all stays the plugin's policy: a call with the device's name replaces a name the user gave the accessory.
+ *
+ * Each name is compared before it is written, and only what differs is written, so a plugin calls this on every refresh of a device's name and saves the accessory
+ * only when the answer is true, with no comparison of its own. A comparison of its own would misread a fresh accessory: HAP seeds the information service's `Name`
+ * with the display name, so a fresh accessory already reads as named while it still lacks the `ConfiguredName` this adds.
  *
  * The name is sanitized through the same HomeKit naming rules {@link acquireService} applies, so a caller may pass a raw device name straight through. A name with
  * nothing left after sanitizing is not applied anywhere: an accessory has to answer to something, and a blank one is worse than the name it already had.
  *
  * @example
  * ```typescript
- * // Rename an accessory after the device reports a new name.
- * setAccessoryName(accessory, device.name);
+ * // Rename an accessory after the device reports a new name, and save it to Homebridge's accessory cache only when the rename changed something.
+ * if(setAccessoryName(accessory, device.name)) {
+ *
+ *   this.platform.persistence.persist(accessory);
+ * }
  * ```
  *
  * @see setServiceName - the per-service equivalent this delegates its characteristic writes to.
  * @see getServiceName - to retrieve the current name set on a service.
  * @category Accessory
  */
-export function setAccessoryName(accessory: PlatformAccessory, name: string): void {
+export function setAccessoryName(accessory: PlatformAccessory, name: string): boolean {
 
   // Sanitize once. HomeKit's naming rules govern the accessory display names and the information service's name characteristics alike, so one validation pass
   // feeds every write below and none of them can disagree about what the name is. Nothing surviving the sanitize means there is no name to apply, and a partial
@@ -943,30 +1003,35 @@ export function setAccessoryName(accessory: PlatformAccessory, name: string): vo
 
   if(!sanitized.length) {
 
-    return;
+    return false;
   }
 
-  // Hand the accessory display names to Homebridge's own setter, which writes the platform wrapper's `displayName` and the HAP accessory's together. Going through
-  // the documented API rather than assigning the two fields directly keeps this off Homebridge's internal `_associatedHAPAccessory` handle entirely.
-  accessory.updateDisplayName(sanitized);
+  // Hand the accessory display names to Homebridge's own setter, which writes the platform wrapper's `displayName` and the HAP accessory's together, and only when
+  // one of them differs from the name. The comparison reads the HAP accessory's name through Homebridge's `_associatedHAPAccessory` handle, because the setter
+  // writes the wrapper's and the HAP accessory's alike and each can hold another name, while the write itself stays with the documented API rather than
+  // assigning those fields directly.
+  const displayed = (accessory.displayName !== sanitized) || (accessory._associatedHAPAccessory.displayName !== sanitized);
+
+  if(displayed) {
+
+    accessory.updateDisplayName(sanitized);
+  }
 
   const [first] = accessory.services;
 
   if(!first) {
 
-    return;
+    return displayed;
   }
 
   // Reach AccessoryInformation through the same constructor reflection the UUID sets use: HAP's static service registry is not reachable from this module, but
   // every service instance carries a constructor that holds it. Delegating the write to setServiceName rather than setting the characteristics here keeps the
-  // ConfiguredName / Name conditional logic in its single home.
+  // ConfiguredName / Name conditional logic in its single home, and its answer says whether the information service's half of the rename wrote anything.
   const serviceType = first.constructor as unknown as { AccessoryInformation?: { UUID: string } };
   const informationService = accessory.services.find((service) => service.UUID === serviceType.AccessoryInformation?.UUID);
+  const informed = (informationService !== undefined) && setServiceName(informationService, sanitized);
 
-  if(informationService) {
-
-    setServiceName(informationService, sanitized);
-  }
+  return displayed || informed;
 }
 
 /**
@@ -975,29 +1040,99 @@ export function setAccessoryName(accessory: PlatformAccessory, name: string): vo
  * @param service - The service to update.
  * @param name    - The new name to apply to the service.
  *
+ * @returns True when the call wrote anything, the display name or a characteristic, and false when each already carried the sanitized name or nothing was left
+ * after sanitizing.
+ *
  * @remarks
- * This function ensures the name is validated, updates the service's `displayName`, and sets the `ConfiguredName` and `Name`
- * characteristics when supported by the service type.
+ * This function ensures the name is validated, then compares the service's `displayName`, and its `ConfiguredName` and `Name` characteristics, against it, writing
+ * only those that differ. A name characteristic the service carries is kept in step whatever the service's kind, and one it lacks is added where the kind supports
+ * it, registered first as one of the service's optional characteristics, so HAP adds it without a warning, on a service restored from the accessory cache too.
+ * Each characteristic's presence is read before its value, because HAP's `getCharacteristic` attaches whatever it is asked for, so a missing one is always added
+ * as a reported write rather than silently by the read, and one the kind does not support is never added at all. A plugin calls this on every refresh of a name and
+ * saves the accessory only when the answer is true, with no comparison of its own. Whether to sync a device's name at all stays the plugin's policy, because
+ * `ConfiguredName` is a name a controller can write, so a call with the device's name replaces a name the user gave the service.
+ *
+ * HAP cuts a name characteristic's value past the characteristic's maximum length, its own `maxLen` or HAP's default for a string, so each characteristic is
+ * written and compared in that cut form, with any end HomeKit's naming rule forbids stripped from the cut...a long name is written once, with no warning from HAP,
+ * and reads as unchanged afterward. The display name carries the whole name.
+ *
+ * A name with nothing left after sanitizing is not applied, as {@link setAccessoryName} refuses one: a service has to answer to something, and a blank name is worse
+ * than the one it already carries.
+ *
+ * @example
+ * ```typescript
+ * // Rename a service after the device reports a new name for it, and save the accessory only when the rename changed something.
+ * if(setServiceName(service, zone.name)) {
+ *
+ *   this.platform.persistence.persist(accessory);
+ * }
+ * ```
  *
  * @see acquireService - to add or retrieve services.
  * @see getServiceName - to retrieve the current name set on a service.
  * @see setAccessoryName - the accessory-level equivalent, which delegates its information-service write here.
  * @category Accessory
  */
-export function setServiceName(service: Service, name: string): void {
+export function setServiceName(service: Service, name: string): boolean {
 
-  const characteristic = getCharacteristicConstructor(service);
   const sanitized = sanitizeName(name);
 
-  service.displayName = sanitized;
+  // Nothing surviving the sanitize means there is no name to apply, and blanking the service would be worse than leaving the name it carries.
+  if(!sanitized.length) {
 
-  if(serviceHasConfiguredName(service)) {
-
-    service.updateCharacteristic(characteristic.ConfiguredName, sanitized);
+    return false;
   }
 
-  if(serviceHasName(service)) {
+  const characteristic = getCharacteristicConstructor(service);
 
-    service.updateCharacteristic(characteristic.Name, sanitized);
+  // Bring one name characteristic to the name, answering whether it wrote: the service's kind says whether the characteristic is required and whether it is
+  // supported, and the target is the characteristic itself.
+  const applyName = ({ required, supported, target }: { required: boolean; supported: boolean; target: CharacteristicTarget }): boolean => {
+
+    // HAP's catalog leaves a name characteristic out of the optional set of some kinds HomeKit supports it on, ConfiguredName on a Switch or a Valve among them,
+    // and a service restored from the accessory cache carries whatever set it was saved with, while HAP warns as it attaches a characteristic outside that set.
+    // Registering a supported one the set lacks, before anything is written, lets the write below attach it quietly. A required one is already on the service.
+    if(supported && !required && !service.optionalCharacteristics.some((optional) => optional.UUID === target.UUID)) {
+
+      service.addOptionalCharacteristic(target);
+    }
+
+    // Presence is read before the value because HAP's getCharacteristic attaches a characteristic it is asked for, seeded with its default, so reading a missing
+    // one that way would add it unreported whenever that default matched the name, and would add one the kind does not support. A characteristic the service
+    // carries is kept in step whatever its kind.
+    const present = service.testCharacteristic(target);
+
+    if(!present && !supported) {
+
+      return false;
+    }
+
+    // HAP cuts a value past the characteristic's maximum length with a warning, so the name is cut to that length here and stored in the form HAP keeps, which is
+    // what lets the next comparison read it as equal. A cut can end on a space or another character a name may not end with, so the cut is sanitized again.
+    const instance = service.getCharacteristic(target);
+    const maxLength = instance.props.maxLen ?? HAP_STRING_MAX_LENGTH;
+    const value = (sanitized.length > maxLength) ? sanitizeName(sanitized.slice(0, maxLength)) : sanitized;
+
+    if(present && (instance.value === value)) {
+
+      return false;
+    }
+
+    instance.updateValue(value);
+
+    return true;
+  };
+
+  const renamed = service.displayName !== sanitized;
+
+  if(renamed) {
+
+    service.displayName = sanitized;
   }
+
+  const configured = applyName({ required: serviceRequiresConfiguredName(service), supported: serviceHasConfiguredName(service),
+    target: characteristic.ConfiguredName });
+  const named = applyName({ required: serviceRequiresName(service), supported: serviceHasName(service), target: characteristic.Name });
+
+  return renamed || configured || named;
 }

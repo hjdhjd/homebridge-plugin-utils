@@ -18,6 +18,10 @@
  * Every shape shares ONE timeline, which is the point: a scenario spanning a backoff wait, a liveness deadline, and a bounded call's deadline is driven by a single
  * `advance` rather than by a clock for the waits and a mock-timer harness for the deadlines, and they interleave exactly as the platform would order them.
  *
+ * An infinite span never comes due, on the production clock and its double alike: the double registers no entry for one, so an infinite delay settles only when its
+ * signal aborts, an infinite callback timer never fires, and `pending`, `nextDeadline` and `advanceToNext` never meet it. A `NaN` span comes due one millisecond out,
+ * as the platform fires one, so every deadline on the timeline is one `advance` can reach.
+ *
  * Beside the timeline the double keeps the ledger a pacing assertion reads: `requested` is every `ms` a consumer asked for, in call order, and `advanceToNext()`
  * steps straight to the earliest pending deadline - so a suite drives a consumer's schedule by the numbers the consumer chose rather than by numbers it restates.
  *
@@ -65,11 +69,32 @@ function abortError(): Error {
   return error;
 }
 
+/* Whether `ms` is an infinite span, which never comes due on the double, as it never elapses on the production clock. The double registers no entry for one, so the
+ * timeline never holds an infinite deadline: an infinite repeat crossed by `advance(Infinity)` would re-arm at a deadline that is always due and loop without end, and
+ * an infinite entry stepped to by `advanceToNext` would carry the clock's time to Infinity. The test is an equality rather than a finiteness check, because negative
+ * infinity is a negative span the next `advance` flushes and `NaN` comes due one millisecond out.
+ */
+function neverElapses(ms: number): boolean {
+
+  return ms === Infinity;
+}
+
+/* The span an entry comes due after. A `NaN` span comes due one millisecond out, as the platform's timers fire one, because a `NaN` deadline compares false against
+ * every time: registered first it would hold `nextDeadline` at `NaN`, and `advanceToNext` would carry the clock's time there, stranding every later wait. Every other
+ * span is taken as asked.
+ */
+function dueIn(ms: number): number {
+
+  return Number.isNaN(ms) ? 1 : ms;
+}
+
 /**
  * A controllable {@link Clock} double over virtual time, carrying awaited delays and callback timers on one timeline. `now()` returns the current virtual time;
  * `delay()` registers a pending wait that resolves only when {@link TestClock.advance} crosses its deadline (in ascending-deadline order), or rejects with an
  * `AbortError` (matching `node:timers/promises` `setTimeout` - `name` `"AbortError"`, `code` `"ABORT_ERR"`, NOT the signal's reason) when its signal aborts;
- * `schedule()` registers a callback timer that `advance` runs when it crosses that deadline, once or on repeat. No real timers or wall-clock are used.
+ * `schedule()` registers a callback timer that `advance` runs when it crosses that deadline, once or on repeat. No real timers or wall-clock are used. An infinite
+ * span registers nothing and never comes due, as on the production clock, so an infinite delay settles only when its signal aborts and an infinite callback timer
+ * never fires.
  *
  * A callback and an awaited delay settle at different moments, which a test that observes both has to account for: a callback runs SYNCHRONOUSLY inside `advance`,
  * while an awaited delay's continuation runs on a later microtask, so a callback firing at the same deadline as a delay observes the state `advance` has reached
@@ -103,11 +128,11 @@ export class TestClock implements Clock {
 
   /**
    * Every `ms` a {@link TestClock.delay} or {@link TestClock.schedule} call asked for, in call order, a deadline's span among them through the `schedule` call it is
-   * armed on. A request lands here before its entry is registered and whatever later becomes of that entry, so a delay the clock crossed, one whose signal aborted
-   * mid-wait, one whose signal was already aborted, a cancelled callback timer, and a deadline its holder released all appear. That is the ledger a suite does its
-   * cadence arithmetic against - a history that dropped the entries which never came due would understate exactly the loops worth asserting on. Delays, callback
-   * timers, and deadlines share it, so a clock driving several timers at once is read BY VALUE (`requested.includes(...)`, a count of a given window) rather than at
-   * a fixed index, since the interleaving depends on what the consumer armed when.
+   * armed on, each as asked. A request lands here before any entry is registered and whatever later becomes of it, so a delay the clock crossed, one whose signal
+   * aborted mid-wait, one whose signal was already aborted, a cancelled callback timer, a deadline its holder released, and an infinite span that registers no entry
+   * at all appear. That is the ledger a suite does its cadence arithmetic against - a history that dropped the entries which never came due would understate exactly
+   * the loops worth asserting on. Delays, callback timers, and deadlines share it, so a clock driving several timers at once is read BY VALUE (`requested.includes(...)`,
+   * a count of a given window) rather than at a fixed index, since the interleaving depends on what the consumer armed when.
    */
   public readonly requested: number[] = [];
 
@@ -213,7 +238,8 @@ export class TestClock implements Clock {
 
   /**
    * Advance virtual time to the earliest pending deadline and settle everything due there - the step a consumer's next real timer firing would produce. Delays and
-   * callback timers are equal candidates for that deadline. A clock with nothing pending answers `false` and moves no time.
+   * callback timers are equal candidates for that deadline. A clock with nothing pending answers `false` and moves no time, and an infinite span registers no entry,
+   * so a clock holding only infinite waits and timers answers `false` as well and the step never carries the clock's time to Infinity.
    *
    * The step is `Math.max(0, deadline - now())`, so an entry that is already due - a `delay(0)`, or an entry with a negative `ms` - is flushed through
    * {@link TestClock.advance}'s zero path rather than reached backward for. Entries sharing the earliest deadline settle together within the one step, in
@@ -241,12 +267,14 @@ export class TestClock implements Clock {
 
   /**
    * Register a delay that resolves when virtual time reaches `this.now() + ms`, or rejects with an `AbortError` (matching `node:timers/promises`) if `init.signal` aborts
-   * first. A non-positive `ms` yields a deadline at or before the current time, which the very next {@link TestClock.advance} (including `advance(0)`) flushes.
+   * first. A non-positive `ms` yields a deadline at or before the current time, which the very next {@link TestClock.advance} (including `advance(0)`) flushes. A
+   * `NaN` `ms` comes due one millisecond out, as the platform fires one. An infinite `ms` registers no entry, as the production clock arms no timer for one, so the
+   * wait never comes due: it rejects when `init.signal` aborts and never settles without a signal.
    *
    * A pre-aborted signal rejects on the executor's microtask exactly as `systemClock` does (NOT a synchronous throw): {@link onAbort} fires the handler inline, which
-   * removes the just-registered entry and rejects, so the entry never lingers in `pending`. Either way the call's `ms` is recorded in {@link TestClock.requested}.
+   * removes any entry the call registered and rejects, so the entry never lingers in `pending`. In every case the call's `ms` is recorded in {@link TestClock.requested}.
    *
-   * @param ms   - The delay, in milliseconds. May be zero or negative (flushed by the next `advance`).
+   * @param ms   - The delay, in milliseconds. May be zero or negative (flushed by the next `advance`), or infinite (never due).
    * @param init - Optional init options. A supplied `signal` rejects the wait with an `AbortError` when it aborts.
    *
    * @returns A promise that resolves when the deadline is crossed, or rejects with an `AbortError` if the signal aborts first.
@@ -254,16 +282,21 @@ export class TestClock implements Clock {
   public delay(ms: number, init?: { signal?: AbortSignal }): Promise<void> {
 
     const { promise, reject, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
-    const entry: ClockEntry = { deadline: this.#now + ms, kind: "delay", resolve };
+    const entry: ClockEntry = { deadline: this.#now + dueIn(ms), kind: "delay", resolve };
 
     // Record the request before the entry is registered, so the history covers every call rather than only the calls that survive registration: a pre-aborted
     // signal removes its entry within this very call, and a wait a consumer asked for belongs to its cadence whether or not the wait ever came due.
     this.requested.push(ms);
 
-    // Register the entry FIRST so a pre-aborted signal's inline `onAbort` handler (below) can find and remove it. `onAbort` runs the handler synchronously when the
-    // signal is already aborted, so for a pre-aborted signal the entry is pushed and then immediately removed-and-rejected within this call - settling on the executor's
-    // microtask, identical to `systemClock`. When no signal is supplied, `dispose` stays undefined and the entry only ever leaves via `advance`.
-    this.#pending.push(entry);
+    /* Register the entry FIRST so a pre-aborted signal's inline `onAbort` handler (below) can find and remove it. `onAbort` runs the handler synchronously when the
+     * signal is already aborted, so for a pre-aborted signal the entry is pushed and then immediately removed-and-rejected within this call - settling on the
+     * executor's microtask, identical to `systemClock`. When no signal is supplied, `dispose` stays undefined and the entry only ever leaves via `advance`. An
+     * infinite span registers nothing, because it never comes due, so its abort handler's removal finds nothing and the rejection is the only way the wait settles.
+     */
+    if(!neverElapses(ms)) {
+
+      this.#pending.push(entry);
+    }
 
     if(init?.signal !== undefined) {
 
@@ -292,12 +325,14 @@ export class TestClock implements Clock {
    * `init.repeat` is set. The callback runs synchronously inside `advance`, not on a microtask, so a test reads its effects immediately after the advance returns.
    *
    * A repeat floors BOTH its first deadline and its period at one millisecond, because the platform's `setInterval` floors a zero or negative period the same way - a
-   * repeat seeded from a raw zero would otherwise fire once per pass rather than once per elapsed millisecond. A one-shot's deadline is uncoerced, matching `delay`, so
-   * a non-positive `ms` comes due at or before the current time and the very next `advance` (including `advance(0)`) flushes it. The call's `ms` is recorded in
-   * {@link TestClock.requested} as asked, before either coercion.
+   * repeat seeded from a raw zero would otherwise fire once per pass rather than once per elapsed millisecond. A one-shot's non-positive `ms` is uncoerced, matching
+   * `delay`, so it comes due at or before the current time and the very next `advance` (including `advance(0)`) flushes it. A `NaN` `ms` comes due one millisecond
+   * out, a one-shot and a repeat's period alike, matching `delay` and the platform, which fires a `NaN` timer after one millisecond. The call's `ms` is recorded in
+   * {@link TestClock.requested} as asked, before any coercion.
    *
    * A virtual timeline has no ceiling: a window past the platform timer's is registered as asked and comes due when `advance` reaches it, which is what the production
-   * clock's chained arms deliver past the same boundary, so a consumer scheduling against a distant boundary runs one code path under either clock.
+   * clock's chained arms deliver past the same boundary, so a consumer scheduling against a distant boundary runs one code path under the production clock and its
+   * double. An infinite window registers no entry and never comes due, a one-shot and a repeat alike, as the production clock arms no timer for one.
    *
    * `init.unref` is accepted and ignored. A virtual timeline has no process to hold open, and the platform's unref decides only whether a pending timer keeps the
    * process alive rather than anything about when the timer fires, so a timer armed with the flag comes due on `advance` exactly as one armed without it. Accepting
@@ -307,20 +342,26 @@ export class TestClock implements Clock {
    * @param ms       - The timer's window, in milliseconds.
    * @param init     - Optional init options. `repeat` arms a repeating timer rather than a one-shot; `unref` is accepted and ignored.
    *
-   * @returns A handle whose `[Symbol.dispose]` cancels the timer by removing its entry from the timeline. Disposing after a one-shot has fired, and disposing a second
-   * time, find nothing to remove and do nothing.
+   * @returns A handle whose `[Symbol.dispose]` cancels the timer by removing its entry from the timeline. Disposing after a one-shot has fired, disposing a second
+   * time, and disposing an infinite window's handle, which registered no entry, find nothing to remove and do nothing.
    */
   public schedule(callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable {
 
-    const interval = Math.max(1, ms);
+    const span = dueIn(ms);
+    const interval = Math.max(1, span);
 
-    // Record the request as asked, before the repeat floor, so the ledger reads back the window the consumer chose rather than the one the platform would enforce.
+    // Record the request as asked, before the `NaN` reading and the repeat floor, so the ledger reads back the window the consumer chose rather than the one the
+    // platform would enforce.
     this.requested.push(ms);
 
     const entry: ClockEntry = (init?.repeat ?? false) ? { callback, deadline: this.#now + interval, interval, kind: "repeat" } :
-      { callback, deadline: this.#now + ms, kind: "once" };
+      { callback, deadline: this.#now + span, kind: "once" };
 
-    this.#pending.push(entry);
+    // An infinite window registers nothing, because it never comes due, so the handle below finds nothing to remove and its disposal does nothing.
+    if(!neverElapses(ms)) {
+
+      this.#pending.push(entry);
+    }
 
     return { [Symbol.dispose]: (): void => this.#remove(entry) };
   }
@@ -352,7 +393,7 @@ export class TestClock implements Clock {
    * The number of registered entries that have not yet settled, counting pending delays and armed callback timers together. A test reads this to assert a consumer
    * registered its waits and timers and later cleared them (no leak). A repeating timer counts once and keeps counting until its handle is disposed. A deadline is
    * one of these one-shots: it counts here until the clock crosses it or its holder disposes it, so a deadline whose holder released it when its work settled has
-   * left the count.
+   * left the count. An infinite span registers no entry, so it never counts here.
    *
    * @returns The count of outstanding entries.
    */

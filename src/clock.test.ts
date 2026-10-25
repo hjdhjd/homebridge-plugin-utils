@@ -2,14 +2,16 @@
  *
  * clock.test.ts: Unit tests for the injectable Clock contract - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
  * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, its schedule() IS the global callback timers read at call time and
- * forwards an unref to the platform handle's own unref(), and past the platform timer's ceiling every member that arms time carries the delay as a chain of arms
- * that fires at the requested moment without the platform's overflow warning), plus the shipped controllable TestClock double (advanceable virtual time,
- * deadline-ordered resolution, the advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on both
- * resolution paths, the requested history across every settlement path, the earliest-pending-deadline read, the step that lands on that deadline, the callback
- * timers that share that one timeline with the delays, the unref it accepts and ignores because a virtual timeline has no process to hold open, and the window past
- * the ceiling that is an ordinary entry on a timeline with none), plus the cancellable deadline armDeadline builds on a clock's own timer (its reason a consumer
- * cannot tell apart from the platform's, its release on disposal on each clock, its span carried past the ceiling, and its unreferenced timer that lets a process
- * exit with a deadline still armed).
+ * forwards an unref to the platform handle's own unref(), past the platform timer's ceiling every member that arms time carries the delay as a chain of arms
+ * that fires at the requested moment without the platform's overflow warning, an infinite span arms nothing and never elapses - its delay settling only when its
+ * signal aborts, with the primitive's own AbortError, and a process holding only infinite waits and timers exiting on its own - while NaN and negative infinity keep
+ * the platform's one-millisecond handling), plus the shipped controllable TestClock double (advanceable virtual time, deadline-ordered resolution, the
+ * advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on every resolution path, the requested history
+ * across every settlement path, the earliest-pending-deadline read, the step that lands on that deadline, the callback timers that share that one timeline with the
+ * delays, the unref it accepts and ignores because a virtual timeline has no process to hold open, the window past the ceiling that is an ordinary entry on a
+ * timeline with none, the infinite span that registers no entry, and the NaN span that comes due a millisecond out so the timeline stays numeric), plus the
+ * cancellable deadline armDeadline builds on a clock's own timer (its reason a consumer cannot tell apart from the platform's, its release on disposal on each
+ * clock, its span carried past the ceiling, its infinite span that never aborts, and its unreferenced timer that lets a process exit with a deadline still armed).
  */
 import { TIMER_DELAY_MAX_MS, armDeadline, systemClock } from "./clock.ts";
 import { describe, test } from "node:test";
@@ -22,6 +24,7 @@ import { getEventListeners } from "node:events";
 import { isTimeoutReason } from "./util.ts";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import timersPromises from "node:timers/promises";
 import { writeFile } from "node:fs/promises";
 
 // This repo's own clock module by absolute path, the specifier a child process imports it through.
@@ -33,6 +36,10 @@ const SCRATCH_PREFIX = "hbpu-clock-";
 // How long a child process may take to reach its own exit before its spawn's deadline kills it. Generous enough for a cold type-stripping start on a slow CI host,
 // and short enough that the kill lands well inside the runner's own per-test timeout.
 const CHILD_EXIT_BOUND_MS = 10000;
+
+// How long a row waits in real time to tell a span that never comes due from one the platform fires after a millisecond. The platform fires timers in expiry
+// order, so a wait well past that millisecond tells the two apart without leaning on the host's speed.
+const REAL_WAIT_MS = 100;
 
 // What a child process answered: its exit code, null when the spawn's deadline killed it, beside everything it wrote.
 interface ChildOutcome {
@@ -47,6 +54,12 @@ interface ChildOutcome {
 async function flushMicrotasks(): Promise<void> {
 
   await Promise.resolve();
+}
+
+// Race `pending` against a real wait on the promise primitive, answering "settled" when `pending` resolves or rejects first and "silent" when the wait ends first.
+async function raceRealWait(pending: Promise<unknown>): Promise<"settled" | "silent"> {
+
+  return await Promise.race([ pending.then((): "settled" => "settled", (): "settled" => "settled"), systemClock.delay(REAL_WAIT_MS).then((): "silent" => "silent") ]);
 }
 
 // Assert that `thrown` is the AbortError shape that `node:timers/promises` setTimeout produces on abort: a name of "AbortError" and a STRING code of "ABORT_ERR". This is
@@ -382,8 +395,13 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     }
   });
 
-  test("an infinite delay is the platform's own call rather than a chain that never ends", async () => {
+  test("systemClock.schedule at an infinite window arms no global timer, so no one-shot or repeat fires or warns, and its disposer clears nothing", async (t) => {
 
+    // The spies call through, so any timer an arm reached would still run. The real wait is the promise primitive, which never reads the global timers, so every
+    // count below is the arms' own.
+    const globalSetTimeout = t.mock.method(globalThis, "setTimeout");
+    const globalSetInterval = t.mock.method(globalThis, "setInterval");
+    const globalClearTimeout = t.mock.method(globalThis, "clearTimeout");
     const warnings: string[] = [];
     const observe = (warning: Error): number => warnings.push(warning.name);
 
@@ -391,20 +409,122 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
     try {
 
-      const { promise, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
-      const handle = systemClock.schedule((): void => resolve(), Infinity, { unref: true });
+      const fired: string[] = [];
 
-      // A chain that never ends would leave this race to the real one-second wait; the platform's rule fires the timer at once.
-      const outcome = await Promise.race([ promise.then((): string => "fired"), systemClock.delay(1000).then((): string => "silent") ]);
+      // Each handle is held in a `using` declaration as well, so an assertion that fails cannot strand a live interval in the runner's loop. The scope's own
+      // disposal is one more call on a disposer that does nothing.
+      using oneShot = systemClock.schedule((): number => fired.push("one-shot"), Infinity);
+      using repeat = systemClock.schedule((): number => fired.push("repeat"), Infinity, { repeat: true });
 
-      assert.equal(outcome, "fired", "the platform sets an infinite delay to one millisecond, so it fires at once");
-      assert.deepEqual(warnings, ["TimeoutOverflowWarning"], "and says so with its own warning, which is the platform's rule rather than this clock's");
+      await systemClock.delay(REAL_WAIT_MS);
 
-      handle[Symbol.dispose]();
+      assert.equal(globalSetTimeout.mock.callCount(), 0, "an infinite one-shot arms no global setTimeout, at the call or across the wait after it");
+      assert.equal(globalSetInterval.mock.callCount(), 0, "and an infinite repeat arms no global setInterval");
+      assert.deepEqual(fired, [], "neither fires within a real wait, where the platform's own arm would have fired each after a millisecond");
+      assert.deepEqual(warnings, [], "and neither draws the platform's overflow warning");
+
+      oneShot[Symbol.dispose]();
+      oneShot[Symbol.dispose]();
+      repeat[Symbol.dispose]();
+      repeat[Symbol.dispose]();
+
+      assert.equal(globalClearTimeout.mock.callCount(), 0, "disposing each handle twice clears nothing, because nothing was armed");
     } finally {
 
       process.off("warning", observe);
     }
+  });
+
+  test("systemClock.delay at an infinite span reaches the primitive only on abort, holds one listener until then, and rejects with its AbortError", async (t) => {
+
+    // The spy sits on the module object the delay reads the promise primitive from at call time, and calls through. The race partner is a global timer, which never
+    // reaches the primitive, so every count below is the delay's own.
+    const primitive = t.mock.method(timersPromises, "setTimeout");
+    const controller = new AbortController();
+    const waited = systemClock.delay(Infinity, { signal: controller.signal });
+    const outcome = await Promise.race([ waited.then((): string => "settled", (): string => "settled"),
+      new Promise<string>((resolveSilent) => setTimeout((): void => resolveSilent("silent"), REAL_WAIT_MS)) ]);
+
+    assert.equal(outcome, "silent", "an infinite delay stays pending across a real wait");
+    assert.equal(primitive.mock.callCount(), 0, "arming no timer while it waits");
+    assert.equal(getEventListeners(controller.signal, "abort").length, 1, "and holding one abort listener on its signal");
+
+    controller.abort();
+
+    await assert.rejects(() => waited, (error: unknown) => {
+
+      assertAbortError(error, "an infinite delay aborted mid-wait");
+
+      return true;
+    });
+
+    assert.equal(primitive.mock.callCount(), 1, "the abort hands the signal to the promise primitive once");
+    assert.equal(primitive.mock.calls[0]?.arguments[2]?.signal?.aborted, true, "already aborted, so the primitive rejects at once and arms nothing");
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0, "and the listener leaves with the abort that fired it");
+
+    // A signal already aborted when the delay is asked for rejects the same way, with no listener at all.
+    const preAborted = new AbortController();
+
+    preAborted.abort();
+
+    await assert.rejects(() => systemClock.delay(Infinity, { signal: preAborted.signal }), (error: unknown) => {
+
+      assertAbortError(error, "an infinite delay with a pre-aborted signal");
+
+      return true;
+    });
+
+    assert.equal(primitive.mock.callCount(), 2, "a signal already aborted goes straight to the promise primitive");
+    assert.equal(primitive.mock.calls[1]?.arguments[2]?.signal, preAborted.signal, "handing it that signal");
+    assert.equal(getEventListeners(preAborted.signal, "abort").length, 0, "with no listener registered");
+  });
+
+  test("systemClock.delay at an infinite span with no signal never settles, staying silent across a real wait", async () => {
+
+    assert.equal(await raceRealWait(systemClock.delay(Infinity)), "silent", "with no signal to end it, an infinite delay neither resolves nor rejects");
+  });
+
+  test("a process holding only a signalless infinite systemClock.delay and a referenced infinite systemClock.schedule exits on its own, neither coming due", async () => {
+
+    // The wait is awaited inside an async function rather than at the top level, because a top-level await on a promise that never settles is itself a process
+    // error. The timer carries no unref, so the child reaches its own exit only when nothing was armed, and the wait and the timer each log if they ever come due.
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const result = await runChild(scratch.path, "infinite-spans.ts", "import { systemClock } from " + JSON.stringify(CLOCK_PATH) + ";\n\n" +
+      "async function waitForever(): Promise<void> {\n\n  await systemClock.delay(Infinity);\n  console.log(\"settled\");\n}\n\n" +
+      "void waitForever();\n" +
+      "systemClock.schedule(() => console.log(\"fired\"), Infinity);\n" +
+      "console.log(\"armed\");\n");
+
+    assert.equal(result.code, 0, "the child must reach its own exit with the infinite wait and timer still pending; stderr: " + result.stderr);
+    assert.equal(result.stdout, "armed\n", "and neither may come due before it does; stderr: " + result.stderr);
+    assert.equal(result.stderr.includes("TimeoutOverflowWarning"), false, "and nothing it armed may draw the platform's overflow warning; stderr: " + result.stderr);
+  });
+
+  test("systemClock.schedule at a NaN window keeps the platform's handling, firing a one-shot after a millisecond", async () => {
+
+    const { promise, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
+    const handle = systemClock.schedule((): void => resolve(), NaN);
+
+    assert.equal(await raceRealWait(promise), "settled", "the platform sets a NaN window to one millisecond, so the one-shot fires well inside a real wait");
+
+    handle[Symbol.dispose]();
+  });
+
+  test("systemClock.delay at a NaN span keeps the platform's handling, resolving after a millisecond", async () => {
+
+    assert.equal(await raceRealWait(systemClock.delay(NaN)), "settled", "the platform sets a NaN delay to one millisecond, so it resolves well inside a real wait");
+  });
+
+  test("systemClock.schedule and delay at negative infinity keep the platform's handling of a negative span, each coming due after a millisecond", async () => {
+
+    const { promise, resolve }: PromiseWithResolvers<void> = Promise.withResolvers();
+    const handle = systemClock.schedule((): void => resolve(), -Infinity);
+
+    assert.equal(await raceRealWait(promise), "settled", "the platform sets a negative window to one millisecond, so the one-shot fires well inside a real wait");
+    assert.equal(await raceRealWait(systemClock.delay(-Infinity)), "settled", "and the delay resolves well inside one, as every negative delay does");
+
+    handle[Symbol.dispose]();
   });
 
   test("a delay past the ceiling awaits the promise primitive once per hop and resolves at the requested moment", async (t) => {
@@ -1015,6 +1135,148 @@ describe("TestClock - callback timers", () => {
   });
 });
 
+describe("TestClock - infinite, NaN and negative-infinity spans", () => {
+
+  test("an infinite delay, one-shot and repeat leave pending, nextDeadline and advanceToNext empty, advance(Infinity) fires none, and requested holds each", async () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+    let settled = false;
+
+    void clock.delay(Infinity).then((): void => {
+
+      settled = true;
+    });
+
+    const oneShot = clock.schedule((): number => fired.push("one-shot"), Infinity);
+    const repeat = clock.schedule((): number => fired.push("repeat"), Infinity, { repeat: true });
+
+    // The counts are read before any step, because an infinite repeat on the timeline would come due again at every deadline it re-armed to and loop without end
+    // inside the advance below.
+    assert.equal(clock.pending, 0, "no infinite span registers an entry");
+    assert.equal(clock.nextDeadline, null, "so the timeline has no deadline to answer");
+    assert.deepEqual(clock.requested, [ Infinity, Infinity, Infinity ], "while the ledger records each span as asked");
+    assert.equal(clock.advanceToNext(), false, "the step finds nothing to step to");
+    assert.equal(clock.now(), 0, "and moves no time");
+
+    clock.advance(Infinity);
+    await flushMicrotasks();
+
+    assert.deepEqual(fired, [], "even an infinite advance fires neither timer");
+    assert.equal(settled, false, "or settles the delay");
+
+    oneShot[Symbol.dispose]();
+    oneShot[Symbol.dispose]();
+    repeat[Symbol.dispose]();
+    repeat[Symbol.dispose]();
+
+    assert.equal(clock.pending, 0, "disposing each handle twice finds nothing to remove");
+  });
+
+  test("an infinite delay with a signal registers no entry in pending and rejects with the AbortError on abort, leaving a finite sibling in place", async () => {
+
+    // A finite sibling sits on the timeline first, because the abort handler and the infinite handle's disposer each remove an entry that was never registered,
+    // and a removal that did not find it must leave the sibling where it is.
+    const clock = new TestClock();
+    const controller = new AbortController();
+
+    void clock.delay(100);
+
+    const waited = clock.delay(Infinity, { signal: controller.signal });
+    const handle = clock.schedule((): void => undefined, Infinity);
+
+    assert.equal(clock.pending, 1, "only the finite sibling registers an entry");
+    assert.equal(clock.nextDeadline, 100, "so the sibling's deadline is the only one");
+
+    controller.abort();
+
+    await assert.rejects(() => waited, (error: unknown) => {
+
+      assertAbortError(error, "an infinite TestClock delay aborted mid-wait");
+
+      return true;
+    });
+
+    handle[Symbol.dispose]();
+    handle[Symbol.dispose]();
+
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0, "the abort listener leaves with the abort");
+    assert.equal(clock.pending, 1, "and neither the abort nor disposing the infinite handle twice removes the sibling");
+    assert.equal(clock.nextDeadline, 100, "which still comes due when asked");
+  });
+
+  test("a NaN delay, one-shot and repeat come due one millisecond out, so nextDeadline, advanceToNext and the virtual time stay numeric for a later delay", async () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+    let nanSettled = false;
+    let laterSettled = false;
+
+    // The NaN delay is registered first, because the earliest-deadline read seeds from the first entry, and a NaN deadline there would stay the answer however the
+    // entries after it compared.
+    void clock.delay(NaN).then((): void => {
+
+      nanSettled = true;
+    });
+
+    clock.schedule((): number => fired.push("one-shot"), NaN);
+
+    const repeat = clock.schedule((): number => fired.push("repeat"), NaN, { repeat: true });
+
+    assert.equal(clock.pending, 3, "each NaN span registers an entry");
+    assert.equal(clock.nextDeadline, 1, "coming due one millisecond out, as the platform fires a NaN timer");
+    assert.deepEqual(clock.requested, [ NaN, NaN, NaN ], "and the ledger records each span as asked");
+    assert.equal(clock.advanceToNext(), true);
+
+    await flushMicrotasks();
+
+    assert.equal(clock.now(), 1, "the step lands on a numeric time");
+    assert.equal(nanSettled, true, "settling the NaN delay");
+    assert.deepEqual(fired, [ "one-shot", "repeat" ], "and firing the NaN one-shot and the repeat's first period");
+
+    clock.advance(1);
+
+    assert.deepEqual(fired, [ "one-shot", "repeat", "repeat" ], "the NaN repeat's period is one millisecond");
+
+    repeat[Symbol.dispose]();
+
+    void clock.delay(100).then((): void => {
+
+      laterSettled = true;
+    });
+
+    clock.advance(100);
+    await flushMicrotasks();
+
+    assert.equal(laterSettled, true, "and a later delay settles on the timeline the NaN entries left numeric");
+  });
+
+  test("a negative-infinity delay and one-shot are already due, so advance(0) flushes them without moving time", async () => {
+
+    const clock = new TestClock();
+    const fired: string[] = [];
+    let settled = false;
+
+    void clock.delay(-Infinity).then((): void => {
+
+      settled = true;
+    });
+
+    clock.schedule((): number => fired.push("one-shot"), -Infinity);
+
+    assert.equal(clock.pending, 2, "a negative-infinity span registers an entry, as every negative span does");
+    assert.equal(clock.nextDeadline, -Infinity, "with a deadline already behind the clock");
+
+    clock.advance(0);
+    await flushMicrotasks();
+
+    assert.equal(settled, true, "advance(0) flushes the delay");
+    assert.deepEqual(fired, ["one-shot"], "and the one-shot");
+    assert.equal(clock.now(), 0, "without moving time");
+    assert.equal(clock.pending, 0, "leaving nothing pending");
+  });
+});
+
 describe("armDeadline - a cancellable deadline on a clock's own timer", () => {
 
   test("aborts at its deadline, with a reason indistinguishable from the platform's", async () => {
@@ -1185,6 +1447,27 @@ describe("armDeadline - a cancellable deadline on a clock's own timer", () => {
     clock.advance(1);
 
     assert.equal(deadline.signal.aborted, true, "and the remainder aborts it");
+  });
+
+  test("an infinite span never aborts: on the system clock across a real wait, and on the double, which registers no entry, across a long advance", async () => {
+
+    using onSystem = armDeadline(Infinity);
+
+    await systemClock.delay(REAL_WAIT_MS);
+
+    assert.equal(onSystem.signal.aborted, false, "a deadline the platform would have fired after a millisecond stays live across a real wait");
+
+    const clock = new TestClock();
+
+    using onDouble = armDeadline(Infinity, { clock });
+
+    assert.equal(clock.pending, 0, "the double registers no entry for the deadline");
+    assert.equal(clock.nextDeadline, null, "so it has no deadline to answer");
+    assert.deepEqual(clock.requested, [Infinity], "while the ledger records the span asked for");
+
+    clock.advance(Number.MAX_VALUE);
+
+    assert.equal(onDouble.signal.aborted, false, "and the longest finite advance aborts nothing");
   });
 
   test("a span past the ceiling on the system clock is carried as a chain and aborts at exactly the moment asked for", (t) => {

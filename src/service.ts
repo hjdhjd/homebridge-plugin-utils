@@ -11,7 +11,7 @@
 import type { Characteristic, CharacteristicSetHandler, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
 import { HAPStatus } from "./homebridge-enums.ts";
 import type { Nullable } from "./util.ts";
-import { sanitizeName } from "./util.ts";
+import { sanitizeName } from "./homekit-name.ts";
 
 // Cached Sets for O(1) service UUID lookups. Lazily initialized on first use.
 let requiresConfiguredNameUUIDs: Nullable<Set<string>> = null;

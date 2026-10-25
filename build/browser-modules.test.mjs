@@ -99,7 +99,7 @@ function unsafeSpecifiers(source, allowed) {
       case ts.SyntaxKind.ImportDeclaration: {
 
         // A side-effect import has no import clause at all, which leaves the type-only reading undefined and the declaration a runtime edge, as it should be.
-        if(node.importClause?.isTypeOnly !== true) {
+        if(node.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword) {
 
           record(node.moduleSpecifier.text);
         }

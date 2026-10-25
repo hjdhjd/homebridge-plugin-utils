@@ -81,9 +81,9 @@ class RecordingAgent extends Agent {
 /* The connector half of the log. A delegating object rather than a subclass, because `OwnedConnector` is an interface its own factory satisfies with an object
  * literal and there is no class to extend.
  *
- * Two members are forwarded in the shapes their declarations ask for rather than by reference. `lastDialFailure` is a getter, so it is forwarded as a getter and a
- * reader sees the current value rather than a snapshot taken when this object was built. `cutDials` is declared as a method, so handing its function along bare would
- * separate it from the object it was read off; the call stays inside a wrapper for that reason, even though this row never reaches it.
+ * The members whose declarations ask for a shape are forwarded in that shape rather than by reference. Each record is a getter, so it is forwarded as a getter and
+ * a reader sees the current value rather than a snapshot taken when this object was built. `cutDials` is declared as a method, so handing its function along bare
+ * would separate it from the object it was read off; the call stays inside a wrapper for that reason, even though this row never reaches it.
  */
 function recordRelease(connector: OwnedConnector, calls: TeardownOperation[]): OwnedConnector {
 
@@ -91,6 +91,11 @@ function recordRelease(connector: OwnedConnector, calls: TeardownOperation[]): O
 
     connect: connector.connect,
     cutDials: (reason: unknown): void => connector.cutDials(reason),
+
+    get lastConnectionFailure(): Error | undefined {
+
+      return connector.lastConnectionFailure;
+    },
 
     get lastDialFailure(): Error | undefined {
 

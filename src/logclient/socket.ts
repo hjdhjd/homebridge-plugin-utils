@@ -718,7 +718,7 @@ export class LogSocket implements LogSocketLike {
 
     ws.addEventListener("error", (event: unknown) => {
 
-      reject(new HbpuAbortError("failed", { cause: this.#describeWsError(event, owned.connector.lastDialFailure) }));
+      reject(new HbpuAbortError("failed", { cause: this.#describeWsError(event, owned.connector) }));
     });
 
     ws.addEventListener("close", (event: { readonly code: number }) => {
@@ -805,9 +805,9 @@ export class LogSocket implements LogSocketLike {
   }
 
   // Streaming phase. The session is connected; split `stdout` chunks into lines and route them into the bounded queue, answer pings with pongs and re-arm the liveness
-  // watchdog, and end the session on close / error / watchdog timeout. Resolves when the session's signal aborts - which the outer loop reads to decide whether to
-  // reconnect. The watchdog window is sized from the server's advertised ping cadence plus a margin and is armed on the socket's clock, so a test drives the window
-  // by advancing that clock.
+  // watchdog, and end the session on close / error / watchdog timeout, logging its cause at debug. Resolves when the session's signal aborts - which the outer loop
+  // reads to decide whether to reconnect. The watchdog window is sized from the server's advertised ping cadence plus a margin and is armed on the socket's clock, so
+  // a test drives the window by advancing that clock.
   async #stream(session: Session): Promise<void> {
 
     this.#session = session;
@@ -857,11 +857,15 @@ export class LogSocket implements LogSocketLike {
 
       if(!session.controller.signal.aborted) {
 
-        session.controller.abort(new HbpuAbortError("failed", { cause: this.#describeWsError(event) }));
+        session.controller.abort(new HbpuAbortError("failed", { cause: this.#describeWsError(event, session.owned.connector) }));
       }
     });
 
     await ended;
+
+    // A session's end is the loop's to recover from rather than a failure to report, so its cause goes to a debug line, where a reset names its errno through the
+    // connection record the error listener read.
+    this.#log.debug("The Homebridge log stream session ended: %s.", formatErrorMessage(composed.reason));
 
     // Flush the splitter on session end so the final line - withheld by the splitter when the last chunk ended on a lone line-feed pending a possible cross-chunk pair -
     // surfaces rather than stranding. This is the flush the wiring note calls for; mid-stream the next chunk drains the carry, but at session close no next
@@ -943,20 +947,23 @@ export class LogSocket implements LogSocketLike {
     }
   }
 
-  /* Render a WebSocket `"error"` event for diagnostics. The attempt's dial failure is read first and it wins outright: an upgrade that fails reports a content-free
-   * error on this event - present, and rendering as the empty string - while the connector that vended the socket still holds the dial's own error with its errno on
-   * it. So the order here is the difference between a reader seeing `ECONNREFUSED` and a reader seeing nothing at all.
+  /* Render a WebSocket `"error"` event for diagnostics, from the records of the connector that vended the socket ahead of the event itself, because undici reports a
+   * content-free error on this event - present, and rendering as the empty string - for a dial that failed and for an established connection the peer reset alike.
+   * The attempt's dial failure is read first and it wins outright, since a dial that failed established nothing: the order here is the difference between a reader
+   * seeing `ECONNREFUSED` and a reader seeing nothing at all. The connection record comes next, the first error the established socket raised itself, which names a
+   * reset the event cannot, and it reads empty for a peer that hung up without one, so that hang-up falls through to the event.
    *
-   * Below that, the error event's own field when it carries one, and a generic label when it does not, so the abort cause is at least minimally informative.
-   *
-   * Only the connect-phase call site passes a dial failure, and the parameter is optional for that reason: a session exists only because its dial already succeeded
-   * and nothing re-dials it, so by the streaming phase the dial is long over and the connector has nothing left to report.
+   * Below those, the error event's own field when it carries one, and a generic label when it does not, so the abort cause is at least minimally informative. Each
+   * phase hands in its connector, because each can meet a failed connection: the connect phase between the upgrade and the namespace join, and a streaming session
+   * at any point once its dial is over, which leaves its dial record empty.
    */
-  #describeWsError(event: unknown, dialFailure?: Error): unknown {
+  #describeWsError(event: unknown, connector: Pick<OwnedConnector, "lastConnectionFailure" | "lastDialFailure">): unknown {
 
-    if(dialFailure !== undefined) {
+    const recorded = connector.lastDialFailure ?? connector.lastConnectionFailure;
 
-      return dialFailure;
+    if(recorded !== undefined) {
+
+      return recorded;
     }
 
     if((typeof event === "object") && (event !== null) && ("error" in event)) {

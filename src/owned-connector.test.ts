@@ -1,21 +1,25 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * owned-connector.test.ts: Unit tests for createOwnedConnector - what a dial leaves behind when it succeeds and when it fails, which sockets each operation
- * reaches, the construction options read off a real peer, and the teardown order a consumer has to run its sockets down in.
+ * owned-connector.test.ts: Unit tests for createOwnedConnector - what a dial leaves behind when it succeeds and when it fails, what an established socket's own
+ * errors leave behind and what records nothing, which sockets each operation reaches, the construction options read off a real peer, and the teardown order a
+ * consumer has to run its sockets down in.
  *
  * Every row dials a real socket, because what this module is for is the behavior of one: a handshake that never completes, a keepalive connection some other request
- * is using, a certificate nothing trusts. None of that is reachable by calling the connector directly. The rows that read the verification option and the protocol
- * offer share a `node:tls` peer presenting a certificate no store trusts, which is what makes both readable without reaching for anything outside this file.
+ * is using, a certificate nothing trusts, a connection the peer resets or corrupts once it is up. None of that is reachable by calling the connector directly. The
+ * rows that read the verification option and the protocol offer share a `node:tls` peer presenting a certificate no store trusts, which is what makes each readable
+ * without reaching for anything outside this file.
  */
 import { Agent, WebSocket, errors, request } from "undici";
+import { connect as connectNet, createServer as createNetServer } from "node:net";
 import { describe, test } from "node:test";
-import { freePort, listenOnLoopback, present, settle, stopListening, waitUntil } from "./testing/index.ts";
+import { expectAt, freePort, listenOnLoopback, present, settle, stopListening, waitUntil } from "./testing/index.ts";
 import { loopbackCertificateFixture, loopbackPrivateKeyFixture } from "./owned-connector.fixtures.ts";
+import type { OwnedConnector } from "./owned-connector.ts";
 import type { Socket } from "node:net";
 import assert from "node:assert/strict";
+import type { buildConnector } from "undici";
 import { classifyTransportError } from "./transport-error.ts";
 import { createServer as createHttpServer } from "node:http";
-import { createServer as createNetServer } from "node:net";
 import { createOwnedConnector } from "./owned-connector.ts";
 import { createServer as createTlsServer } from "node:tls";
 import { setTimeout as delay } from "node:timers/promises";
@@ -23,6 +27,14 @@ import { hasErrorCode } from "./util.ts";
 
 // The minimal HTTP answer the raw TLS peer writes back, which is all any row on it asks for.
 const TLS_RESPONSE = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok";
+
+// The answers the scripted peer writes: one that keeps its connection open for the next request, and one that asks the client to close it.
+const KEEP_ALIVE_RESPONSE = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\n\r\nok";
+const CLOSING_RESPONSE = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok";
+
+// A TLS record no session can decrypt: an application-data header announcing sixteen bytes, then sixteen zero bytes. Written to the client past the peer's TLS layer
+// once the handshake is over, it makes the client's own TLS layer raise the error.
+const CORRUPT_TLS_RECORD = Buffer.concat([ Buffer.from([ 0x17, 0x03, 0x03, 0x00, 0x10 ]), Buffer.alloc(16) ]);
 
 // A peer that answers, keeping the counts a row needs to tell a reused connection from a fresh one and a severed socket from a live one.
 interface AnsweringRig {
@@ -50,14 +62,33 @@ interface CertificateRig {
   readonly stop: () => Promise<void>;
 }
 
+// A peer written at the socket level, which a row tells what to do with each request and which ends or resets the connections it holds when the row asks.
+interface ScriptedRig {
+
+  readonly closed: () => number;
+  readonly end: () => void;
+  readonly origin: string;
+  readonly reset: () => void;
+  readonly stop: () => Promise<void>;
+}
+
+// A TLS peer behind a TCP proxy, whose client-facing connections a row writes raw bytes to, or resets, past the peer's TLS layer.
+interface TlsProxyRig {
+
+  readonly origin: string;
+  readonly reset: () => void;
+  readonly stop: () => Promise<void>;
+  readonly write: (bytes: Buffer) => void;
+}
+
 /* Track a server's accepted sockets so its stop can sever them before closing. `stopListening` waits for the handle to be released, and the release waits on every
  * in-flight connection - so a rig holding a keepalive socket the pool has not let go of would wait out the whole test timeout rather than closing. The two counts
  * are what let a row tell a reused connection from a fresh one, and a severed socket from a live one.
  *
- * @returns The ledger: `add` registers a socket and arms its own close bookkeeping, `closed` and `opened` report the running counts, and `sever` destroys
- *          everything still held, which is what a rig's stop calls first.
+ * @returns The ledger: `add` registers a socket and arms its own close bookkeeping, `closed` and `opened` report the running counts, `held` answers every socket
+ *          still open, for a rig that acts on them, and `sever` destroys everything still held, which is what a rig's stop calls first.
  */
-function socketLedger(): { add: (socket: Socket) => void; closed: () => number; opened: () => number; sever: () => void } {
+function socketLedger(): { add: (socket: Socket) => void; closed: () => number; held: () => readonly Socket[]; opened: () => number; sever: () => void } {
 
   const live = new Set<Socket>();
 
@@ -79,6 +110,7 @@ function socketLedger(): { add: (socket: Socket) => void; closed: () => number; 
     },
 
     closed: (): number => closed,
+    held: (): readonly Socket[] => [...live],
     opened: (): number => opened,
 
     sever: (): void => {
@@ -202,6 +234,161 @@ async function startCertificateRig(): Promise<CertificateRig> {
       await stopListening(server);
     }
   };
+}
+
+/* A loopback peer that reads each request's head and hands its connection to `onRequest`, which answers it, resets it or leaves it be. `end` sends every connection
+ * the peer holds a bare FIN and `reset` sends each a TCP RST, each a way a peer drops a connection, and `closed` counts the connections that have closed, which is
+ * how a row knows the client has seen the end it was sent.
+ *
+ * @param onRequest - What the peer does with a connection once a request's head has arrived on it.
+ *
+ * @returns The rig, bound and listening.
+ */
+async function startScriptedRig(onRequest: (socket: Socket) => void): Promise<ScriptedRig> {
+
+  const ledger = socketLedger();
+
+  const server = createNetServer((socket) => {
+
+    let head = "";
+
+    ledger.add(socket);
+
+    socket.on("data", (chunk: Buffer) => {
+
+      head += chunk.toString("latin1");
+
+      if(head.includes("\r\n\r\n")) {
+
+        head = "";
+        onRequest(socket);
+      }
+    });
+  });
+
+  const port = await listenOnLoopback(server);
+
+  return {
+
+    closed: ledger.closed,
+
+    end: (): void => {
+
+      for(const socket of ledger.held()) {
+
+        socket.end();
+      }
+    },
+
+    origin: "http://127.0.0.1:" + port.toString(),
+
+    reset: (): void => {
+
+      for(const socket of ledger.held()) {
+
+        socket.resetAndDestroy();
+      }
+    },
+
+    stop: async (): Promise<void> => {
+
+      ledger.sever();
+
+      await stopListening(server);
+    }
+  };
+}
+
+/* A loopback TLS peer presenting the self-signed identity from this module's fixtures and answering a minimal `200`, reached through a TCP proxy that pipes each
+ * client connection to it. `write` and `reset` act on the proxy's client-facing legs, so the bytes and the RST reach the client's socket without passing the
+ * peer's TLS layer. The stop destroys every leg the proxy holds and the peer's own sockets before it closes the servers, because a leg left open holds its
+ * server's close and the run never exits. Each socket here swallows its errors: the client's alert over a corrupt record and a reset leg reach the rig as
+ * errors, and what a row reads is the client's side.
+ *
+ * @returns The rig, bound and listening.
+ */
+async function startTlsProxyRig(): Promise<TlsProxyRig> {
+
+  const clientLegs = socketLedger();
+  const peerSockets = socketLedger();
+  const upstreamLegs = socketLedger();
+
+  const peer = createTlsServer({ cert: loopbackCertificateFixture, key: loopbackPrivateKeyFixture }, (socket) => {
+
+    peerSockets.add(socket);
+    socket.on("error", () => { /* The client's side is the reading. */ });
+    socket.on("data", () => socket.write(TLS_RESPONSE));
+  });
+
+  const peerPort = await listenOnLoopback(peer);
+
+  const proxy = createNetServer((client) => {
+
+    const upstream = connectNet(peerPort, "127.0.0.1");
+
+    clientLegs.add(client);
+    upstreamLegs.add(upstream);
+    client.on("error", () => { /* The client's side is the reading. */ });
+    upstream.on("error", () => { /* The client's side is the reading. */ });
+    client.pipe(upstream);
+    upstream.pipe(client);
+  });
+
+  const port = await listenOnLoopback(proxy);
+
+  return {
+
+    origin: "https://127.0.0.1:" + port.toString(),
+
+    reset: (): void => {
+
+      for(const leg of clientLegs.held()) {
+
+        leg.resetAndDestroy();
+      }
+    },
+
+    stop: async (): Promise<void> => {
+
+      clientLegs.sever();
+      upstreamLegs.sever();
+      peerSockets.sever();
+
+      await stopListening(proxy);
+      await stopListening(peer);
+    },
+
+    write: (bytes: Buffer): void => {
+
+      for(const leg of clientLegs.held()) {
+
+        leg.write(bytes);
+      }
+    }
+  };
+}
+
+/* A connector that dials through `connector` and keeps each socket a successful dial vends, so a row can read the established socket's own state. It wraps the
+ * callback rather than the connector, so the connector's own listeners are on the socket before the row's copy of it is kept.
+ *
+ * @param connector - The owned connector to dial through.
+ * @param vended    - Where each vended socket is kept, in dial order.
+ *
+ * @returns The connector to hand an `Agent`.
+ */
+function keepingVended(connector: OwnedConnector, vended: Socket[]): buildConnector.connector {
+
+  return (options, callback): void => connector.connect(options, (...args) => {
+
+    const [ error, socket ] = args;
+
+    if(error === null) {
+
+      vended.push(socket);
+    }
+
+    callback(...args);
+  });
 }
 
 /* Issue one request through `agent` and drain its body, so the connection returns to the pool rather than staying checked out.
@@ -533,5 +720,187 @@ describe("createOwnedConnector", () => {
   test("the documented teardown order leaves the peer exactly one connection", async () => {
 
     assert.equal(await abandonedUpgradeConnections(), 1, "the documented order must leave the transport nothing to re-dial");
+  });
+});
+
+describe("createOwnedConnector - the connection record", () => {
+
+  test("a peer's reset of a request in flight on a keep-alive connection is recorded with ECONNRESET, the very error the request rejects with", async (t) => {
+
+    const rig = await startScriptedRig((socket) => socket.resetAndDestroy());
+    const connector = createOwnedConnector({ allowH2: false });
+    const agent = new Agent({ connect: connector.connect });
+
+    t.after(async (): Promise<void> => {
+
+      connector.release();
+
+      await agent.destroy();
+      await rig.stop();
+    });
+
+    await assert.rejects(fetchStatus(agent, rig.origin), (error: unknown) => {
+
+      // The transport rejects a request in flight with the error its socket raised, so the record is readable here and is that same object.
+      assert.ok(hasErrorCode(connector.lastConnectionFailure, "ECONNRESET"), "the reset must be recorded with the errno the platform raised");
+      assert.equal(error, connector.lastConnectionFailure, "the record must hold the very error the socket raised, its errno and cause chain intact");
+
+      return true;
+    });
+  });
+
+  test("a bare FIN the peer sends on an idle keep-alive connection records nothing", async (t) => {
+
+    const rig = await startScriptedRig((socket) => socket.write(KEEP_ALIVE_RESPONSE));
+    const connector = createOwnedConnector({ allowH2: false });
+    const agent = new Agent({ connect: connector.connect });
+
+    t.after(async (): Promise<void> => {
+
+      connector.release();
+
+      await agent.destroy();
+      await rig.stop();
+    });
+
+    assert.equal(await fetchStatus(agent, rig.origin), 200);
+
+    rig.end();
+
+    // The client closes its side once the transport has destroyed the socket over the FIN, so the peer's count of closed connections marks the record as final.
+    await waitUntil(() => rig.closed() >= 1, { description: "the client to close the connection the peer ended" });
+
+    assert.equal(connector.lastConnectionFailure, undefined, "the transport destroys the socket with an error of its own over a bare FIN, which is no record");
+  });
+
+  test("a response that asks for Connection: close records nothing", async (t) => {
+
+    const rig = await startScriptedRig((socket) => socket.write(CLOSING_RESPONSE));
+    const connector = createOwnedConnector({ allowH2: false });
+    const agent = new Agent({ connect: connector.connect });
+
+    t.after(async (): Promise<void> => {
+
+      connector.release();
+
+      await agent.destroy();
+      await rig.stop();
+    });
+
+    assert.equal(await fetchStatus(agent, rig.origin), 200);
+
+    // The transport closes the connection the response asked it to close, so the peer's count of closed connections marks the record as final.
+    await waitUntil(() => rig.closed() >= 1, { description: "the client to close the connection its response asked it to close" });
+
+    assert.equal(connector.lastConnectionFailure, undefined, "the transport destroys the socket with an error of its own over a clean close, which is no record");
+  });
+
+  test("release records nothing", async (t) => {
+
+    const rig = await startAnsweringRig();
+    const connector = createOwnedConnector({ allowH2: false });
+    const agent = new Agent({ connect: connector.connect });
+
+    t.after(async (): Promise<void> => {
+
+      await agent.destroy();
+      await rig.stop();
+    });
+
+    assert.equal(await fetchStatus(agent, rig.origin), 200);
+
+    connector.release();
+
+    await waitUntil(() => rig.closed() >= 1, { description: "the peer to observe its own socket close" });
+
+    assert.equal(connector.lastConnectionFailure, undefined, "a release destroys its sockets bare, which raises no error to record");
+  });
+
+  test("a TLS error after the handshake is recorded while the socket stays open", async (t) => {
+
+    const rig = await startTlsProxyRig();
+    const connector = createOwnedConnector({ allowH2: false, rejectUnauthorized: false });
+    const vended: Socket[] = [];
+    const agent = new Agent({ connect: keepingVended(connector, vended) });
+
+    t.after(async (): Promise<void> => {
+
+      connector.release();
+
+      await agent.destroy();
+      await rig.stop();
+    });
+
+    assert.equal(await fetchStatus(agent, rig.origin), 200);
+
+    rig.write(CORRUPT_TLS_RECORD);
+
+    await waitUntil(() => connector.lastConnectionFailure !== undefined, { description: "the client's TLS layer to raise its error over the corrupt record" });
+
+    assert.match(classifyTransportError(connector.lastConnectionFailure).code ?? "", /^ERR_SSL_/u, "the record must be the TLS layer's own error");
+
+    // Nothing destroys an idle socket over a TLS error, so no close follows it, and a record read at the socket's close would hold nothing.
+    await settle(5);
+
+    assert.equal(expectAt(vended, 0, "the socket the dial vended").destroyed, false, "the socket must stay open after the TLS error it raised");
+  });
+
+  test("a later error the socket raises does not replace the first", async (t) => {
+
+    const rig = await startTlsProxyRig();
+    const connector = createOwnedConnector({ allowH2: false, rejectUnauthorized: false });
+    const raised: unknown[] = [];
+    const vended: Socket[] = [];
+    const agent = new Agent({ connect: keepingVended(connector, vended) });
+
+    t.after(async (): Promise<void> => {
+
+      connector.release();
+
+      await agent.destroy();
+      await rig.stop();
+    });
+
+    assert.equal(await fetchStatus(agent, rig.origin), 200);
+
+    expectAt(vended, 0, "the socket the dial vended").on("error", (error: unknown) => raised.push(error));
+    rig.write(CORRUPT_TLS_RECORD);
+
+    await waitUntil(() => connector.lastConnectionFailure !== undefined, { description: "the client's TLS layer to raise its error over the corrupt record" });
+
+    const first = connector.lastConnectionFailure;
+
+    rig.reset();
+
+    await waitUntil(() => raised.some((error) => hasErrorCode(error, "ECONNRESET")), { description: "the socket to raise the reset that followed" });
+
+    assert.equal(connector.lastConnectionFailure, first, "the first error the socket raised must stand, the reset after it being its consequence");
+  });
+
+  test("a successful connect clears what an earlier connection recorded", async (t) => {
+
+    const rig = await startScriptedRig((socket) => socket.write(KEEP_ALIVE_RESPONSE));
+    const connector = createOwnedConnector({ allowH2: false });
+    const agent = new Agent({ connect: connector.connect });
+
+    t.after(async (): Promise<void> => {
+
+      connector.release();
+
+      await agent.destroy();
+      await rig.stop();
+    });
+
+    assert.equal(await fetchStatus(agent, rig.origin), 200);
+
+    rig.reset();
+
+    await waitUntil(() => connector.lastConnectionFailure !== undefined, { description: "the reset of the idle connection to be recorded" });
+
+    assert.ok(hasErrorCode(connector.lastConnectionFailure, "ECONNRESET"), "the idle connection's reset must be recorded first");
+
+    // The reset connection is gone, so the next request dials again, and that dial's success clears what the reset left.
+    assert.equal(await fetchStatus(agent, rig.origin), 200);
+    assert.equal(connector.lastConnectionFailure, undefined, "a successful connect must clear the record an earlier connection left");
   });
 });

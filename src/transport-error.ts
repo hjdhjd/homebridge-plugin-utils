@@ -110,12 +110,15 @@ function walkCauses(error: unknown): CauseWalk {
  * - `"destroyed"` - the request was dispatched against a pool that has been torn down. Produced by `UND_ERR_DESTROYED`, which is how a request in flight when its
  *   dispatcher is destroyed settles.
  * - `"dns"` - the host name did not resolve. Produced by `ENOTFOUND`, and by `EAI_AGAIN`, the temporary-failure form a struggling resolver returns.
- * - `"refused"` - the host answered the connection attempt by declining it. Produced by `ECONNREFUSED` and `EHOSTDOWN`.
+ * - `"refused"` - the host answered the connection attempt by declining it. Produced by `ECONNREFUSED`.
  * - `"reset"` - an established connection was dropped mid-exchange. Produced by `ECONNRESET`.
  * - `"retries-exhausted"` - the transport retried as it was configured to and ran out of attempts. Produced by `UND_ERR_REQ_RETRY`.
  * - `"timeout"` - a deadline elapsed. Produced by the platform `TimeoutError` from `AbortSignal.timeout()`, by this library's own watchdog timeouts, by a cancellation
  *   that is not the lifetime signal's, and by the response deadlines `UND_ERR_HEADERS_TIMEOUT` and `UND_ERR_BODY_TIMEOUT`.
  * - `"transport"` - a genuine failure carrying no marker anyone can read. The catch-all, and where a value that is not an error at all lands.
+ * - `"unreachable"` - the peer could not be reached, so nothing answered rather than the host declining. Produced by `EHOSTUNREACH` and `ENETUNREACH`, where no
+ *   route leads to the peer, by `ENETDOWN` and `EHOSTDOWN`, where the network or the host is down, and by `ETIMEDOUT`, the platform's own timer giving up on a peer
+ *   that stopped answering.
  *
  * @category Utilities
  */
@@ -138,7 +141,7 @@ export type TransportFailure = {
 
   readonly cause: unknown;
   readonly code: string;
-  readonly kind: "certificate" | "connect-timeout" | "destroyed" | "dns" | "refused" | "reset" | "retries-exhausted";
+  readonly kind: "certificate" | "connect-timeout" | "destroyed" | "dns" | "refused" | "reset" | "retries-exhausted" | "unreachable";
 } | {
 
   readonly cause: unknown;
@@ -180,15 +183,14 @@ export type TransportFailureCodedKind = Extract<TransportFailure, { code: string
  *
  *   const failure = classifyTransportError(error, this.signal);
  *
- *   // A teardown is not news. Everything else is this plugin's own protocol policy to phrase and to decide about.
+ *   // A teardown is not news. Everything else is this plugin's own protocol policy to phrase and to decide about, and connectionFaultLevel answers the level a
+ *   // connection fault is logged at.
  *   if(failure.kind === "aborted") {
  *
  *     return null;
  *   }
  *
- *   this.log.error("Unable to retrieve the device list.", { code: failure.code, kind: failure.kind });
- *
- *   return null;
+ *   throw new DeviceListError("Unable to retrieve the device list.", { cause: error, kind: failure.kind });
  * }
  * ```
  *
@@ -247,13 +249,22 @@ export function classifyTransportError(error: unknown, signal?: AbortSignal): Tr
       return { cause: error, code: walk.code, kind: "destroyed" };
 
     case "ECONNREFUSED":
-    case "EHOSTDOWN":
 
       return { cause: error, code: walk.code, kind: "refused" };
 
     case "ECONNRESET":
 
       return { cause: error, code: walk.code, kind: "reset" };
+
+    // None of these is the host declining the attempt: no route leads to the peer, the network or the host is down, or the platform's own timer gave up on a peer
+    // that never answered, so each is a peer out of reach rather than one that refused.
+    case "EHOSTDOWN":
+    case "EHOSTUNREACH":
+    case "ENETDOWN":
+    case "ENETUNREACH":
+    case "ETIMEDOUT":
+
+      return { cause: error, code: walk.code, kind: "unreachable" };
 
     case "EAI_AGAIN":
     case "ENOTFOUND":

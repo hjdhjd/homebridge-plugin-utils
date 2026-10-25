@@ -86,7 +86,11 @@ const FIXTURES: readonly FixtureRow[] = [
 
   { code: "UND_ERR_ABORTED", error: named("WrapError", coded("UND_ERR_ABORTED")), kind: "timeout", name: "a wrapped transport cancellation", signal: "open" },
   { code: "ECONNREFUSED", error: fetchFailure("ECONNREFUSED"), kind: "refused", name: "a refused connection", signal: "none" },
-  { code: "EHOSTDOWN", error: fetchFailure("EHOSTDOWN"), kind: "refused", name: "a host that is down", signal: "none" },
+  { code: "EHOSTDOWN", error: fetchFailure("EHOSTDOWN"), kind: "unreachable", name: "a host that is down", signal: "none" },
+  { code: "EHOSTUNREACH", error: fetchFailure("EHOSTUNREACH"), kind: "unreachable", name: "a host no route reaches", signal: "none" },
+  { code: "ENETUNREACH", error: fetchFailure("ENETUNREACH"), kind: "unreachable", name: "a network no route reaches", signal: "none" },
+  { code: "ENETDOWN", error: coded("ENETDOWN"), kind: "unreachable", name: "a network that is down", signal: "none" },
+  { code: "ETIMEDOUT", error: coded("ETIMEDOUT"), kind: "unreachable", name: "a peer the platform's own timer gave up on", signal: "none" },
   { code: "ECONNRESET", error: fetchFailure("ECONNRESET"), kind: "reset", name: "a reset connection", signal: "none" },
   { code: "ENOTFOUND", error: fetchFailure("ENOTFOUND"), kind: "dns", name: "a name that does not resolve", signal: "none" },
   { code: "EAI_AGAIN", error: coded("EAI_AGAIN"), kind: "dns", name: "a resolver failing temporarily", signal: "none" },
@@ -159,9 +163,9 @@ describe("the transport error classifier", () => {
   test("names the kinds reached only by matching a code", () => {
 
     const coded: Record<TransportFailureCodedKind, true> = { certificate: true, "connect-timeout": true, destroyed: true, dns: true, refused: true, reset: true,
-      "retries-exhausted": true };
+      "retries-exhausted": true, unreachable: true };
 
-    assert.deepEqual(Object.keys(coded).sort(), [ "certificate", "connect-timeout", "destroyed", "dns", "refused", "reset", "retries-exhausted" ],
+    assert.deepEqual(Object.keys(coded).sort(), [ "certificate", "connect-timeout", "destroyed", "dns", "refused", "reset", "retries-exhausted", "unreachable" ],
       "the coded kinds are exactly the kinds the code map produces");
   });
 });

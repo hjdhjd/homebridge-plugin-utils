@@ -1,11 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * logclient/upgrade-peer.helpers.ts: A real WebSocket peer for the rows that drive the production dial, in the two shapes those rows need.
+ * logclient/upgrade-peer.helpers.ts: A real WebSocket peer for the rows that drive the production dial, in each shape those rows need.
  *
  * The socket suite reaches its subject through a double everywhere else, and a double never touches the network - so nothing in it exercises the production factory,
  * the dial it is handed, or the teardown a peer actually observes. This peer closes that: it completes a real opening handshake, speaks just enough Engine.IO and
- * Socket.IO for a `LogSocket` to reach its streaming phase, records what arrived and in what order, and in its other shape holds a handshake open indefinitely so an
- * abort has a dial in flight to land on. It never ships - the build's emit config excludes every helpers file by name.
+ * Socket.IO for a `LogSocket` to reach its streaming phase, records what arrived and in what order, and resets its connections when a row asks so a stream can be
+ * dropped mid-session. In its other shapes it resets a connection at the namespace join, so the connect phase meets a reset once the upgrade is done, or holds a
+ * handshake open indefinitely so an abort has a dial in flight to land on. It never ships - the build's emit config excludes every helpers file by name.
  */
 import { listenOnLoopback, stopListening } from "../testing/index.ts";
 import type { Socket } from "node:net";
@@ -33,9 +34,10 @@ export const UPGRADE_PEER_LINE = "a line from the peer";
 
 /**
  * Which shape the peer takes. `answersUpgrade` completes the handshake and speaks the protocol; `neverUpgrades` accepts the TCP connection and answers the upgrade
- * request with nothing at all, leaving the client's dial open for an abort to land on.
+ * request with nothing at all, leaving the client's dial open for an abort to land on; `resetsOnJoin` completes the upgrade and the Engine.IO open, then answers the
+ * namespace join with a TCP RST rather than its acknowledgement, so the connection fails after the upgrade and before the join.
  */
-export type UpgradePeerBehavior = "answersUpgrade" | "neverUpgrades";
+export type UpgradePeerBehavior = "answersUpgrade" | "neverUpgrades" | "resetsOnJoin";
 
 /** The two edges of one accepted connection, armed when the connection is asked about rather than when it arrives, so a row can wait on one that has not landed yet. */
 export interface UpgradePeerConnection {
@@ -64,6 +66,9 @@ export interface UpgradePeer {
 
   /** The port the kernel assigned. */
   readonly port: number;
+
+  /** Reset every connection the peer still holds with a TCP RST rather than a FIN, so the client's socket raises `ECONNRESET` where a hang-up would raise nothing. */
+  readonly reset: () => void;
 
   /** Sever what the peer still holds and release the listening handle. */
   readonly stop: () => Promise<void>;
@@ -300,6 +305,16 @@ export async function startUpgradePeer(behavior: UpgradePeerBehavior = "answersU
 
         if(text.startsWith("40/log,")) {
 
+          /* The resetting shape answers the join by resetting the connection it arrived on, when the socket has finished its upgrade and waits on the join. The
+           * request's own socket is that connection, typed as the TCP socket a reset needs, where the upgrade hands it over typed as a bare stream.
+           */
+          if(behavior === "resetsOnJoin") {
+
+            request.socket.resetAndDestroy();
+
+            return;
+          }
+
           socket.write(textFrame(NAMESPACE_CONNECT_FRAME));
 
           return;
@@ -326,6 +341,14 @@ export async function startUpgradePeer(behavior: UpgradePeerBehavior = "answersU
     inbound: (): readonly string[] => inbound,
     observed: (): readonly string[] => observed,
     port,
+
+    reset: (): void => {
+
+      for(const socket of held) {
+
+        socket.resetAndDestroy();
+      }
+    },
 
     stop: async (): Promise<void> => {
 

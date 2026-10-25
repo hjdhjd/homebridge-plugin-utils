@@ -5,7 +5,7 @@
 import { HbpuAbortError, isHbpuAbortReason } from "../util.ts";
 import { LogSocket, reconnectBackoff, webSocketFactory } from "./socket.ts";
 import { UPGRADE_PEER_LINE, startUpgradePeer } from "./upgrade-peer.helpers.ts";
-import { capturingLog, freePort, logCount, settle, silentLog, waitUntil } from "../testing/index.ts";
+import { capturingLog, formatLogEntry, freePort, logCount, settle, silentLog, waitUntil } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import { Agent } from "undici";
 import type { LogSocketInit } from "./socket.ts";
@@ -325,7 +325,7 @@ describe("LogSocket - connect-failure reporting", () => {
       "an unchanged repeat must be demoted to debug, a changed reason reported in full again, and the recovery announced");
 
     // The two reported failures must be the two DIFFERENT dials, not the same line twice: the demoted one is the repeat, so the full-level pair carries the two errnos.
-    const reported = log.entries.filter((entry) => entry.level !== "info").map((entry) => entry.params.join(" "));
+    const reported = log.entries.filter((entry) => entry.level !== "info").map((entry) => formatLogEntry(entry));
 
     assert.equal(reported.filter((text) => text.includes("ECONNREFUSED")).length, 2, "both refusals must name the errno they failed with");
     assert.equal(reported.filter((text) => text.includes("ENOTFOUND")).length, 1, "the changed reason must name its own errno rather than replaying the previous one");
@@ -973,7 +973,8 @@ describe("LogSocket - pre-aborted construction", () => {
 });
 
 /* The rows that reach the real thing. Every block above drives a double, which never touches the network - so nothing in them exercises the production factory, the
- * dial it is handed, or the teardown a peer actually observes. These six do, against a port nothing listens on and against a real WebSocket peer in its two shapes.
+ * dial it is handed, or the teardown a peer actually observes. The rows here exercise them, against a port nothing listens on and against a real WebSocket peer in
+ * each of its shapes.
  */
 describe("LogSocket - the production dial", () => {
 
@@ -1029,9 +1030,30 @@ describe("LogSocket - the production dial", () => {
       await socket[Symbol.asyncDispose]();
     });
 
-    // The errno is what the commit recovers, so that is what the row reads; the rest of the line carries the port, which varies per run.
+    // The dial's errno is what the row reads; the rest of the line carries the port, which varies per run.
     await waitUntil(() => logCount(log.entries, "warn", "ECONNREFUSED") >= 1,
       { description: "the failed attempt's own warn line to name the dial's errno", timeoutMs: 5000 });
+  });
+
+  test("a connection the peer resets between the upgrade and the namespace join names the reset's errno in the attempt's warn line", async (t) => {
+
+    const peer = await startUpgradePeer("resetsOnJoin");
+    const log = capturingLog();
+    const socket = new LogSocket(dialInit(peer.port, { log }));
+
+    t.after(async (): Promise<void> => {
+
+      socket.abort();
+
+      await socket[Symbol.asyncDispose]();
+      await peer.stop();
+    });
+
+    await waitUntil(() => logCount(log.entries, "warn", "Unable to connect") >= 1, { description: "the reset attempt's warn line", timeoutMs: 5000 });
+
+    // The dial succeeded and left its record empty, and the transport reports a reset on an open WebSocket as an empty error, so an errno in the line is the
+    // connection record's.
+    assert.equal(logCount(log.entries, "warn", "ECONNRESET"), 1, "the attempt's warn line must name the errno the peer's reset raised");
   });
 
   test("a line the peer sends after the handshake reaches the consumer through the production dial", async (t) => {
@@ -1058,6 +1080,36 @@ describe("LogSocket - the production dial", () => {
     })();
 
     assert.equal(first, UPGRADE_PEER_LINE, "a line the peer sent after the handshake must reach the consumer over the owned dial");
+  });
+
+  test("a stream the peer resets mid-session logs the session's end at debug, naming the reset's errno", async (t) => {
+
+    const peer = await startUpgradePeer();
+    const log = capturingLog();
+    const socket = new LogSocket(dialInit(peer.port, { log }));
+
+    t.after(async (): Promise<void> => {
+
+      socket.abort();
+
+      await socket[Symbol.asyncDispose]();
+      await peer.stop();
+    });
+
+    // The first line is the session streaming, so the reset lands on a stream rather than on its handshake.
+    for await (const line of socket.stdout()) {
+
+      assert.equal(line, UPGRADE_PEER_LINE);
+
+      break;
+    }
+
+    peer.reset();
+
+    await waitUntil(() => logCount(log.entries, "debug", "session ended") >= 1, { description: "the reset session's end to be logged", timeoutMs: 5000 });
+
+    // The transport reports a reset on an open WebSocket as an empty error, so an errno in the line is the connection record's.
+    assert.equal(logCount(log.entries, "debug", "ECONNRESET"), 1, "the session's end must name the errno the peer's reset raised");
   });
 
   test("teardown as the peer sees it", async (t) => {

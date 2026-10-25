@@ -31,7 +31,6 @@ import type { MqttClient } from "./mqttClient.ts";
 import type { Server } from "node:net";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
-import { format } from "node:util";
 import { once } from "node:events";
 
 // The rows behind `waitForLog` and `awaitClientConnected` drive a real in-process broker or a real TCP socket, and under the parallel full-suite run those
@@ -310,9 +309,9 @@ export async function waitForLog(log: CapturingLog, predicate: (entry: TestLogEn
 }
 
 /**
- * Predicate factory for {@link waitForLog} (and other entry-scanning assertions) that matches a log entry whose interpolated message - format string fed through
- * `node:util.format` with its params - contains `substring`. Centralizing the rendering rule here means every test that asks "did the log emit a line mentioning X"
- * gets the same answer through one well-defined site, rather than reconstructing the message-plus-params interpolation by hand at every assertion.
+ * Predicate factory for {@link waitForLog} (and other entry-scanning assertions) that matches a log entry whose line, rendered through {@link formatLogEntry},
+ * contains `substring`. Rendering through the testing entry's one rendering definition means every test that asks "did the log emit a line mentioning X" gets the
+ * answer the shared finders give, rather than reconstructing the message-plus-params interpolation by hand at every assertion.
  *
  * @param substring - The text fragment to search for in the rendered log line.
  *
@@ -320,7 +319,7 @@ export async function waitForLog(log: CapturingLog, predicate: (entry: TestLogEn
  */
 export function logContains(substring: string): (entry: TestLogEntry) => boolean {
 
-  return (entry) => format(entry.message, ...entry.params).includes(substring);
+  return (entry) => formatLogEntry(entry).includes(substring);
 }
 
 // Render the first entry of `log` as a single interpolated string, matching how a real logger would print the entry. Asserts that at least one entry exists so a

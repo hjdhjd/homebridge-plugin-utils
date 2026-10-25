@@ -8,23 +8,27 @@
 import { assertRuntimeFloorCompat, composeSunsetCleanup, parseRuntimeFloor, planRuntimeFloorCheck, readEnginesNode,
   sweepSourceFiles } from "./runtime-floor.ts";
 import { describe, test } from "node:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { AssertionError } from "node:assert";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { makeScratchRoot } from "./index.ts";
 import { pathToFileURL } from "node:url";
-import { tmpdir } from "node:os";
 
-// Build a throwaway directory tree and hand back its URL. Each entry is a path relative to the root paired with the text to write there; intermediate directories are
-// created as needed, so a fixture declares "src/nested/thing.ts" without also declaring the directories above it. The trees are tiny and live under the OS temp
-// directory, which is what lets the sweep rows exercise a real filesystem walk rather than a stubbed one.
-async function makeTree(entries: Readonly<Record<string, string>>): Promise<URL> {
+// Build a throwaway directory tree and hand back its URL with a disposer that removes it, so the `await using` at the call site removes the tree when the row ends,
+// however it ends. Each entry is a path relative to the root paired with the text to write there; intermediate directories are created as needed, so a fixture
+// declares "src/nested/thing.ts" without also declaring the directories above it. The trees are tiny and live under the OS temp directory, which is what lets the
+// sweep rows exercise a real filesystem walk rather than a stubbed one. The stack holds the scratch root while the entries are written and hands it to the caller
+// only once the tree is whole, so a write that throws releases the root rather than leaking it.
+async function makeTree(entries: Readonly<Record<string, string>>): Promise<AsyncDisposable & { url: URL }> {
 
-  const root = await mkdtemp(join(tmpdir(), "hbpu-runtime-floor-"));
+  await using stack = new AsyncDisposableStack();
+
+  const root = stack.use(await makeScratchRoot("hbpu-runtime-floor-"));
 
   for(const [ relativePath, text ] of Object.entries(entries)) {
 
-    const fullPath = join(root, relativePath);
+    const fullPath = join(root.path, relativePath);
 
     // eslint-disable-next-line no-await-in-loop
     await mkdir(join(fullPath, ".."), { recursive: true });
@@ -32,8 +36,17 @@ async function makeTree(entries: Readonly<Record<string, string>>): Promise<URL>
     await writeFile(fullPath, text, "utf8");
   }
 
-  // A directory URL needs its trailing separator, or `new URL("package.json", root)` would resolve against the parent instead.
-  return pathToFileURL(root + "/");
+  const tree = stack.move();
+
+  return {
+
+    // A directory URL needs its trailing separator, or `new URL("package.json", root)` would resolve against the parent instead.
+    url: pathToFileURL(root.path + "/"),
+    async [Symbol.asyncDispose](): Promise<void> {
+
+      await tree.disposeAsync();
+    }
+  };
 }
 
 // The basenames a swept result reports, sorted so a row can assert against a stable list regardless of the order the parallel reads landed in.
@@ -156,20 +169,20 @@ describe("readEnginesNode", () => {
 
     // The parameter proof that matters most for this function. Two roots, two different declared ranges, one reader: a copy that pathed relative to its own module
     // location would return the same answer for both - this library's own floor - and silently guard the wrong package.
-    const first = await makeTree({ "package.json": JSON.stringify({ engines: { node: ">=22.20" } }) });
-    const second = await makeTree({ "package.json": JSON.stringify({ engines: { node: "^30" } }) });
+    await using first = await makeTree({ "package.json": JSON.stringify({ engines: { node: ">=22.20" } }) });
+    await using second = await makeTree({ "package.json": JSON.stringify({ engines: { node: "^30" } }) });
 
-    assert.equal(await readEnginesNode(first), ">=22.20");
-    assert.equal(await readEnginesNode(second), "^30");
+    assert.equal(await readEnginesNode(first.url), ">=22.20");
+    assert.equal(await readEnginesNode(second.url), "^30");
   });
 
   test("throws when engines.node is absent or is not a string", async () => {
 
-    const noEngines = await makeTree({ "package.json": JSON.stringify({ name: "x" }) });
-    const notAString = await makeTree({ "package.json": JSON.stringify({ engines: { node: 24 } }) });
+    await using noEngines = await makeTree({ "package.json": JSON.stringify({ name: "x" }) });
+    await using notAString = await makeTree({ "package.json": JSON.stringify({ engines: { node: 24 } }) });
 
-    await assert.rejects(readEnginesNode(noEngines), /engines.node field is missing or is not a string/);
-    await assert.rejects(readEnginesNode(notAString), /engines.node field is missing or is not a string/);
+    await assert.rejects(readEnginesNode(noEngines.url), /engines.node field is missing or is not a string/);
+    await assert.rejects(readEnginesNode(notAString.url), /engines.node field is missing or is not a string/);
   });
 });
 
@@ -177,8 +190,9 @@ describe("sweepSourceFiles", () => {
 
   test("walks the roots it is handed, recursively, and carries each file's path and text", async () => {
 
-    const root = await makeTree({ "a.ts": "first", "b.ts": "second", "deep/nested/c.ts": "third" });
-    const files = await sweepSourceFiles({ roots: [root] });
+    await using root = await makeTree({ "a.ts": "first", "b.ts": "second", "deep/nested/c.ts": "third" });
+
+    const files = await sweepSourceFiles({ roots: [root.url] });
 
     assert.deepEqual(sweptBasenames(files), [ "a.ts", "b.ts", "c.ts" ], "the walk is recursive");
 
@@ -192,43 +206,46 @@ describe("sweepSourceFiles", () => {
   test("takes MORE THAN ONE root and returns their union", async () => {
 
     // The roots parameter is a list rather than a single directory, and this is where that is proven rather than assumed.
-    const first = await makeTree({ "one.ts": "1" });
-    const second = await makeTree({ "two.ts": "2" });
+    await using first = await makeTree({ "one.ts": "1" });
+    await using second = await makeTree({ "two.ts": "2" });
 
-    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [ first, second ] })), [ "one.ts", "two.ts" ]);
+    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [ first.url, second.url ] })), [ "one.ts", "two.ts" ]);
   });
 
   test("skips suites, helpers, and fixtures, and keeps everything else", async () => {
 
-    const root = await makeTree({
+    await using root = await makeTree({
 
       "notes.md": "prose", "shipped.ts": "ship", "thing.fixtures.ts": "data", "thing.helpers.ts": "code", "thing.test.ts": "suite"
     });
 
-    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root] })), ["shipped.ts"], "only shipped .ts source survives the filter");
+    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root.url] })), ["shipped.ts"], "only shipped .ts source survives the filter");
   });
 
   test("the basename skip-list is the CALLER'S, so the same tree sweeps differently under different policies", async () => {
 
     // The other parameter proof. One tree, three skip-lists, three answers: a walker that hardcoded any particular exclusion would fail at least one of these.
     const entries = { "keep.ts": "k", "shim-a.ts": "a", "shim-b.ts": "b" };
-    const root = await makeTree(entries);
 
-    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root] })), [ "keep.ts", "shim-a.ts", "shim-b.ts" ], "no skip-list keeps everything");
-    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root], skipBasenames: ["shim-a.ts"] })), [ "keep.ts", "shim-b.ts" ], "one entry skipped");
-    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root], skipBasenames: [ "shim-a.ts", "shim-b.ts" ] })), ["keep.ts"], "both skipped");
+    await using root = await makeTree(entries);
+
+    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root.url] })), [ "keep.ts", "shim-a.ts", "shim-b.ts" ], "no skip-list keeps everything");
+    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root.url], skipBasenames: ["shim-a.ts"] })), [ "keep.ts", "shim-b.ts" ], "one entry skipped");
+    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root.url], skipBasenames: [ "shim-a.ts", "shim-b.ts" ] })), ["keep.ts"], "both skipped");
   });
 
   test("the skip-list matches on basename, so a same-named file in any directory is skipped", async () => {
 
-    const root = await makeTree({ "nested/keep.ts": "k", "nested/skipme.ts": "n", "skipme.ts": "s" });
+    await using root = await makeTree({ "nested/keep.ts": "k", "nested/skipme.ts": "n", "skipme.ts": "s" });
 
-    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root], skipBasenames: ["skipme.ts"] })), ["keep.ts"],
+    assert.deepEqual(sweptBasenames(await sweepSourceFiles({ roots: [root.url], skipBasenames: ["skipme.ts"] })), ["keep.ts"],
       "the skip applies at every depth, not just at the root");
   });
 
   test("an empty tree sweeps to nothing rather than throwing", async () => {
 
-    assert.deepEqual(await sweepSourceFiles({ roots: [await makeTree({ "readme.md": "x" })] }), [], "a root with no shipped source yields an empty result");
+    await using root = await makeTree({ "readme.md": "x" });
+
+    assert.deepEqual(await sweepSourceFiles({ roots: [root.url] }), [], "a root with no shipped source yields an empty result");
   });
 });

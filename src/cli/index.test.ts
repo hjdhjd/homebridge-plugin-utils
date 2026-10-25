@@ -12,38 +12,20 @@ import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOption
 import { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_BEGIN, MQTT_SUBSCRIBED_DOC_END,
   renderMqttTopicsReference } from "../mqtt-topics-docs.ts";
 import { USAGE, prepareChrome, prepareDocs, prepareMqttDocs, prepareUi, runCli } from "./index.ts";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { describe, test } from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { makeScratchRoot } from "../testing/index.ts";
 import { parseJson } from "../util.ts";
 import { spawn } from "node:child_process";
 import { spliceJsonStringValue } from "../doc-json.ts";
 import { spliceMarkedRegion } from "../doc-markdown.ts";
-import { tmpdir } from "node:os";
 
-/**
- * Allocate a per-test tmpdir scratch root and return an AsyncDisposable handle that removes it on scope exit. The `await using` idiom at the call site guarantees
- * cleanup even when the test body throws, replacing the closure-variable + beforeEach/afterEach shape with per-test resource management that aligns with the rest
- * of HBPU's AsyncDisposable discipline (RtpDemuxer, MqttClient, holdPort, etc.).
- *
- * @returns An AsyncDisposable carrying the tmpdir path.
- */
-async function makeScratchRoot(): Promise<AsyncDisposable & { path: string }> {
-
-  const path = await mkdtemp(join(tmpdir(), "hbpu-cli-"));
-
-  return {
-
-    path,
-    async [Symbol.asyncDispose](): Promise<void> {
-
-      await rm(path, { force: true, recursive: true });
-    }
-  };
-}
+// The prefix every row's scratch folder is named with, so a folder a killed run leaves behind names this suite.
+const SCRATCH_PREFIX = "hbpu-cli-";
 
 /**
  * Populate a tmpdir as a synthetic HBPU source root. Writes a minimal `package.json` and a `dist/ui` tree containing the files the caller names. Each file's
@@ -143,7 +125,7 @@ describe("prepareUi", () => {
 
   test("on a fresh destination creates the hashed-versioned subdir and writes the manifest", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -169,7 +151,7 @@ describe("prepareUi", () => {
 
   test("manifest.subdir matches the version-hash format the importmap consumer relies on", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -189,7 +171,7 @@ describe("prepareUi", () => {
 
   test("creates the destination directory when it does not yet exist", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "nested", "deep", "dest");
@@ -206,7 +188,7 @@ describe("prepareUi", () => {
 
   test("re-running with unchanged source content produces an identical subdir name and manifest", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -229,7 +211,7 @@ describe("prepareUi", () => {
 
   test("re-running with mutated source content produces a different subdir and sweeps the prior one", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -263,7 +245,7 @@ describe("prepareUi", () => {
 
   test("renaming a source file without content change produces a different hash", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -289,7 +271,7 @@ describe("prepareUi", () => {
 
   test("hashes every file in relative-POSIX-path order, so the digest does not depend on the host's separator", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -316,7 +298,7 @@ describe("prepareUi", () => {
 
   test("removes stale prior-build subdirs while keeping the current build", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -347,7 +329,7 @@ describe("prepareUi", () => {
 
   test("preserves non-version-shaped entries in the destination", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -372,7 +354,7 @@ describe("prepareUi", () => {
 
   test("throws a corrective-action error when the source has not been built", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -387,7 +369,7 @@ describe("prepareUi", () => {
 
   test("throws when the source dist/ui path exists but is not a directory", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -403,7 +385,7 @@ describe("prepareUi", () => {
 
   test("throws when the source package.json has no version", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -416,7 +398,7 @@ describe("prepareUi", () => {
 
   test("manifest is well-formed JSON terminated with a newline", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -459,7 +441,7 @@ describe("prepareUi - webUI loader stamp", () => {
 
   test("no index.html beside the destination is a no-op - the mirror still runs and no index.html is created", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "lib");
@@ -475,7 +457,7 @@ describe("prepareUi - webUI loader stamp", () => {
 
   test("an index.html without the loader markers is left byte-untouched", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const plain = "<html>\n<body>no loader region here</body>\n</html>\n";
     const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, plain);
@@ -487,7 +469,7 @@ describe("prepareUi - webUI loader stamp", () => {
 
   test("a marked index.html with a valid config is stamped, and a second run is byte-identical", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
 
@@ -508,7 +490,7 @@ describe("prepareUi - webUI loader stamp", () => {
 
   test("neighboring marked regions in the same html are left byte-identical through the stamp", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const other = "<html>\n" + docChrome.DOCUMENTATION_BEGIN + "\ndocs region content\n" + docChrome.DOCUMENTATION_END + "\n" + CONFIG_COMMENT + "\n" +
       webuiLoader.WEBUI_LOADER_BEGIN + "\n" + webuiLoader.WEBUI_LOADER_END + "\n" + docChrome.PROJECTS_BEGIN + "\nprojects region content\n" + docChrome.PROJECTS_END +
@@ -526,7 +508,7 @@ describe("prepareUi - webUI loader stamp", () => {
 
   test("duplicated loader markers propagate the splice ambiguity error under the stamp-phase frame", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const dupMarkers = "<html>\n" + CONFIG_COMMENT + "\n" + webuiLoader.WEBUI_LOADER_BEGIN + "\n" + webuiLoader.WEBUI_LOADER_END + "\n" + webuiLoader.WEBUI_LOADER_BEGIN +
       "\n" + webuiLoader.WEBUI_LOADER_END + "\n</html>\n";
@@ -541,7 +523,7 @@ describe("prepareUi - webUI loader stamp", () => {
 
   test("a package.json without a name field fails the stamp with the framed derivation error", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
 
@@ -705,7 +687,7 @@ describe("prepareDocs", () => {
 
   test("replaces the marked region with the rendered reference, repeatably, leaving surrounding prose intact", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const catalogModulePath = await writeCatalog({ root: scratch.path });
     const docPath = await writeDoc({ root: scratch.path });
@@ -734,7 +716,7 @@ describe("prepareDocs", () => {
 
   test("throws naming the module when the catalog lacks featureOptionCategories", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The catalog exports featureOptions but not featureOptionCategories; the validation must reject it with a diagnostic that names the offending module and the
     // missing export, rather than letting a downstream undefined reach the renderer.
@@ -747,7 +729,7 @@ describe("prepareDocs", () => {
 
   test("throws when featureOptionCategories is not an array", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The export exists but is the wrong shape (an object, not an array). Array.isArray is what decides, so a non-array value is rejected the same way an absent
     // one is - the renderer never sees a mis-typed categories list.
@@ -760,7 +742,7 @@ describe("prepareDocs", () => {
 
   test("throws when featureOptions is absent or not a non-null object", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // featureOptionCategories is well-formed but featureOptions is null - the object guard must reject a null as firmly as a missing export, since `typeof null` is
     // "object" and a naive typeof check would let it through to fail obscurely downstream.
@@ -773,7 +755,7 @@ describe("prepareDocs", () => {
 
   test("propagates the splice's throw when the doc lacks the marker pair", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The catalog is valid but the doc has no markers; prepareDocs lets the splice's own framed error propagate unchanged rather than swallowing or rewrapping it,
     // so the dispatch site can frame every failure uniformly.
@@ -786,7 +768,7 @@ describe("prepareDocs", () => {
 
   test("forwards both optional scope hooks so their contributions land in the rendered doc", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // A catalog that exports both scope hooks in addition to the required arrays. prepareDocs must read them off the same dynamic-imported namespace, validate them as
     // functions, and forward them to the renderer, which threads each into its output - the category hook as a device-scope line under the heading, the option hook as
@@ -806,7 +788,7 @@ describe("prepareDocs", () => {
 
   test("renders byte-identically to the no-hooks path when the catalog exports neither hook (the ratgdo path)", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The no-regression guarantee for the zero-hook plugin: a catalog exporting neither hook must produce exactly the document a hooks-unaware catalog always has. We
     // splice the same catalog into two separate docs - one through the plain no-hooks body, one through that same body re-read - and require byte equality, which asserts
@@ -839,7 +821,7 @@ describe("prepareDocs", () => {
 
   test("throws naming the module when describeOptionScope is present but not a function", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The catalog's required arrays are well-formed, but describeOptionScope is exported as a non-callable value. The independent per-hook guard must reject it with a
     // diagnostic that names the offending module and export, exactly as the required-export guards do, rather than letting a non-function reach the renderer's optional
@@ -853,7 +835,7 @@ describe("prepareDocs", () => {
 
   test("throws naming the module when describeCategoryScope is present but not a function", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The symmetric case for the category hook: a present-but-non-function describeCategoryScope is rejected by its own independent guard with a framed diagnostic, so
     // neither hook can slip a mis-typed value through to the renderer.
@@ -866,7 +848,7 @@ describe("prepareDocs", () => {
 
   test("applies a single exported hook and omits the other cleanly", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The asymmetric case: a catalog that exports only describeOptionScope. The validated-independently contract means the present hook is forwarded and applied while
     // the absent one stays `undefined` and contributes nothing - no stray "undefined" literal, no empty line. We assert the option suffix appears AND that no category
@@ -887,7 +869,7 @@ describe("prepareMqttDocs", () => {
 
   test("replaces both marked regions and leaves the prose before, between, and after untouched", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const catalogModulePath = await writeMqttCatalog({ root: scratch.path });
     const docPath = await writeMqttDoc({ root: scratch.path });
@@ -907,7 +889,7 @@ describe("prepareMqttDocs", () => {
 
   test("is repeatable, reproducing an already generated document byte for byte", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const catalogModulePath = await writeMqttCatalog({ root: scratch.path });
     const docPath = await writeMqttDoc({ root: scratch.path });
@@ -923,7 +905,7 @@ describe("prepareMqttDocs", () => {
 
   test("throws naming the module when it exports no mqttTopics", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const catalogModulePath = await writeMqttCatalog({ body: "export const somethingElse = {};\n", root: scratch.path });
     const docPath = await writeMqttDoc({ root: scratch.path });
@@ -934,7 +916,7 @@ describe("prepareMqttDocs", () => {
 
   test("throws naming the module when mqttTopics is not an object", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const catalogModulePath = await writeMqttCatalog({ body: "export const mqttTopics = null;\n", root: scratch.path });
     const docPath = await writeMqttDoc({ root: scratch.path });
@@ -945,7 +927,7 @@ describe("prepareMqttDocs", () => {
 
   test("renders the device column for a catalog that attaches one under the symbol", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const catalogModulePath = await writeMqttCatalog({ body: MQTT_CATALOG_WITH_COLUMN_BODY, root: scratch.path });
     const docPath = await writeMqttDoc({ root: scratch.path });
@@ -960,7 +942,7 @@ describe("prepareMqttDocs", () => {
 
   test("propagates the renderer's refusal and leaves the document byte-identical", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const catalogModulePath = await writeMqttCatalog({ body: MQTT_CATALOG_BAD_COLUMN_BODY, root: scratch.path });
     const docPath = await writeMqttDoc({ root: scratch.path });
@@ -975,7 +957,7 @@ describe("prepareMqttDocs", () => {
 
     // Both regions are spliced against the in-memory copy before anything is written, so a document that carries the published pair and not the subscribed one is
     // left exactly as it was rather than half generated.
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const catalogModulePath = await writeMqttCatalog({ root: scratch.path });
     const docPath = await writeMqttDoc({ root: scratch.path, subscribed: false });
@@ -991,7 +973,7 @@ describe("runCli", () => {
 
   test("with no arguments writes the usage banner and exits 0", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const capture = captureStderr();
     const code = await runCli({ argv: [], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
@@ -1002,7 +984,7 @@ describe("runCli", () => {
 
   test("with an unknown command writes the usage banner and exits 1", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const capture = captureStderr();
     const code = await runCli({ argv: ["nonsense"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
@@ -1031,7 +1013,7 @@ describe("runCli", () => {
 
   test("prepare-ui without a destination argument writes a misuse message and exits 1", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const capture = captureStderr();
     const code = await runCli({ argv: ["prepare-ui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
@@ -1042,7 +1024,7 @@ describe("runCli", () => {
 
   test("prepare-ui dispatches to the function and exits 0 on success", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -1067,7 +1049,7 @@ describe("runCli", () => {
 
   test("prepare-ui surfaces the function's error message and exits 1", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -1087,7 +1069,7 @@ describe("runCli", () => {
 
   test("prepare-ui frames a not-built HBPU when the loader modules are absent from sourceRoot", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const dest = join(scratch.path, "dest");
@@ -1107,7 +1089,7 @@ describe("runCli", () => {
 
   test("prepare-docs without a catalog-module argument writes a misuse message and exits 1", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const capture = captureStderr();
     const code = await runCli({ argv: ["prepare-docs"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
@@ -1118,7 +1100,7 @@ describe("runCli", () => {
 
   test("prepare-docs frames a not-built HBPU when the renderer module is absent from sourceRoot", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The sourceRoot tmpdir has neither dist/featureOptions-docs.js nor dist/doc-markdown.js, so the dynamic imports fail. The dispatcher must catch that failure and
     // frame it as the actionable "HBPU has not been built" condition, distinct from a render/splice failure - and it must do so without ever reaching prepareDocs (a
@@ -1132,7 +1114,7 @@ describe("runCli", () => {
 
   test("prepare-docs dispatches to prepareDocs, regenerates the doc, and exits 0 on success", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
@@ -1170,7 +1152,7 @@ describe("runCli", () => {
 
   test("prepare-docs honors --doc to target a non-default reference path, and surfaces prepareDocs errors as exit 1", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
@@ -1201,7 +1183,7 @@ describe("runCli", () => {
 
   test("prepare-mqtt without a catalog-module argument writes a misuse message and exits 1", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const capture = captureStderr();
     const code = await runCli({ argv: ["prepare-mqtt"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
@@ -1212,7 +1194,7 @@ describe("runCli", () => {
 
   test("prepare-mqtt against an unbuilt HBPU frames the failure naming both compiled files and exits 1", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The sourceRoot tmpdir has neither dist/mqtt-topics-docs.js nor dist/doc-markdown.js, so the dynamic imports fail. A catalog argument is supplied precisely so
     // the only thing that can fail is the module import, which the dispatcher frames as the actionable not-built condition.
@@ -1225,7 +1207,7 @@ describe("runCli", () => {
 
   test("prepare-mqtt dispatches to prepareMqttDocs, regenerates the default document, and exits 0 on success", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
@@ -1254,7 +1236,7 @@ describe("runCli", () => {
 
   test("prepare-mqtt honors --doc to target another path, and surfaces prepareMqttDocs errors as exit 1", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
@@ -1278,7 +1260,7 @@ describe("runCli", () => {
 
   test("prepare-mqtt renders the device column when the plugin's catalog attaches one", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
@@ -1425,7 +1407,7 @@ describe("prepareChrome", () => {
 
   test("stamps every region across the README, docs, and webUI, leaving surrounding prose intact", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, projects: [{ blurb: "garage support.", href: "https://github.com/acme/ratgdo", title: "ratgdo" }] };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1463,7 +1445,7 @@ describe("prepareChrome", () => {
 
   test("stamps the webUI logo between its own markers and leaves the page's wrapper markup alone", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
 
@@ -1486,7 +1468,7 @@ describe("prepareChrome", () => {
 
   test("a webUI page without the logo markers fails naming the begin marker, writing nothing", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
 
@@ -1510,7 +1492,7 @@ describe("prepareChrome", () => {
 
   test("a doc entry opted out of both regions stays byte-untouched while remaining listed in every documentation index", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const entries = [
 
@@ -1545,7 +1527,7 @@ describe("prepareChrome", () => {
 
   test("an entry pointing outside the repository is listed on every surface and stamped nowhere", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const entries = [
 
@@ -1588,7 +1570,7 @@ describe("prepareChrome", () => {
 
   test("loads a manifest authored as static JSON, not just a module", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // Author the manifest as a .json file to exercise loadDocChromeManifest's JSON branch - the alternative to the .mjs module every other test uses - and confirm both
     // authoring formats converge on the same validated stamp.
@@ -1606,7 +1588,7 @@ describe("prepareChrome", () => {
 
   test("is all-or-nothing across files: a target missing its markers aborts with zero writes", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
 
@@ -1625,7 +1607,7 @@ describe("prepareChrome", () => {
 
   test("resolves a remote project source through the injected fetch", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, projects: { url: "https://projects.test/list.json" } };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1653,7 +1635,7 @@ describe("prepareChrome", () => {
 
   test("fails with a framed error when the remote project fetch is not OK", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, projects: { url: "https://projects.test/missing.json" } };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1668,7 +1650,7 @@ describe("prepareChrome", () => {
 
   test("resolves a local-file project source relative to the plugin root", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, projects: { file: "projects.json" } };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1688,7 +1670,7 @@ describe("prepareChrome", () => {
 
   test("offline leaves a remote project source unfetched and the projects region as it is", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, projects: { url: "https://projects.test/list.json" } };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1724,7 +1706,7 @@ describe("prepareChrome", () => {
 
   test("offline still resolves a local-file project source", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, projects: { file: "projects.json" } };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1745,7 +1727,7 @@ describe("prepareChrome", () => {
 
   test("frames a manifest that is not valid JSON with a source-naming diagnostic", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifestPath = join(scratch.path, "docChrome.json");
 
@@ -1758,7 +1740,7 @@ describe("prepareChrome", () => {
 
   test("frames a local project list that is not valid JSON with a source-naming diagnostic", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, projects: { file: "projects.json" } };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1777,7 +1759,7 @@ describe("prepareChrome", () => {
      */
     const marker = "Zq9XvK7wPj3RmT5y";
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     await writePluginTree({ root: scratch.path });
 
@@ -1814,7 +1796,7 @@ describe("prepareChrome", () => {
 
   test("skips the webUI when no index.html is present, still stamping the README and docs", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
 
@@ -1829,7 +1811,7 @@ describe("prepareChrome", () => {
 
   test("stamps the declared schema's footer member and leaves every other byte of that file as it was", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, nav: SCHEMA_FLAGGED_NAV, surfaces: { schema: "config.schema.json" } };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1859,7 +1841,7 @@ describe("prepareChrome", () => {
 
   test("leaves the schema untouched when the manifest declares no schema surface", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifestPath = await writeManifest({ manifest: BASE_MANIFEST, root: scratch.path });
 
@@ -1883,7 +1865,7 @@ describe("prepareChrome", () => {
 
   test("a declared schema with no footer member fails the run naming the member, writing nothing", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const manifest = { ...BASE_MANIFEST, nav: SCHEMA_FLAGGED_NAV, surfaces: { schema: "config.schema.json" } };
     const manifestPath = await writeManifest({ manifest, root: scratch.path });
@@ -1908,7 +1890,7 @@ describe("prepareChrome", () => {
 
   test("rejects a mis-shaped manifest with a field-naming diagnostic and writes nothing", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { masthead: _masthead, ...withoutMasthead } = BASE_MANIFEST;
     const manifestPath = await writeManifest({ manifest: withoutMasthead, root: scratch.path });
@@ -1950,7 +1932,7 @@ describe("runCli - prepare-chrome dispatch", () => {
 
   test("dispatches to prepareChrome, stamps the tree, and exits 0 on success", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
@@ -1977,7 +1959,7 @@ describe("runCli - prepare-chrome dispatch", () => {
 
   test("--offline reaches prepareChrome, so neither mode touches the network", async (t) => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const sourceRoot = join(scratch.path, "source");
     const cwd = join(scratch.path, "plugin");
@@ -2014,7 +1996,7 @@ describe("runCli - prepare-chrome dispatch", () => {
 
   test("with no manifest argument exits 1 with a framed usage error", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const capture = captureStderr();
     const code = await runCli({ argv: ["prepare-chrome"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
@@ -2025,7 +2007,7 @@ describe("runCli - prepare-chrome dispatch", () => {
 
   test("reports HBPU not built and exits 1 when the compiled renderer is missing", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const cwd = join(scratch.path, "plugin");
 
@@ -2074,7 +2056,7 @@ describe("runCli - the check mode", () => {
 
   test("after a real prepare-docs run, a check of the same doc reports nothing and exits 0", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
     const seed = captureStderr();
@@ -2093,7 +2075,7 @@ describe("runCli - the check mode", () => {
 
   test("a hand-edited region makes the check exit 1 naming the doc, and the check writes nothing", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
     const docPath = join(cwd, "docs", "FeatureOptions.md");
@@ -2118,7 +2100,7 @@ describe("runCli - the check mode", () => {
 
   test("a check over prepare-chrome's multi-file plan names every drifted target, one line each", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
     const seed = captureStderr();
@@ -2144,7 +2126,7 @@ describe("runCli - the check mode", () => {
 
   test("a write-mode run over an already-current tree rewrites no target", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
     const readmePath = join(cwd, "README.md");
@@ -2188,7 +2170,7 @@ describe("runCli - the check mode", () => {
 
   test("a hand-edited MQTT document makes its check exit 1 naming the document", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
     const docPath = join(cwd, "docs", "MQTT.md");
@@ -2208,7 +2190,7 @@ describe("runCli - the check mode", () => {
 
   test("an unrecognized option rejects out of runCli rather than reaching a subcommand", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const capture = captureStderr();
 
@@ -2222,7 +2204,7 @@ describe("runCli - the check mode", () => {
 
   test("a hand-edited schema footer makes the check exit 1 naming the schema, and a write run settles it", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
 
@@ -2262,7 +2244,7 @@ describe("runCli - the check mode", () => {
 
   test("a target whose begin marker was removed fails a check exactly as it fails a write", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const { cwd, sourceRoot } = await writeCheckTree(scratch.path);
     const docPath = join(cwd, "docs", "FeatureOptions.md");
@@ -2289,7 +2271,7 @@ describe("CLI entry point (invoked through a symlink)", () => {
 
   test("runs and writes the manifest when reached through a symlink, not just by direct path", async () => {
 
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // Build a self-contained synthetic HBPU package root: a package.json with a version, a dist/ui tree to mirror (including a nested directory to prove recursive
     // copy), and a copy of THIS CLI module at dist/cli/index.ts. Copying the real source rather than symlinking to it keeps the CLI's sourceRoot resolution

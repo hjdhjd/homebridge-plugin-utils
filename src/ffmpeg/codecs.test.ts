@@ -6,15 +6,14 @@
  */
 import { FfmpegCodecs, ffmpegVersionAtLeast, parseAppleSiliconGeneration, parseFfmpegCodecs, parseFfmpegHwAccels, parseFfmpegVersion, parseFfmpegVersionParts,
   parseRpiGpuMem } from "./codecs.ts";
-import { capturingLog, drainClock, settle, silentLog } from "../testing/index.ts";
+import { capturingLog, drainClock, makeScratchRoot, settle, silentLog } from "../testing/index.ts";
 import { describe, test } from "node:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { ffmpegIntegrationEnabled } from "./integration.helpers.ts";
 import { join } from "node:path";
 import { makeCodecs } from "./codecs.helpers.ts";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 
 // Fixture strings built from real FFmpeg command output. EOL handling uses `\n` because `node:os.EOL` is `\n` on the test machine (macOS / Linux); the parsers split
 // on the host's EOL, and the test file is host-local too, so there is no cross-platform ambiguity to resolve here.
@@ -396,71 +395,62 @@ describe("FfmpegCodecs - scalar getter surface", () => {
 
 describe("FfmpegCodecs.probe - the per-command deadline", () => {
 
+  // The prefix the folder holding each row's stand-in FFmpeg script is named with, so a folder a killed run leaves behind names this suite.
+  const SCRATCH_PREFIX = "hbpu-codec-probe-";
+
   test("arms every probe deadline on the injected clock, so a command that never answers is cut off on virtual time", async () => {
 
     // A script that ignores its arguments and never exits stands in for a hung FFmpeg binary. It `exec`s `sleep`, so the shell is replaced by the sleeper and the
     // abort's kill lands on the process the probe actually spawned - no orphan outlives the row.
-    const directory = await mkdtemp(join(tmpdir(), "hbpu-codec-probe-"));
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
-    try {
+    const script = join(scratch.path, "hang.sh");
 
-      const script = join(directory, "hang.sh");
+    await writeFile(script, "#!/bin/sh\nexec sleep 600\n", { mode: 0o755 });
 
-      await writeFile(script, "#!/bin/sh\nexec sleep 600\n", { mode: 0o755 });
+    const clock = new TestClock();
+    const probing = FfmpegCodecs.probe({ clock, ffmpegExec: script, log: capturingLog() });
 
-      const clock = new TestClock();
-      const probing = FfmpegCodecs.probe({ clock, ffmpegExec: script, log: capturingLog() });
+    // The deadline is armed synchronously, before the probe's first suspension, so this yield is margin against a future earlier await rather than a need.
+    await settle();
 
-      // The deadline is armed synchronously, before the probe's first suspension, so this yield is margin against a future earlier await rather than a need.
-      await settle();
+    // Exactly one deadline is on the clock on every host, because the probe runs its commands one at a time and each releases its deadline when its command
+    // answers: the hanging version probe's, or on a Raspberry Pi host the deadline of the GPU-memory probe that runs before it.
+    assert.equal(clock.pending, 1, "the running command's deadline is armed on the injected clock");
 
-      // Exactly one deadline is on the clock on every host, because the probe runs its commands one at a time and each releases its deadline when its command
-      // answers: the hanging version probe's, or on a Raspberry Pi host the deadline of the GPU-memory probe that runs before it.
-      assert.equal(clock.pending, 1, "the running command's deadline is armed on the injected clock");
+    // The drain steps deadline by deadline rather than by one span, so the hanging command's deadline is the one that fires last on every host, whatever ran
+    // before it. A step can land only on a deadline whose command is still running: the version probe's, which never answers, and on a Raspberry Pi host the
+    // GPU-memory probe's, while that probe is still waiting on its own command. The limit covers exactly those and fails the row rather than letting it spin; the
+    // scenario stops at the first required probe, so the per-accelerator validation loop, whose deadline count tracks the host's advertised hardware, is never
+    // reached.
+    await drainClock(clock, 2);
 
-      // The drain steps deadline by deadline rather than by one span, so the hanging command's deadline is the one that fires last on every host, whatever ran
-      // before it. A step can land only on a deadline whose command is still running: the version probe's, which never answers, and on a Raspberry Pi host the
-      // GPU-memory probe's, while that probe is still waiting on its own command. The limit covers exactly those and fails the row rather than letting it spin; the
-      // scenario stops at the first required probe, so the per-accelerator validation loop, whose deadline count tracks the host's advertised hardware, is never
-      // reached.
-      await drainClock(clock, 2);
-
-      assert.equal(await probing, null, "a probe whose command never answers resolves null once its deadline is crossed");
-    } finally {
-
-      await rm(directory, { force: true, recursive: true });
-    }
+    assert.equal(await probing, null, "a probe whose command never answers resolves null once its deadline is crossed");
   });
 
   test("releases each command's deadline as the command answers, so a probe that settles at once leaves nothing on the clock", async () => {
 
     // A script that answers every probe at once stands in for an FFmpeg binary that works: the version banner the version probe parses, and an empty codec and
     // accelerator inventory, which keeps the probe out of the per-accelerator validation loop.
-    const directory = await mkdtemp(join(tmpdir(), "hbpu-codec-probe-"));
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
-    try {
+    const script = join(scratch.path, "answer.sh");
 
-      const script = join(directory, "answer.sh");
+    await writeFile(script, "#!/bin/sh\ncase \"$*\" in\n  *-version*) echo \"ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers\" ;;\n" +
+      "  *-hwaccels*) echo \"Hardware acceleration methods:\" ;;\n  *) echo \"Codecs:\" ;;\nesac\n", { mode: 0o755 });
 
-      await writeFile(script, "#!/bin/sh\ncase \"$*\" in\n  *-version*) echo \"ffmpeg version 6.1.1 Copyright (c) 2000-2023 the FFmpeg developers\" ;;\n" +
-        "  *-hwaccels*) echo \"Hardware acceleration methods:\" ;;\n  *) echo \"Codecs:\" ;;\nesac\n", { mode: 0o755 });
+    const clock = new TestClock();
+    const probing = FfmpegCodecs.probe({ clock, ffmpegExec: script, log: capturingLog() });
 
-      const clock = new TestClock();
-      const probing = FfmpegCodecs.probe({ clock, ffmpegExec: script, log: capturingLog() });
+    // The first command's deadline is armed synchronously, before the probe's first suspension, so this read lands while that command is still running.
+    assert.equal(clock.pending, 1, "the running command's deadline is on the clock");
 
-      // The first command's deadline is armed synchronously, before the probe's first suspension, so this read lands while that command is still running.
-      assert.equal(clock.pending, 1, "the running command's deadline is on the clock");
+    const codecs = await probing;
 
-      const codecs = await probing;
-
-      assert.notEqual(codecs, null, "the probe succeeds with no advance of the clock, because every command answered");
-      assert.equal(codecs?.ffmpegVersion, "6.1.1", "with what the version command wrote");
-      assert.ok(clock.requested.length >= 3, "each command the probe ran was armed a deadline of its own");
-      assert.equal(clock.pending, 0, "and each was released when its command answered");
-    } finally {
-
-      await rm(directory, { force: true, recursive: true });
-    }
+    assert.notEqual(codecs, null, "the probe succeeds with no advance of the clock, because every command answered");
+    assert.equal(codecs?.ffmpegVersion, "6.1.1", "with what the version command wrote");
+    assert.ok(clock.requested.length >= 3, "each command the probe ran was armed a deadline of its own");
+    assert.equal(clock.pending, 0, "and each was released when its command answered");
   });
 });
 

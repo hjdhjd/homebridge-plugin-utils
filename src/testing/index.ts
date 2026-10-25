@@ -9,14 +9,18 @@
  * The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
  * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
  * finders, the unhandled-rejection assertion, the shared poll-with-deadline and the turn-budgeted poll beside it, the macrotask yield with the `TestClock` walks built on
- * it (`advanceThroughSchedule` through a known schedule of waits, `drainClock` until nothing is pending), and the real-socket family that reserves a port and binds and
- * stops a loopback server - the runtime-floor guard machinery in `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own
- * dependency-inversion boundaries.
+ * it (`advanceThroughSchedule` through a known schedule of waits, `drainClock` until nothing is pending), the real-socket family that reserves a port and binds and
+ * stops a loopback server, and the scratch folder an `await using` scope removes - the runtime-floor guard machinery in `runtime-floor.ts` beside this file, and the
+ * test doubles that stand in for the library's own dependency-inversion boundaries.
  *
  * The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
  * `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its
  * subject drift apart the moment they stop sharing a directory. Only their export path lives here. The helpers and the guard machinery are the other case: they have
  * no production subject to sit beside, so this directory is where they are defined rather than merely re-exported.
+ *
+ * The Homebridge double in `homebridge-double.ts` is defined in this directory for the same reason: its subject, the Homebridge API a plugin is handed, lives
+ * outside the library. It runs on Homebridge's own `PlatformAccessory`, API and bridge service and the hap-nodejs copy Homebridge loads, and it reaches Homebridge
+ * and hap-nodejs only inside `loadHomebridge`, resolving them from the caller's tree, so importing this entry point loads neither.
  *
  * Nothing in production may import from this module, and that is what the dedicated subpath buys over a category tag on the main barrel. The production/test category
  * boundary becomes structural: a production module reaching for a double names a specifier that a reader and a grep can both see is wrong, rather than one everybody
@@ -26,13 +30,16 @@
  */
 import { setTimeout as delay, setImmediate as flushImmediate } from "node:timers/promises";
 import { hasErrorCode, noOpLog } from "../util.ts";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { HomebridgePluginLogging } from "../util.ts";
 import type { Server } from "node:net";
 import type { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import { format } from "node:util";
+import { join } from "node:path";
 import { once } from "node:events";
+import { tmpdir } from "node:os";
 
 /* The shipped doubles, aggregated from their physical homes, and the guard machinery and type-level assertion helpers that live in this directory alongside the
  * helpers below. Each module is re-exported wholesale rather than symbol-by-symbol, because the module on the other side already curates what it publishes and a
@@ -48,6 +55,7 @@ export * from "../logclient/socket-double.ts";
 export * from "../mdns/browser-double.ts";
 export * from "../mdns/message-builders.ts";
 export * from "../mqtt-client-double.ts";
+export * from "./homebridge-double.ts";
 export * from "./runtime-floor.ts";
 export type * from "./type-assertions.ts";
 
@@ -246,6 +254,38 @@ export function capturingLog(): CapturingLog {
 export function formatLogEntry(entry: TestLogEntry): string {
 
   return format(entry.message, ...entry.params);
+}
+
+/**
+ * Render every entry at `level` through {@link formatLogEntry}, in the order the entries were captured.
+ *
+ * Where {@link loggedAt} and {@link logCount} answer whether, and how often, a line was logged, this answers the lines themselves, so one `deepEqual` asserts the
+ * exact sentences a level carries: an empty array shows nothing was logged at that level, and a list shows what was logged and that nothing else was. It takes the
+ * entries array, as {@link loggedAt} does, so a caller can render a slice.
+ *
+ * @param entries - The captured entries to render.
+ * @param level   - The severity whose entries to render.
+ *
+ * @returns The rendered line of every entry at `level`, in capture order.
+ *
+ * @example
+ *
+ * ```ts
+ * import { capturingLog, linesAt } from "homebridge-plugin-utils/testing";
+ *
+ * const log = capturingLog();
+ *
+ * classUnderTest.reconnect(log);
+ *
+ * // The emission was `log.warn("Reconnecting to %s.", "the broker")`, so the value reaches the line only through the render.
+ * assert.deepEqual(linesAt(log.entries, "warn"), ["Reconnecting to the broker."]);
+ * ```
+ *
+ * @category Testing
+ */
+export function linesAt(entries: readonly TestLogEntry[], level: TestLogEntry["level"]): string[] {
+
+  return entries.filter((entry) => entry.level === level).map(formatLogEntry);
 }
 
 /**
@@ -722,4 +762,74 @@ export function errnoError<T extends number | string>(message: string, code: T, 
   const error = (cause === undefined) ? new Error(message) : new Error(message, { cause });
 
   return Object.assign(error, { code });
+}
+
+/**
+ * Make a temporary folder under the system temp folder, named with `prefix`, and answer an `AsyncDisposable` carrying its path whose disposal removes the folder
+ * and everything written inside it.
+ *
+ * A row holds the folder with `await using`, so the scope owns the removal and a row that throws cleans up as surely as one that returns...a `try`/`finally` around
+ * `mkdtemp` written out at each site says the same thing every time and only has to be wrong at one of them to leak. The prefix names the suite the folder belongs
+ * to, so a folder a killed run leaves behind says where it came from. The folder lives exactly as long as its scope, which suits a folder one row writes. A folder
+ * a whole suite shares outlives every row, so the suite makes it through this helper in its `before` hook and disposes it in its `after` hook, the second example
+ * below. The removal is forced, so a folder the row removed itself is no failure.
+ *
+ * @param prefix - The start of the folder's name, which `mkdtemp` completes with random characters, such as `"hbpu-clock-"`.
+ *
+ * @returns An `AsyncDisposable` carrying the folder's absolute path, whose disposal removes the folder recursively.
+ *
+ * @example
+ *
+ * ```ts
+ * import { join } from "node:path";
+ * import { makeScratchRoot } from "homebridge-plugin-utils/testing";
+ * import { test } from "node:test";
+ * import { writeFile } from "node:fs/promises";
+ *
+ * test("reads the configuration it is handed", async () => {
+ *
+ *   // The folder and the file written inside it are removed when the row's scope ends, whether the row returns or throws.
+ *   await using scratch = await makeScratchRoot("my-plugin-config-");
+ *
+ *   await writeFile(join(scratch.path, "config.json"), "{}");
+ * });
+ * ```
+ *
+ * @example
+ *
+ * ```ts
+ * import { after, before, describe } from "node:test";
+ * import { makeScratchRoot } from "homebridge-plugin-utils/testing";
+ *
+ * describe("the cached fixtures", () => {
+ *
+ *   // Every row reads the folder, so it outlives each of them: the suite's before hook makes it and its after hook disposes it.
+ *   let fixtures: AsyncDisposable & { readonly path: string };
+ *
+ *   before(async () => {
+ *
+ *     fixtures = await makeScratchRoot("my-plugin-fixtures-");
+ *   });
+ *
+ *   after(async () => {
+ *
+ *     await fixtures[Symbol.asyncDispose]();
+ *   });
+ * });
+ * ```
+ *
+ * @category Testing
+ */
+export async function makeScratchRoot(prefix: string): Promise<AsyncDisposable & { readonly path: string }> {
+
+  const path = await mkdtemp(join(tmpdir(), prefix));
+
+  return {
+
+    path,
+    async [Symbol.asyncDispose](): Promise<void> {
+
+      await rm(path, { force: true, recursive: true });
+    }
+  };
 }

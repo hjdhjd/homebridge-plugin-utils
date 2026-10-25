@@ -1,21 +1,25 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, present, silentLog, capturingLog, formatLogEntry, loggedAt,
- * logCount, assertNoUnhandledRejections, waitUntil, settle, settleUntil, advanceThroughSchedule, drainClock, freePort, listenOnLoopback, stopListening, errnoError.
+ * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, present, silentLog, capturingLog, formatLogEntry, linesAt,
+ * loggedAt, logCount, assertNoUnhandledRejections, waitUntil, settle, settleUntil, advanceThroughSchedule, drainClock, freePort, listenOnLoopback, stopListening,
+ * errnoError, makeScratchRoot.
  * Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every error path, every async outcome - because a
  * bug in a shared helper cascades into every test that consumes it.
  */
 import type { CapturingLog, TestLogEntry } from "./index.ts";
-import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, drainClock, errnoError, expectAt, formatLogEntry, freePort, listenOnLoopback, logCount,
-  loggedAt, present, settle, settleUntil, silentLog, stopListening, waitUntil } from "./index.ts";
+import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, drainClock, errnoError, expectAt, formatLogEntry, freePort, linesAt, listenOnLoopback,
+  logCount, loggedAt, makeScratchRoot, present, settle, settleUntil, silentLog, stopListening, waitUntil } from "./index.ts";
+import { basename, dirname, join } from "node:path";
 import { createConnection, createServer } from "node:net";
 import { describe, test } from "node:test";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { AssertionError } from "node:assert";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
 import { causeChain } from "../util.ts";
 import { classifyTransportError } from "../transport-error.ts";
 import { once } from "node:events";
+import { tmpdir } from "node:os";
 
 describe("expectAt", () => {
 
@@ -202,6 +206,64 @@ describe("formatLogEntry", () => {
     assert.equal(formatLogEntry({ level: "warn", message: "Stream stalled.", params: [] }), "Stream stalled.", "a message with no tokens must survive verbatim");
     assert.equal(formatLogEntry({ level: "warn", message: "A literal %s token.", params: [] }), "A literal %s token.",
       "with no params there is nothing to substitute, so the token itself is the output");
+  });
+});
+
+describe("linesAt", () => {
+
+  test("answers an empty array for a level that holds no entries", () => {
+
+    // An entry at another level stands beside the empty one, so the empty answer comes from the level filter rather than from an empty input.
+    const entries: TestLogEntry[] = [{ level: "info", message: "Connected to %s.", params: ["the broker"] }];
+
+    assert.deepEqual(linesAt(entries, "error"), [], "a level with no entries must answer an empty array");
+    assert.deepEqual(linesAt([], "info"), [], "an empty entries array must answer an empty array");
+  });
+
+  test("renders each entry at the level with its params, in capture order", () => {
+
+    // The lines are written out literally, as in the formatLogEntry rows, and captured out of sorted order, so an answer that reordered them fails.
+    const entries: TestLogEntry[] = [
+
+      { level: "warn", message: "Reconnecting to %s, attempt %d.", params: [ "the broker", 2 ] },
+      { level: "warn", message: "Stream stalled.", params: [] },
+      { level: "warn", message: "Motion on %s.", params: ["the porch"] }
+    ];
+
+    assert.deepEqual(linesAt(entries, "warn"), [ "Reconnecting to the broker, attempt 2.", "Stream stalled.", "Motion on the porch." ],
+      "every entry at the level must render with its params interpolated, in the order it was captured");
+  });
+
+  test("leaves out the entries at every other level", () => {
+
+    // The debug and info entries carry the same message as an error entry, so a line reaches the answer only through its level.
+    const entries: TestLogEntry[] = [
+
+      { level: "debug", message: "Unable to publish to %s.", params: ["test/device1/status"] },
+      { level: "error", message: "Unable to publish to %s.", params: ["test/device2/status"] },
+      { level: "info", message: "Unable to publish to %s.", params: ["test/device3/status"] },
+      { level: "error", message: "Unable to subscribe to %s.", params: ["test/device4/status"] },
+      { level: "warn", message: "Reconnecting to %s, attempt %d.", params: [ "the broker", 2 ] }
+    ];
+
+    assert.deepEqual(linesAt(entries, "error"), [ "Unable to publish to test/device2/status.", "Unable to subscribe to test/device4/status." ],
+      "only the error-level entries must render, and none at another level");
+  });
+
+  test("renders only the entries a slice of a live capturingLog contains", () => {
+
+    const log = capturingLog();
+
+    log.warn("Reconnecting to %s, attempt %d.", "the broker", 1);
+
+    const before = log.entries.length;
+
+    log.warn("Reconnecting to %s, attempt %d.", "the broker", 2);
+    log.info("Reconnected to %s.", "the broker");
+
+    assert.deepEqual(linesAt(log.entries.slice(before), "warn"), ["Reconnecting to the broker, attempt 2."], "a slice must render only the entries it contains");
+    assert.deepEqual(linesAt(log.entries, "warn"), [ "Reconnecting to the broker, attempt 1.", "Reconnecting to the broker, attempt 2." ],
+      "while the whole capture renders every entry at its level");
   });
 });
 
@@ -934,5 +996,58 @@ describe("errnoError", () => {
     // The integration the factory exists for: a fixture it built has to classify exactly as the hand-rolled shape it replaces did.
     assert.equal(classifyTransportError(errnoError("name not resolved", "ENOTFOUND")).kind, "dns",
       "the classifier must read the factory's code and answer the kind that code maps to");
+  });
+});
+
+describe("makeScratchRoot", () => {
+
+  // What each row writes inside the folder, so the folder's removal has to take a file with it.
+  const NOTE = "written inside the scope";
+
+  // The prefix every row's folder is named with, which the first row reads back off the folder's name.
+  const SCRATCH_PREFIX = "hbpu-testing-";
+
+  test("makes a folder under the system temp folder, named with the prefix, that holds the file the row writes inside the scope", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    await writeFile(join(scratch.path, "note.txt"), NOTE, "utf8");
+
+    assert.ok((await stat(scratch.path)).isDirectory(), "the folder exists inside the scope");
+    assert.equal(dirname(scratch.path), tmpdir(), "under the system temp folder");
+    assert.ok(basename(scratch.path).startsWith(SCRATCH_PREFIX), "named with the prefix: " + scratch.path);
+    assert.equal(await readFile(join(scratch.path, "note.txt"), "utf8"), NOTE, "and it holds the file the row wrote");
+  });
+
+  test("removes the folder and the file the row wrote inside it when the scope ends", async () => {
+
+    // The scope is an async function of the row's own, so its folder is disposed when it returns, before the row looks for the folder.
+    const path = await (async (): Promise<string> => {
+
+      await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+      await writeFile(join(scratch.path, "note.txt"), NOTE, "utf8");
+
+      return scratch.path;
+    })();
+
+    await assert.rejects(stat(path), { code: "ENOENT" }, "the scope's end removed the folder and the file inside it");
+  });
+
+  test("removes the folder when the scope ends by a throw", async () => {
+
+    let path = "";
+
+    await assert.rejects(async () => {
+
+      await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+      path = scratch.path;
+      await writeFile(join(path, "note.txt"), NOTE, "utf8");
+
+      throw new Error("The row failed inside the scope.");
+    }, { message: "The row failed inside the scope." }, "the scope ends by the row's own throw, which the removal leaves as it was");
+
+    await assert.rejects(stat(path), { code: "ENOENT" }, "the throw's scope exit removed the folder and the file inside it");
   });
 });

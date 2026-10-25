@@ -6,10 +6,12 @@
 /**
  * Mirrors the const enum values every Homebridge plugin needs at value-side runtime, sourced from the "homebridge" module surface: `APIEvent` from homebridge-core's
  * `api.d.ts`, and `Categories` from hap-nodejs's `Accessory.d.ts`, `HAPStatus` from its `HAPServer.d.ts` and `Perms` from its `Characteristic.d.ts` as "homebridge"
- * re-exports them. `verbatimModuleSyntax` disallows value imports of ambient const enums, so those contracts are re-declared here at value-side. This is the
- * plugin-facing counterpart of the camera-protocol mirrors in `ffmpeg/hap-enums.ts`: every plugin registers for the `api` lifecycle events, any plugin that registers
- * an accessory names its category, any plugin that reports a device fault to HomeKit names a status code, and any plugin that selects an accessory's characteristics
- * by permission names the flag it selects on, so centralizing the mirrors gives every consumer a single import path and a single update point.
+ * re-exports them. `CharacteristicWarningType`, from hap-nodejs's `Accessory.d.ts`, is the one "homebridge" does not re-export, so it is sourced from hap-nodejs
+ * directly. `verbatimModuleSyntax` disallows value imports of ambient const enums, so those contracts are re-declared here at value-side. This is the plugin-facing
+ * counterpart of the camera-protocol mirrors in `ffmpeg/hap-enums.ts`: every plugin registers for the `api` lifecycle events, any plugin that registers an accessory
+ * names its category, any plugin that reports a device fault to HomeKit names a status code, any plugin that selects an accessory's characteristics by permission
+ * names the flag it selects on, and a plugin's suite that reads the warnings HAP raises names the kind it reads, so centralizing the mirrors gives every consumer a
+ * single import path and a single update point.
  *
  * Each mirror is annotated with a type derived from the upstream declaration itself, so the compiler enforces lockstep: a member added or removed upstream fails the
  * build here until the mirror is updated. A member revalued upstream fails it as well, a numeric mirror's through that derived type and a string mirror's through the
@@ -19,6 +21,7 @@
  * @module
  */
 import type { APIEvent as APIEventEnum, Categories as CategoriesEnum, HAPStatus as HAPStatusEnum, Perms as PermsEnum } from "homebridge";
+import type { CharacteristicWarningType as CharacteristicWarningTypeEnum } from "@homebridge/hap-nodejs";
 
 /**
  * String mirror of homebridge-core's `APIEvent` const enum, surfaced to plugins for `api.on(...)` lifecycle-event registration: `DID_FINISH_LAUNCHING` fires once
@@ -67,6 +70,34 @@ export const Categories: Readonly<typeof CategoriesEnum> = {
  * @category Homebridge
  */
 export type Categories = CategoriesEnum;
+
+/**
+ * String mirror of HAP's `CharacteristicWarningType` const enum: the kind HAP attaches to a characteristic warning, which a suite filters the testing entry's
+ * captured warnings by, reading a warning's `type` against `CharacteristicWarningType.ERROR_MESSAGE` rather than a bare `"error-message"` literal.
+ *
+ * @category Homebridge
+ */
+// The `Readonly<typeof CharacteristicWarningTypeEnum>` annotation derives the required shape from hap-nodejs's own declaration, so a missing member or an extra
+// member is a compile error here. Each value passes a `satisfies` check against its upstream member's string before it is branded, the form `APIEvent` documents,
+// which makes a value that drifts from upstream a compile error too.
+export const CharacteristicWarningType: Readonly<typeof CharacteristicWarningTypeEnum> = {
+
+  DEBUG_MESSAGE: ("debug-message" satisfies `${CharacteristicWarningTypeEnum.DEBUG_MESSAGE}`) as CharacteristicWarningTypeEnum.DEBUG_MESSAGE,
+  ERROR_MESSAGE: ("error-message" satisfies `${CharacteristicWarningTypeEnum.ERROR_MESSAGE}`) as CharacteristicWarningTypeEnum.ERROR_MESSAGE,
+  SLOW_READ: ("slow-read" satisfies `${CharacteristicWarningTypeEnum.SLOW_READ}`) as CharacteristicWarningTypeEnum.SLOW_READ,
+  SLOW_WRITE: ("slow-write" satisfies `${CharacteristicWarningTypeEnum.SLOW_WRITE}`) as CharacteristicWarningTypeEnum.SLOW_WRITE,
+  TIMEOUT_READ: ("timeout-read" satisfies `${CharacteristicWarningTypeEnum.TIMEOUT_READ}`) as CharacteristicWarningTypeEnum.TIMEOUT_READ,
+  TIMEOUT_WRITE: ("timeout-write" satisfies `${CharacteristicWarningTypeEnum.TIMEOUT_WRITE}`) as CharacteristicWarningTypeEnum.TIMEOUT_WRITE,
+  WARN_MESSAGE: ("warn-message" satisfies `${CharacteristicWarningTypeEnum.WARN_MESSAGE}`) as CharacteristicWarningTypeEnum.WARN_MESSAGE
+};
+
+/**
+ * Type alias re-exposing the HAP enum under its canonical name so a `type: CharacteristicWarningType` annotation resolves through the shared module rather than a
+ * local redeclaration in each consumer.
+ *
+ * @category Homebridge
+ */
+export type CharacteristicWarningType = CharacteristicWarningTypeEnum;
 
 /**
  * Numeric mirror of HAP's `HAPStatus` const enum: the status codes a characteristic read or write answers with. A plugin that cannot serve a request surfaces the fault

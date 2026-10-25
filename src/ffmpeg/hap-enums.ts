@@ -13,11 +13,11 @@
  *
  * @module
  */
-// We source the HAP enum types through "homebridge" rather than "@homebridge/hap-nodejs" directly. A consuming plugin runs against homebridge's own bundled copy of
-// hap-nodejs, so type-checking production against that same copy is what keeps it from skewing when HBPU's direct hap-nodejs devDependency drifts from the version
-// homebridge locks in - two physically distinct copies of the package yield nominally distinct types even when their declarations are byte-identical. VideoCodecType is
-// the lone exception: "homebridge" does not re-export it, so that one alias is sourced straight from hap-nodejs. The values below are hand-mirrored regardless of
-// source, since verbatimModuleSyntax forbids value imports of ambient const enums.
+// We source the HAP enum types through "homebridge", the surface a plugin compiles against. The family's TypeScript base (build/tsconfig.json) maps the bare
+// specifiers "@homebridge/hap-nodejs" and "homebridge" to the compiling project's own copies, Homebridge's own bare imports included. A deep import, such as
+// Homebridge's own of hap-nodejs's dist/types.js, is outside that mapping, but the enum types sourced through homebridge come from the mapped copy, so each is the
+// very type hap-nodejs declares. VideoCodecType is the lone exception: "homebridge" does not re-export it, so that one alias is sourced straight from hap-nodejs.
+// The values below are hand-mirrored regardless of source, since verbatimModuleSyntax forbids value imports of ambient const enums.
 import type { AudioRecordingCodecType as AudioRecordingCodecTypeEnum, AudioRecordingSamplerate as AudioRecordingSamplerateEnum,
   AudioStreamingCodecType as AudioStreamingCodecTypeEnum, AudioStreamingSamplerate as AudioStreamingSamplerateEnum, H264Level as H264LevelEnum,
   H264Profile as H264ProfileEnum, HDSProtocolSpecificErrorReason as HDSProtocolSpecificErrorReasonEnum, MediaContainerType as MediaContainerTypeEnum,

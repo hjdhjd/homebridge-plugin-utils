@@ -2,23 +2,37 @@
  *
  * service.test.ts: Unit tests for the HomeKit service helper utilities in service.ts.
  *
- * The fixture side uses real `@homebridge/hap-nodejs` primitives (Accessory, Service, Characteristic), declared as an explicit devDependency so the test-side
- * Accessory/Service/Characteristic identities match the same HAP package `homebridge` re-exports from its public type surface. The methods we exercise on the
- * hand-constructed `Accessory` are the exact API surface `PlatformAccessory` delegates to at runtime - using the real runtime objects keeps the tests honest against
- * `service.ts`'s reflection-driven characteristic lookup; a hand-rolled mock would force us to replicate the HAP characteristic-constructor map, which is precisely
- * the thing we want to exercise.
+ * Every accessory a row reads comes from the testing entry point's Homebridge double: Homebridge's own PlatformAccessory over the hap-nodejs copy Homebridge loads
+ * from this repository's tree, made through a TestHomebridgeApi, so the suite runs on the very objects a plugin's accessories are at runtime. Using the real runtime
+ * objects keeps the tests honest against `service.ts`'s reflection-driven characteristic lookup; a hand-rolled mock would force us to replicate the HAP
+ * characteristic-constructor map, which is precisely the thing we want to exercise. The double captures the characteristic warnings HAP raises on its accessories,
+ * so a row that reaches for a characteristic outside a service's catalog stays quiet, and its triggers drive a characteristic through HomeKit's read path. The
+ * check after each row fails a row that leaves a warning HAP raised for a defect untaken, so a row that draws one on purpose takes it from the accessory.
  */
-import * as hap from "@homebridge/hap-nodejs";
-import type { Assert, Equal } from "./testing/index.ts";
+import type { Assert, Equal, TestPlatformAccessory } from "./testing/index.ts";
 import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
+import { CharacteristicWarningType, HAPStatus } from "./homebridge-enums.ts";
+import { HomeKitRequestError, hapStatus, loadHomebridge, triggerGet, watchServerWarnings } from "./testing/index.ts";
 import type { PresenceReading, PresenceTransition, ValidCharacteristicOptions, ValidServiceOptions } from "./service.ts";
 import { acquireService, capabilityGate, findService, getServiceName, notResponding, setAccessoryName, setServiceName, updatePresenceCharacteristic,
   updateServices, validCharacteristic, validService } from "./service.ts";
 import { describe, test } from "node:test";
-import { HAPStatus } from "./homebridge-enums.ts";
-import { IdentifierCache } from "@homebridge/hap-nodejs/dist/lib/model/IdentifierCache.js";
 import type { Nullable } from "./util.ts";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+
+// The runtime the suite runs on, the hap-nodejs copy and the PlatformAccessory class Homebridge loads from this repository's tree, and the API double whose
+// platformAccessory makes every accessory a row reads. Every row shares the one double, which the builder checks for untaken warnings after each row.
+const runtime = await loadHomebridge(import.meta.url);
+const { hap } = runtime;
+const api = watchServerWarnings(runtime)();
+
+// HAP's identifier cache, which its index does not export, required from the hap-nodejs copy Homebridge loads, the copy every accessory here is built on. Its type
+// is the one HAP's own identifier assignment takes.
+type IdentifierCacheInstance = Parameters<PlatformAccessory["_associatedHAPAccessory"]["_assignIDs"]>[0];
+
+const { IdentifierCache } = createRequire(createRequire(import.meta.url).resolve("homebridge"))("@homebridge/hap-nodejs/dist/lib/model/IdentifierCache.js") as
+  { IdentifierCache: new (username: string) => IdentifierCacheInstance };
 
 // The HAP static-Characteristic shape: every Characteristic class ships with a `UUID` static and satisfies `new () => Characteristic`. That is the exact type HAP's
 // `service.updateCharacteristic` accepts and the type whose `UUID` powers identity-matching against `service.characteristics` / `service.optionalCharacteristics`.
@@ -28,44 +42,12 @@ type CharacteristicCtor = WithUUID<new () => Characteristic>;
 // for a real-world slot that simply happens not to match the map. Adding more slots is a one-line change if future behavior requires it.
 type NamedCharacteristicSlot = "ConfiguredName" | "Name";
 
-// Construct a bare hap-nodejs accessory and cast to PlatformAccessory. PlatformAccessory is a thin wrapper around Accessory whose service-management methods
-// (getService, addService, removeService, getServiceById) delegate directly to the underlying HAP instance. For the surfaces this module exercises, the real HAP
-// accessory is indistinguishable from PlatformAccessory and keeps the test honest against real HAP internals.
-function makeAccessory(): PlatformAccessory {
+// An accessory made through the suite's API double: Homebridge's own PlatformAccessory, whose service-management methods delegate to the HAP accessory beneath it
+// and whose display-name update writes its own name and the HAP accessory's, so every helper here runs against the surfaces a plugin's accessories expose at
+// runtime.
+function createAccessory(): TestPlatformAccessory {
 
-  return new hap.Accessory("TestAccessory", hap.uuid.generate("homebridge-plugin-utils.service-test.accessory")) as unknown as PlatformAccessory;
-}
-
-/* Construct a PlatformAccessory-shaped wrapper over a real HAP accessory, wired the way Homebridge's own constructor wires it: `_associatedHAPAccessory` is the HAP
- * instance, `displayName` is a plain copy of its display name (not a live view of it), and `services` is the HAP accessory's own array by reference. makeAccessory
- * above is enough for the service-level helpers, but setAccessoryName renames the accessory itself, and only a fixture carrying both display names can tell a
- * complete rename apart from one that reached the wrapper and stopped there.
- *
- * `updateDisplayName` is transcribed from Homebridge's implementation rather than inherited from it, because the `homebridge` package exposes PlatformAccessory as
- * a type only - its runtime exports are the HAP re-exports - so the class cannot be constructed here. The transcription is the whole of that method: a truthy name
- * writes both display names, a falsy one writes neither. If Homebridge's version ever diverges, this is where the divergence has to be reflected.
- */
-function makePlatformAccessory(): { accessory: PlatformAccessory; hapAccessory: hap.Accessory } {
-
-  const hapAccessory = new hap.Accessory("TestAccessory", hap.uuid.generate("homebridge-plugin-utils.service-test.platform-accessory"));
-
-  const accessory = {
-
-    _associatedHAPAccessory: hapAccessory,
-    displayName: hapAccessory.displayName,
-    services: hapAccessory.services,
-
-    updateDisplayName(name: string): void {
-
-      if(name) {
-
-        accessory.displayName = name;
-        hapAccessory.displayName = name;
-      }
-    }
-  } as unknown as PlatformAccessory;
-
-  return { accessory, hapAccessory };
+  return new api.platformAccessory("TestAccessory", hap.uuid.generate("homebridge-plugin-utils.service-test.accessory"));
 }
 
 // The AccessoryInformation service every HAP accessory is constructed with. Looked up by the constructor's own static UUID rather than by index, so the helper does
@@ -90,8 +72,7 @@ function informationServiceOf(accessory: PlatformAccessory): Service {
 function presenceFixture(): { changes: () => number; configurations: () => number; pass: (reachable: boolean) => void;
   reading: (next: PresenceReading) => void; service: Service; } {
 
-  const { hapAccessory } = makePlatformAccessory();
-  const service = hapAccessory.addService(hap.Service.AirQualitySensor, "Air");
+  const service = createAccessory().addService(hap.Service.AirQualitySensor, "Air");
   const holder: { reading: PresenceReading } = { reading: { state: "absent" } };
   let changes = 0;
   let configurations = 0;
@@ -127,8 +108,7 @@ function presenceFixture(): { changes: () => number; configurations: () => numbe
  */
 function gateFixture(): { configurations: () => number; gate: (validate: boolean | ((hasCharacteristic: boolean) => boolean)) => PresenceTransition; service: Service } {
 
-  const { hapAccessory } = makePlatformAccessory();
-  const service = hapAccessory.addService(hap.Service.MotionSensor, "Motion");
+  const service = createAccessory().addService(hap.Service.MotionSensor, "Motion");
   let configurations = 0;
 
   service.on("service-configurationChange", () => {
@@ -206,11 +186,13 @@ function sameServices(actual: readonly Service[], expected: readonly Service[]):
   return (actual.length === expected.length) && actual.every((service, index) => service === expected[index]);
 }
 
-/* The status-error class the notResponding tests inject, standing in for a plugin's `api.hap.HapStatusError`: an Error subclass carrying the numeric status it was
- * constructed with, which is what a refusal is read for. Declared here rather than imported so the suite keeps the same posture the module under test has - no
- * runtime edge to HAP for a class the library never imports - and so the injected shape is exactly the shape a plugin's own double has.
+/* A status error from outside the hap-nodejs copy Homebridge loads, the shape a plugin's hand-built double has: an Error subclass carrying the numeric status it
+ * was constructed with. HAP recognizes a status error only by its own class, so the rows that wire notResponding into a real handler hand it this class beside
+ * HAP's own to show what reaches HomeKit through each. The rows that call a wrapped handler directly inject it too, because it keeps whatever status it is handed,
+ * where HAP's own class turns any status outside its range into its generic failure, so a wrong default outside that range would read as the very failure the
+ * default-status rows assert.
  */
-class StatusError extends Error {
+class ForeignStatusError extends Error {
 
   public readonly hapStatus: number;
 
@@ -223,6 +205,17 @@ class StatusError extends Error {
   }
 }
 
+// A validation function for assert.rejects asserting the rejection is a trigger's refusal of a handler that threw an error HAP does not recognize: HAP's generic
+// failure, marked a handler fault, which hapStatus fails on.
+function faultRefusal(rejection: unknown): boolean {
+
+  assert.ok(rejection instanceof HomeKitRequestError, "a trigger's refusal must be a HomeKitRequestError");
+  assert.equal(rejection.hapStatus, HAPStatus.SERVICE_COMMUNICATION_FAILURE, "HAP answers an error it does not recognize with its generic failure");
+  assert.equal(rejection.handlerFault, true, "and the trigger marks that refusal a handler fault");
+
+  return true;
+}
+
 /* Compile-time shape exercises for the handler type notResponding accepts. These never run - the function is never called, and its leading underscore marks it, with
  * its bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during
  * `npm run typecheck`, so a shape regression fails the build here rather than silently at a consuming plugin. The negative case uses `@ts-expect-error`, which fails
@@ -230,7 +223,7 @@ class StatusError extends Error {
  */
 const _handlerShapeExercises = (): void => {
 
-  const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
+  const wrap = notResponding({ errorClass: hap.HapStatusError, unavailable: () => false });
 
   // A reader of each primitive HomeKit carries is accepted, and each answers a reader of its own type back rather than a widened one.
   const _number = wrap((): number => 42);
@@ -316,7 +309,7 @@ const _validCharacteristicShapeExercises = (): void => {
  */
 const _validServiceShapeExercises = (): void => {
 
-  const accessory = makeAccessory();
+  const accessory = createAccessory();
   const result = validService({ accessory, name: "Switch", serviceType: hap.Service.Switch, validate: true });
 
   // @ts-expect-error - serviceType is required, because there is nothing else naming which service kind to reconcile.
@@ -347,7 +340,7 @@ describe("findService", () => {
 
     // The fixture acquires the subtype-less service first, the order HAP accepts on its own, so this row exercises the lookup alone and never acquireService's
     // room-making.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
     const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
 
@@ -362,7 +355,7 @@ describe("acquireService - creation path", () => {
 
   test("creates the service, adds it to the accessory, and invokes onServiceCreate exactly once", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     let invocations = 0;
     const { service, transition } = acquireService({ accessory, name: "Patio Switch", onServiceCreate: () => {
 
@@ -379,7 +372,7 @@ describe("acquireService - creation path", () => {
 
     // "Patio|Switch" contains a disallowed character that sanitizeName replaces with a space. The displayName and the ConfiguredName / Name characteristic values should
     // all carry the sanitized form, not the raw input. This is service.ts's documented contract: HomeKit-safe naming at every surface.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Patio|Switch", serviceType: hap.Service.Switch });
 
     assert.ok(service, "acquireService must return the created service");
@@ -392,7 +385,7 @@ describe("acquireService - creation path", () => {
 
     // Get-or-create semantics: the second call must find the service from the first call and return it unchanged. The creation callback must not fire a second time,
     // which is the "newly created services only" guarantee acquireService documents.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     let invocations = 0;
     const first = acquireService({ accessory, name: "Switch A", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch });
     const second = acquireService({ accessory, name: "Switch B", onServiceCreate: () => { invocations++; }, serviceType: hap.Service.Switch });
@@ -410,7 +403,7 @@ describe("acquireService - subtype handling", () => {
 
     // Two acquisitions with different subtypes must produce two different service instances, each reachable via getServiceById. This validates the "uniquely identify
     // the service" subtype contract at both ends: the lookup side and the creation side.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: alpha } = acquireService({ accessory, name: "Alpha", serviceType: hap.Service.Switch, subtype: "sub-alpha" });
     const { service: beta } = acquireService({ accessory, name: "Beta", serviceType: hap.Service.Switch, subtype: "sub-beta" });
 
@@ -423,7 +416,7 @@ describe("acquireService - subtype handling", () => {
 
   test("returns the existing subtype-keyed service on re-acquisition", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const first = acquireService({ accessory, name: "Alpha", serviceType: hap.Service.Switch, subtype: "sub-alpha" });
     const second = acquireService({ accessory, name: "Alpha 2", serviceType: hap.Service.Switch, subtype: "sub-alpha" });
 
@@ -434,7 +427,7 @@ describe("acquireService - subtype handling", () => {
 
     // The exact lookup finds nothing to answer, so the call creates the service, making room for it because HAP accepts a subtype-less service only while no
     // service of its type is present. The callback reads the accessory at the moment it fires, which is what shows it runs after the sibling is back.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
     const seen: { plain: boolean; side: boolean }[] = [];
     const { service: plain, transition } = acquireService({ accessory, name: "Plain", onServiceCreate: (svc) => {
@@ -456,11 +449,11 @@ describe("acquireService - making room beside subtyped siblings", () => {
 
     /* HomeKit keys instance ids on the accessory, the service type, and the subtype rather than on the object, and HAP assigns them from one IdentifierCache when
      * it publishes. Assigning through one cache before and after is the round trip a published accessory makes. The sibling is read back from the accessory
-     * rather than from the local binding, so ids left over on a detached object could not pass for ones HAP assigned. makeAccessory's accessory is a HAP
-     * Accessory underneath, and identifier assignment is a surface only HAP's own type carries, so the row reads it through that type.
+     * rather than from the local binding, so ids left over on a detached object could not pass for ones HAP assigned. Identifier assignment is a surface only
+     * HAP's own accessory carries, so the row reaches it through the HAP accessory beneath the platform accessory.
      */
-    const accessory = makeAccessory();
-    const hapAccessory = accessory as unknown as hap.Accessory;
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
     const cache = new IdentifierCache("0E:4F:2A:11:C3:7D");
     const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
     const ids = (service?: Service): Nullable<number>[] => service ? [ service.iid, ...service.characteristics.map((characteristic) => characteristic.iid) ] : [];
@@ -481,7 +474,7 @@ describe("acquireService - making room beside subtyped siblings", () => {
 
     // Detaching a service strips it from the links of every service still on the accessory, and re-linking through addLinkedService would append. The lamp's list
     // interleaves a service outside the siblings, so a restoration that appended the siblings back would reorder it.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: first } = acquireService({ accessory, name: "First", serviceType: hap.Service.Switch, subtype: "first" });
     const { service: second } = acquireService({ accessory, name: "Second", serviceType: hap.Service.Switch, subtype: "second" });
     const { service: outlet } = acquireService({ accessory, name: "Outlet", serviceType: hap.Service.Outlet });
@@ -502,7 +495,7 @@ describe("acquireService - making room beside subtyped siblings", () => {
 
   test("every subtyped sibling returns as the same instance under its own subtype", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const subtypes = [ "alpha", "beta", "gamma" ];
     const siblings = subtypes.map((subtype) => acquireService({ accessory, name: subtype, serviceType: hap.Service.Switch, subtype }).service);
     const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
@@ -519,7 +512,7 @@ describe("acquireService - making room beside subtyped siblings", () => {
 
   test("a failed addition re-adds every sibling and restores every link before the same error propagates, and onServiceCreate never fires", (t) => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: first } = acquireService({ accessory, name: "First", serviceType: hap.Service.Switch, subtype: "first" });
     const { service: second } = acquireService({ accessory, name: "Second", serviceType: hap.Service.Switch, subtype: "second" });
     const { service: lamp } = acquireService({ accessory, name: "Lamp", serviceType: hap.Service.Lightbulb });
@@ -552,7 +545,7 @@ describe("acquireService - making room beside subtyped siblings", () => {
     /* At the limit the new service still fits once the siblings are detached, and it is a sibling's re-add that finds no slot. The room-making takes the new
      * service back off so every sibling returns, which is what keeps a full accessory from losing a sibling to an acquisition HAP could never have accepted.
      */
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: first } = acquireService({ accessory, name: "First", serviceType: hap.Service.Switch, subtype: "first" });
     const { service: second } = acquireService({ accessory, name: "Second", serviceType: hap.Service.Switch, subtype: "second" });
     let invocations = 0;
@@ -582,7 +575,7 @@ describe("acquireService - making room beside subtyped siblings", () => {
 
     // HAP types the accessory's primaryService field as private, so the row reads it through HAP's own bookkeeping: promoting another service demotes whichever
     // service the accessory holds as primary, and it can demote the sibling only if the room-making left the sibling in that slot.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
 
     side.setPrimaryService(true);
@@ -606,7 +599,7 @@ describe("acquireService - name characteristic management", () => {
     // both the live characteristics array and the optional catalog. Exercises the `!serviceHasConfiguredName` early-exit branch in the add-optional-characteristic
     // block. Using `readNamedCharacteristic` (direct array scan) is deliberate - HAP's getCharacteristic() would lazily add the missing characteristic and corrupt the
     // signal we want to measure.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Room Fan", serviceType: hap.Service.Fan });
 
     assert.ok(service, "acquireService(Fan) must succeed before we inspect characteristic management");
@@ -617,7 +610,7 @@ describe("acquireService - name characteristic management", () => {
 
   test("sets both ConfiguredName and Name on a service that supports both", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Kitchen Switch", serviceType: hap.Service.Switch });
 
     assert.ok(service, "acquireService(Switch) must succeed before we inspect characteristic management");
@@ -631,7 +624,7 @@ describe("acquireService - name characteristic management", () => {
     // A StatelessProgrammableSwitch grouped under a ServiceLabel is labeled by the Home app from its ServiceLabelIndex ("Button 1", "Button 2", ...) unless it carries a
     // ConfiguredName, which the Home app honors as the button's name. StatelessProgrammableSwitch is in the hasConfiguredName catalog for exactly this reason, so a
     // multi-button remote (a fob, a scene controller) surfaces its button names rather than generic numeric indices.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Panic", serviceType: hap.Service.StatelessProgrammableSwitch });
 
     assert.ok(service, "acquireService(StatelessProgrammableSwitch) must succeed before we inspect characteristic management");
@@ -644,7 +637,7 @@ describe("acquireService - name characteristic management", () => {
 
     // Re-acquiring the same service must hit the get-path, not the create-path, so the add-optional-characteristic branches do not run a second time. We prove that
     // by asserting the optional catalog carries exactly one ConfiguredName entry after two acquisitions - a duplicated add would surface as `count === 2`.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: first } = acquireService({ accessory, name: "One", serviceType: hap.Service.Switch });
 
     assert.ok(first, "first acquisition must return a service before we re-acquire");
@@ -677,7 +670,7 @@ describe("acquireService - name characteristic management", () => {
       }
     }
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const ctor = SwitchWithoutNameOptional;
     const { service } = acquireService({ accessory, name: "Sentinel Switch", serviceType: ctor });
 
@@ -703,7 +696,7 @@ describe("acquireService - name characteristic management", () => {
       }
     }
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const ctor = CharacteristicLessSwitch;
 
     assert.throws(() => acquireService({ accessory, name: "broken", serviceType: ctor }), { message: /Service has no characteristics/ });
@@ -714,7 +707,7 @@ describe("validService", () => {
 
   test("a true verdict on an absent service creates it through acquireService, answers attached, and fires onServiceCreate exactly once", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     let invocations = 0;
     const result = validService({ accessory, name: "New Switch", onServiceCreate: () => {
 
@@ -731,7 +724,7 @@ describe("validService", () => {
 
     // Proves the subtype travels through validService's delegation to acquireService: a mutant that dropped subtype from the forwarded object would
     // create a subtype-less service, so getServiceById(serviceType, subtype) would find nothing and this assertion would fail.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     let invocations = 0;
     const result = validService({ accessory, name: "Sub Switch", onServiceCreate: () => {
 
@@ -745,7 +738,7 @@ describe("validService", () => {
 
   test("a true verdict on a present service answers kept with the existing service and does not fire onServiceCreate", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: existing } = acquireService({ accessory, name: "Keep Me", serviceType: hap.Service.Switch });
     let invocations = 0;
 
@@ -762,7 +755,7 @@ describe("validService", () => {
   test("a false verdict on a present service removes it and answers removed with a null service", () => {
 
     // Boolean-false path: the service exists on the accessory, validation rejects it, the service is removed. getService must report absence afterwards.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
 
     acquireService({ accessory, name: "Remove Me", serviceType: hap.Service.Switch });
 
@@ -776,7 +769,7 @@ describe("validService", () => {
   test("a false verdict on an absent service answers absent with a null service and no error", () => {
 
     // No service to remove; the function short-circuits cleanly. This is the typical "clean up a feature the user disabled" case when the feature was never enabled.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const result = validService({ accessory, name: "Never Created", serviceType: hap.Service.Switch, validate: false });
 
     assert.equal(result.transition, "absent");
@@ -787,7 +780,7 @@ describe("validService", () => {
 
     // The callback-form `validate` signature is `(hasService) => boolean`. We assert both branches: when the service already exists the boolean is true, and when it
     // does not the boolean is false. Returning the boolean verbatim keeps the service's state unchanged in each case.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
 
     acquireService({ accessory, name: "Present", serviceType: hap.Service.Switch });
 
@@ -817,7 +810,7 @@ describe("validService", () => {
 
   test("callback form removes the service when it returns false, answering removed with a null service", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
 
     acquireService({ accessory, name: "Conditional", serviceType: hap.Service.Switch });
 
@@ -831,7 +824,7 @@ describe("validService", () => {
   test("respects subtype when locating the service to validate", () => {
 
     // Only the matching-subtype service should be considered and (when invalidated) removed. The sibling subtype must survive a validate: false call scoped to sub-a.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
 
     acquireService({ accessory, name: "Alpha", serviceType: hap.Service.Switch, subtype: "sub-a" });
     acquireService({ accessory, name: "Beta", serviceType: hap.Service.Switch, subtype: "sub-b" });
@@ -845,7 +838,7 @@ describe("validService", () => {
 
   test("a false verdict without a subtype answers absent beside only a subtyped service of the type, and the sibling still stands", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
     const result = validService({ accessory, name: "Plain", serviceType: hap.Service.Switch, validate: false });
 
@@ -855,7 +848,7 @@ describe("validService", () => {
 
   test("a true verdict without a subtype beside only a subtyped sibling creates the subtype-less service through acquireService and keeps the sibling", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: side } = acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
     let invocations = 0;
     const result = validService({ accessory, name: "Plain", onServiceCreate: () => {
@@ -871,7 +864,7 @@ describe("validService", () => {
 
   test("a false verdict without a subtype removes only the subtype-less service when a subtyped sibling stands beside it", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
 
     acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
 
@@ -885,7 +878,7 @@ describe("validService", () => {
 
   test("a false verdict with a subtype removes only the subtyped service and leaves the subtype-less one standing", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service: plain } = acquireService({ accessory, name: "Plain", serviceType: hap.Service.Switch });
 
     acquireService({ accessory, name: "Side", serviceType: hap.Service.Switch, subtype: "side" });
@@ -1073,7 +1066,7 @@ describe("updatePresenceCharacteristic", () => {
 
     reading({ state: "reported", value: 9 });
 
-    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 9,
+    assert.equal(await triggerGet(service.getCharacteristic(hap.Characteristic.PM2_5Density)), 9,
       "a pull must answer the live reading rather than the value the binding pass wrote");
   });
 
@@ -1094,7 +1087,7 @@ describe("updatePresenceCharacteristic", () => {
     assert.equal(service.testCharacteristic(hap.Characteristic.PM2_5Density), true, "a pending reading must keep the characteristic");
     assert.equal(service.getCharacteristic(hap.Characteristic.PM2_5Density).value, 3, "and must leave the value HomeKit already holds");
     assert.equal(changes(), written, "and must write nothing");
-    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 3, "and a pull must answer the held value");
+    assert.equal(await triggerGet(service.getCharacteristic(hap.Characteristic.PM2_5Density)), 3, "and a pull must answer the held value");
   });
 
   test("an unreachable device holds the characteristic even as its metric leaves liveness", () => {
@@ -1165,7 +1158,7 @@ describe("updatePresenceCharacteristic", () => {
 
     reading({ state: "reported", value: 8 });
 
-    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 8,
+    assert.equal(await triggerGet(service.getCharacteristic(hap.Characteristic.PM2_5Density)), 8,
       "and the re-attached characteristic must read through to the record");
   });
 
@@ -1184,7 +1177,7 @@ describe("updatePresenceCharacteristic", () => {
 
     reading({ state: "reported", value: 11 });
 
-    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 11, "and the pull must answer the live reading");
+    assert.equal(await triggerGet(service.getCharacteristic(hap.Characteristic.PM2_5Density)), 11, "and the pull must answer the live reading");
   });
 
   test("a reported reading attaches and writes even while the device is unreachable", async () => {
@@ -1201,7 +1194,7 @@ describe("updatePresenceCharacteristic", () => {
 
     reading({ state: "reported", value: 9 });
 
-    assert.equal(await service.getCharacteristic(hap.Characteristic.PM2_5Density).handleGetRequest(), 9, "and must bind a read-through that answers the record");
+    assert.equal(await triggerGet(service.getCharacteristic(hap.Characteristic.PM2_5Density)), 9, "and must bind a read-through that answers the record");
   });
 });
 
@@ -1213,7 +1206,8 @@ describe("updateServices", () => {
      * The non-carrier is read with `testCharacteristic` rather than `getCharacteristic`, because the latter attaches what it cannot find and would report the very
      * state this row exists to refuse.
      */
-    const { accessory, hapAccessory } = makePlatformAccessory();
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
     const motion = hapAccessory.addService(hap.Service.MotionSensor, "Motion");
     const contact = hapAccessory.addService(hap.Service.ContactSensor, "Contact");
     const toggle = hapAccessory.addService(hap.Service.Switch, "Toggle");
@@ -1231,7 +1225,8 @@ describe("updateServices", () => {
   test("an accessory carrying the characteristic nowhere is left untouched, without a throw", () => {
 
     // A sweep that matches nothing is an ordinary outcome - a device that does not model the state at all - rather than a caller defect, so it answers by doing nothing.
-    const { accessory, hapAccessory } = makePlatformAccessory();
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
     const toggle = hapAccessory.addService(hap.Service.Switch, "Toggle");
 
     assert.doesNotThrow(() => updateServices(accessory, hap.Characteristic.StatusActive, true), "a sweep that matches nothing must not throw");
@@ -1251,7 +1246,7 @@ describe("getServiceName", () => {
 
   test("returns the ConfiguredName value when it is set", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Configured", serviceType: hap.Service.Switch });
 
     assert.ok(service, "the service must exist before we read its name");
@@ -1261,7 +1256,7 @@ describe("getServiceName", () => {
   test("prefers ConfiguredName over Name when both are set", () => {
 
     // Precedence contract: `ConfiguredName ?? Name`. With both characteristics populated we expect the ConfiguredName value to win.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Primary", serviceType: hap.Service.Switch });
 
     assert.ok(service, "the service must exist before we exercise the precedence contract");
@@ -1282,7 +1277,7 @@ describe("getServiceName", () => {
     // A name lookup must never mutate the accessory. A Fan supports Name but not ConfiguredName, so reading its name exercises the absent-ConfiguredName path. HAP's
     // `getCharacteristic` would lazily attach the missing ConfiguredName (and log an "Adding anyway." warning); `getServiceName` gates reads behind `testCharacteristic`,
     // so the characteristic stays absent. `readNamedCharacteristic` scans `service.characteristics` directly, giving a true present-right-now snapshot.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Room Fan", serviceType: hap.Service.Fan });
 
     assert.ok(service, "the service must exist before we read its name");
@@ -1300,7 +1295,7 @@ describe("setServiceName", () => {
 
   test("updates displayName and the supported name characteristics in place", () => {
 
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Original", serviceType: hap.Service.Switch });
 
     assert.ok(service, "the service must exist before setServiceName updates it");
@@ -1315,7 +1310,7 @@ describe("setServiceName", () => {
   test("sanitizes the supplied name before storing it", () => {
 
     // Same sanitization contract as acquireService: setServiceName calls sanitizeName internally so the stored form is always HomeKit-safe regardless of caller input.
-    const accessory = makeAccessory();
+    const accessory = createAccessory();
     const { service } = acquireService({ accessory, name: "Original", serviceType: hap.Service.Switch });
 
     assert.ok(service, "the service must exist before setServiceName sanitizes its rename");
@@ -1332,7 +1327,8 @@ describe("setAccessoryName", () => {
 
   test("writes the name to both display names and to the information service", () => {
 
-    const { accessory, hapAccessory } = makePlatformAccessory();
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
 
     setAccessoryName(accessory, "Front Porch");
 
@@ -1348,7 +1344,8 @@ describe("setAccessoryName", () => {
 
   test("sanitizes the supplied name once and applies the sanitized form everywhere", () => {
 
-    const { accessory, hapAccessory } = makePlatformAccessory();
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
 
     setAccessoryName(accessory, "Rocket \u{1F680} Lamp");
 
@@ -1362,7 +1359,8 @@ describe("setAccessoryName", () => {
 
   test("a repeat call with the same name leaves the same final state", () => {
 
-    const { accessory, hapAccessory } = makePlatformAccessory();
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
 
     setAccessoryName(accessory, "Back Gate");
     setAccessoryName(accessory, "Back Gate");
@@ -1381,7 +1379,8 @@ describe("setAccessoryName", () => {
 
     // The reflection needs a service instance to reach HAP's static registry through, so an accessory carrying none has no information service to delegate to.
     // The display-name writes still land: a partial rename is better than a thrown one, and no real PlatformAccessory reaches this state.
-    const { accessory, hapAccessory } = makePlatformAccessory();
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
 
     accessory.services.length = 0;
 
@@ -1395,7 +1394,8 @@ describe("setAccessoryName", () => {
 
     // An accessory has to answer to something. A name that sanitizes away entirely - punctuation or emoji alone - leaves every name it already had in place,
     // rather than blanking the accessory and its information service.
-    const { accessory, hapAccessory } = makePlatformAccessory();
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
 
     setAccessoryName(accessory, "Garden Shed");
 
@@ -1415,7 +1415,7 @@ describe("notResponding", () => {
   test("refuses every read with the injected status error while unavailable", () => {
 
     let reads = 0;
-    const wrap = notResponding({ errorClass: StatusError, unavailable: () => true });
+    const wrap = notResponding({ errorClass: ForeignStatusError, unavailable: () => true });
 
     const read = wrap((): number => {
 
@@ -1426,7 +1426,7 @@ describe("notResponding", () => {
 
     assert.throws(read, (error: unknown) => {
 
-      assert.ok(error instanceof StatusError, "the refusal is an instance of the injected class, not a plain Error");
+      assert.ok(error instanceof ForeignStatusError, "the refusal is an instance of the injected class, not a plain Error");
       assert.equal(error.hapStatus, HAPStatus.SERVICE_COMMUNICATION_FAILURE, "the refusal carries the status HomeKit renders as Not Responding");
 
       return true;
@@ -1440,7 +1440,7 @@ describe("notResponding", () => {
   test("answers the reader while available", () => {
 
     let reads = 0;
-    const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
+    const wrap = notResponding({ errorClass: hap.HapStatusError, unavailable: () => false });
 
     const read = wrap((): number => {
 
@@ -1458,7 +1458,7 @@ describe("notResponding", () => {
   test("passes a null answer through while available", () => {
 
     let reads = 0;
-    const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
+    const wrap = notResponding({ errorClass: hap.HapStatusError, unavailable: () => false });
 
     const read = wrap((): Nullable<number> => {
 
@@ -1475,11 +1475,11 @@ describe("notResponding", () => {
 
   test("carries a named status", () => {
 
-    const read = notResponding({ errorClass: StatusError, status: HAPStatus.RESOURCE_BUSY, unavailable: () => true })((): boolean => true);
+    const read = notResponding({ errorClass: hap.HapStatusError, status: HAPStatus.RESOURCE_BUSY, unavailable: () => true })((): boolean => true);
 
     assert.throws(read, (error: unknown) => {
 
-      assert.ok(error instanceof StatusError);
+      assert.ok(error instanceof hap.HapStatusError);
       assert.equal(error.hapStatus, HAPStatus.RESOURCE_BUSY, "a named status is the one the refusal carries");
       assert.notEqual(error.hapStatus, HAPStatus.SERVICE_COMMUNICATION_FAILURE, "and it replaces the default rather than joining it");
 
@@ -1490,9 +1490,9 @@ describe("notResponding", () => {
   test("reads the predicate on every call", () => {
 
     let unavailable = true;
-    const read = notResponding({ errorClass: StatusError, unavailable: () => unavailable })((): string => "Open");
+    const read = notResponding({ errorClass: hap.HapStatusError, unavailable: () => unavailable })((): string => "Open");
 
-    assert.throws(read, StatusError);
+    assert.throws(read, hap.HapStatusError);
 
     unavailable = false;
 
@@ -1502,13 +1502,13 @@ describe("notResponding", () => {
 
     unavailable = true;
 
-    assert.throws(read, StatusError);
+    assert.throws(read, hap.HapStatusError);
   });
 
   test("binds the class facts once and wraps many readers", () => {
 
     let unavailable = false;
-    const wrap = notResponding({ errorClass: StatusError, unavailable: () => unavailable });
+    const wrap = notResponding({ errorClass: hap.HapStatusError, unavailable: () => unavailable });
     const currentPosition = wrap((): number => 40);
     const positionState = wrap((): string => "Stopped");
     const on = wrap((): boolean => true);
@@ -1521,15 +1521,15 @@ describe("notResponding", () => {
 
     // One factory call holds the class facts for every characteristic a device authors, so the readers it wrapped answer and refuse together rather than each
     // carrying its own copy of the rule.
-    assert.throws(currentPosition, StatusError);
-    assert.throws(positionState, StatusError);
-    assert.throws(on, StatusError);
+    assert.throws(currentPosition, hap.HapStatusError);
+    assert.throws(positionState, hap.HapStatusError);
+    assert.throws(on, hap.HapStatusError);
   });
 
   test("refuses a write with the injected status error and never runs the set handler while unavailable", () => {
 
     let writes = 0;
-    const wrap = notResponding({ errorClass: StatusError, unavailable: () => true });
+    const wrap = notResponding({ errorClass: ForeignStatusError, unavailable: () => true });
 
     const write = wrap((_value: boolean): void => {
 
@@ -1538,7 +1538,7 @@ describe("notResponding", () => {
 
     assert.throws(() => write(true), (error: unknown) => {
 
-      assert.ok(error instanceof StatusError, "the refusal is an instance of the injected class, not a plain Error");
+      assert.ok(error instanceof ForeignStatusError, "the refusal is an instance of the injected class, not a plain Error");
       assert.equal(error.hapStatus, HAPStatus.SERVICE_COMMUNICATION_FAILURE, "a refused write carries the default status, which HAP surfaces as the write's result");
 
       return true;
@@ -1552,7 +1552,7 @@ describe("notResponding", () => {
   test("passes a write's arguments through unchanged and answers what the set handler answers while available", () => {
 
     const received: unknown[] = [];
-    const wrap = notResponding({ errorClass: StatusError, unavailable: () => false });
+    const wrap = notResponding({ errorClass: hap.HapStatusError, unavailable: () => false });
 
     const write = wrap((value: CharacteristicValue, context: object): boolean => {
 
@@ -1576,19 +1576,58 @@ describe("notResponding", () => {
 
     let writes = 0;
     let unavailable = true;
-    const write = notResponding({ errorClass: StatusError, unavailable: () => unavailable })(async (_value: string): Promise<void> => {
+    const write = notResponding({ errorClass: hap.HapStatusError, unavailable: () => unavailable })(async (_value: string): Promise<void> => {
 
       writes++;
     });
 
     // The wrapper is not itself async and refuses before it calls, so an async handler's refusal is a synchronous throw rather than a rejected promise, and the
     // handler never starts the work a rejection would only report after the fact.
-    assert.throws(() => write("Open"), StatusError);
+    assert.throws(() => write("Open"), hap.HapStatusError);
     assert.equal(writes, 0, "the async set handler never runs while the device is unavailable");
 
     unavailable = false;
 
     await assert.doesNotReject(write("Open"), "the async set handler resolves once the device is reachable again");
     assert.equal(writes, 1, "and it ran exactly once to do so");
+  });
+
+  test("at a named status in a real get handler, HAP's own status error reaches HomeKit with that status and a foreign one as a communication failure", async () => {
+
+    // HAP's read path keeps the status of an error from its own class and answers any other error with its generic failure, so only a status other than that
+    // failure can tell the classes apart by number. The trigger marks the foreign class's refusal a handler fault whatever status it was built with.
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Lightbulb, "Lamp");
+    const own = service.getCharacteristic(hap.Characteristic.On);
+    const foreign = service.getCharacteristic(hap.Characteristic.Brightness);
+
+    own.onGet(notResponding({ errorClass: hap.HapStatusError, status: HAPStatus.RESOURCE_BUSY, unavailable: () => true })((): boolean => true));
+    foreign.onGet(notResponding({ errorClass: ForeignStatusError, status: HAPStatus.RESOURCE_BUSY, unavailable: () => true })((): number => 50));
+
+    await assert.rejects(triggerGet(own), hapStatus(HAPStatus.RESOURCE_BUSY), "HAP's own class must reach HomeKit carrying the named status");
+    await assert.rejects(triggerGet(foreign), faultRefusal, "a foreign class must reach HomeKit as HAP's generic failure");
+
+    assert.deepEqual(accessory.takeWarnings().map((warning) => warning.type), [CharacteristicWarningType.ERROR_MESSAGE],
+      "HAP reports the foreign class alone, as an error it does not recognize");
+  });
+
+  test("at the default status in a real get handler, HAP's own status error and a foreign one differ by the warning the foreign one raises", async () => {
+
+    // At the default status the number HomeKit receives is the same for any class, because the default is also HAP's generic failure. What tells them apart is
+    // HAP's report of an error it does not recognize, an error-level warning the trigger marks its refusal a handler fault by and the double captures on the accessory.
+    const ownAccessory = createAccessory();
+    const foreignAccessory = createAccessory();
+    const own = ownAccessory.addService(hap.Service.Lightbulb, "Lamp").getCharacteristic(hap.Characteristic.On);
+    const foreign = foreignAccessory.addService(hap.Service.Lightbulb, "Lamp").getCharacteristic(hap.Characteristic.On);
+
+    own.onGet(notResponding({ errorClass: hap.HapStatusError, unavailable: () => true })((): boolean => true));
+    foreign.onGet(notResponding({ errorClass: ForeignStatusError, unavailable: () => true })((): boolean => true));
+
+    await assert.rejects(triggerGet(own), hapStatus(HAPStatus.SERVICE_COMMUNICATION_FAILURE), "HAP's own class is a deliberate refusal hapStatus passes");
+    await assert.rejects(triggerGet(foreign), faultRefusal);
+
+    assert.deepEqual(ownAccessory.warnings.map((warning) => warning.type), [], "HAP's own class is a status HAP recognizes, so it raises no warning");
+    assert.deepEqual(foreignAccessory.takeWarnings().map((warning) => warning.type), [CharacteristicWarningType.ERROR_MESSAGE],
+      "a foreign class is an error HAP does not recognize");
   });
 });

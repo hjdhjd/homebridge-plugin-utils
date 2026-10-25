@@ -12,7 +12,7 @@
 import { AudioRecordingCodecType, H264Level, H264Profile } from "./hap-enums.ts";
 import type { FfmpegOptionsConfig, VideoEncoderOptions } from "./options.ts";
 import { after, before, describe, test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { makeScratchRoot, silentLog } from "../testing/index.ts";
 import type { CodecsInit } from "./codecs.helpers.ts";
 import { FfmpegCodecs } from "./codecs.ts";
 import { FfmpegOptions } from "./options.ts";
@@ -24,8 +24,6 @@ import { ffmpegIntegrationEnabled } from "./integration.helpers.ts";
 import { join } from "node:path";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { promisify } from "node:util";
-import { silentLog } from "../testing/index.ts";
-import { tmpdir } from "node:os";
 
 const execFileAsync = promisify(execFile);
 
@@ -2489,45 +2487,39 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
        * the stream's own format. Both source depths have to come through: 8-bit frames arrive as nv12 and 10-bit frames as p010le, and a download fixed to one format
        * could only ever serve one of them. The fixtures are synthesized into a scratch directory so the test depends on no external asset.
        */
-      const directory = await mkdtemp(join(tmpdir(), "hbpu-frame-residency-"));
+      await using scratch = await makeScratchRoot("hbpu-frame-residency-");
       const fixtures = [
 
-        { codec: "h264", encoder: "libx264", file: join(directory, "8bit.mp4"), label: "8-bit H.264", source: [ "-pix_fmt", "yuv420p" ] },
-        { codec: "hevc", encoder: "libx265", file: join(directory, "10bit.mp4"), label: "10-bit HEVC", source: [ "-pix_fmt", "yuv420p10le", "-tag:v", "hvc1" ] }
+        { codec: "h264", encoder: "libx264", file: join(scratch.path, "8bit.mp4"), label: "8-bit H.264", source: [ "-pix_fmt", "yuv420p" ] },
+        { codec: "hevc", encoder: "libx265", file: join(scratch.path, "10bit.mp4"), label: "10-bit HEVC", source: [ "-pix_fmt", "yuv420p10le", "-tag:v", "hvc1" ] }
       ];
       const options = buildOptions({ hardwareDecoding: true, hardwareTranscoding: true });
 
-      try {
+      for(const { codec, encoder, file, label, source } of fixtures) {
 
-        for(const { codec, encoder, file, label, source } of fixtures) {
+        if(!realCodecs.hasEncoder(codec, encoder)) {
 
-          if(!realCodecs.hasEncoder(codec, encoder)) {
+          t.diagnostic("host does not advertise " + encoder + ", so the " + label + " fixture cannot be synthesized");
 
-            t.diagnostic("host does not advertise " + encoder + ", so the " + label + " fixture cannot be synthesized");
-
-            continue;
-          }
-
-          // eslint-disable-next-line no-await-in-loop
-          await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "1",
-            "-c:v", encoder, ...source, file ]);
-
-          const decoderArgs = options.videoDecoder({ hardwareTranscoding: false, inputCodec: codec });
-
-          assertHasArg(decoderArgs, "-hwaccel", "videotoolbox");
-          assert.equal(decoderArgs.includes("-hwaccel_output_format"), false,
-            label + ": a software-encode pipeline must not ask the decoder to keep frames on the GPU");
-
-          // eslint-disable-next-line no-await-in-loop
-          const { stdout } = await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-nostats", "-loglevel", "error", ...decoderArgs, "-i", file,
-            "-fps_mode", "vfr", "-frames:v", "1", "-q:v", "2", "-filter:v", "scale=320:180", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1" ], { encoding: "buffer" });
-
-          assert.ok(stdout.length > 0, label + ": the snapshot must produce output");
-          assert.deepEqual([ stdout[0], stdout[1] ], [ 0xFF, 0xD8 ], label + ": the output must open with the JPEG start-of-image marker");
+          continue;
         }
-      } finally {
 
-        await rm(directory, { force: true, recursive: true });
+        // eslint-disable-next-line no-await-in-loop
+        await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "1",
+          "-c:v", encoder, ...source, file ]);
+
+        const decoderArgs = options.videoDecoder({ hardwareTranscoding: false, inputCodec: codec });
+
+        assertHasArg(decoderArgs, "-hwaccel", "videotoolbox");
+        assert.equal(decoderArgs.includes("-hwaccel_output_format"), false,
+          label + ": a software-encode pipeline must not ask the decoder to keep frames on the GPU");
+
+        // eslint-disable-next-line no-await-in-loop
+        const { stdout } = await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-nostats", "-loglevel", "error", ...decoderArgs, "-i", file,
+          "-fps_mode", "vfr", "-frames:v", "1", "-q:v", "2", "-filter:v", "scale=320:180", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1" ], { encoding: "buffer" });
+
+        assert.ok(stdout.length > 0, label + ": the snapshot must produce output");
+        assert.deepEqual([ stdout[0], stdout[1] ], [ 0xFF, 0xD8 ], label + ": the output must open with the JPEG start-of-image marker");
       }
     });
 
@@ -2553,11 +2545,12 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
     // A HomeKit-shaped request smaller than the sources, so every chain actually scales.
     const PIPELINE: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, height: 240, width: 426 };
 
-    let directory = "";
+    // The folder the sources are synthesized into. Every row reads it, so it outlives each of them: the suite's before hook makes it and its after hook disposes it.
+    let scratch: AsyncDisposable & { readonly path: string };
 
     before(async () => {
 
-      directory = await mkdtemp(join(tmpdir(), "hbpu-bit-depth-"));
+      scratch = await makeScratchRoot("hbpu-bit-depth-");
 
       for(const { codec, encoder, file, source } of [ ...SOURCES, ...AV1_SOURCES ]) {
 
@@ -2565,14 +2558,14 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
 
           // eslint-disable-next-line no-await-in-loop
           await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30", "-t", "1",
-            "-c:v", encoder, ...source, join(directory, file) ]);
+            "-c:v", encoder, ...source, join(scratch.path, file) ]);
         }
       }
     });
 
     after(async () => {
 
-      await rm(directory, { force: true, recursive: true });
+      await scratch[Symbol.asyncDispose]();
     });
 
     // Encode each source through one pipeline description, its source codec included, and assert each result is 8-bit H.264 at the expected size - the sources scaled
@@ -2593,12 +2586,12 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
           continue;
         }
 
-        const output = join(directory, "encoded-" + file);
+        const output = join(scratch.path, "encoded-" + file);
         const sourcePipeline: VideoEncoderOptions = { ...pipeline, inputCodec: codec };
 
         // eslint-disable-next-line no-await-in-loop
         await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-nostats", "-loglevel", "error", "-y", ...options.videoDecoder(sourcePipeline), "-i",
-          join(directory, file), ...options.streamEncoder(sourcePipeline), "-an", "-frames:v", "15", "-f", "mp4", output ]);
+          join(scratch.path, file), ...options.streamEncoder(sourcePipeline), "-an", "-frames:v", "15", "-f", "mp4", output ]);
 
         // eslint-disable-next-line no-await-in-loop
         const { stderr } = await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-i", output ]).catch((error: unknown) => error as { stderr: string });

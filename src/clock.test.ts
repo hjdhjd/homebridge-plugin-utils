@@ -13,8 +13,7 @@
  */
 import { TIMER_DELAY_MAX_MS, armDeadline, systemClock } from "./clock.ts";
 import { describe, test } from "node:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { settle, waitUntil } from "./testing/index.ts";
+import { makeScratchRoot, settle, waitUntil } from "./testing/index.ts";
 import type { Clock } from "./clock.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
@@ -23,10 +22,13 @@ import { getEventListeners } from "node:events";
 import { isTimeoutReason } from "./util.ts";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 
 // This repo's own clock module by absolute path, the specifier a child process imports it through.
 const CLOCK_PATH = fileURLToPath(new URL("./clock.ts", import.meta.url));
+
+// The prefix every row's scratch folder is named with, so a folder a killed run leaves behind names this suite.
+const SCRATCH_PREFIX = "hbpu-clock-";
 
 // How long a child process may take to reach its own exit before its spawn's deadline kills it. Generous enough for a cold type-stripping start on a slow CI host,
 // and short enough that the kill lands well inside the runner's own per-test timeout.
@@ -67,27 +69,6 @@ function assertTimeoutReason(reason: unknown, message: string): void {
   assert.ok(reason instanceof DOMException, message + " - the reason must be a DOMException");
   assert.equal(reason.name, "TimeoutError", message + " - name must be TimeoutError");
   assert.equal(isTimeoutReason(reason), true, message + " - isTimeoutReason must accept it");
-}
-
-/**
- * Allocate a per-test tmpdir scratch root and answer an AsyncDisposable handle that removes it on scope exit, so the `await using` at the call site cleans up even
- * when the row throws. The CLI suite carries a helper of the same shape; each suite keeps its own rather than sharing one, so this suite's filesystem rows do not
- * reach across into another suite's file for a utility this small.
- *
- * @returns An AsyncDisposable carrying the scratch root's path.
- */
-async function makeScratchRoot(): Promise<AsyncDisposable & { path: string }> {
-
-  const path = await mkdtemp(join(tmpdir(), "hbpu-clock-"));
-
-  return {
-
-    path,
-    async [Symbol.asyncDispose](): Promise<void> {
-
-      await rm(path, { force: true, recursive: true });
-    }
-  };
 }
 
 /**
@@ -265,7 +246,7 @@ describe("systemClock - conformance and behavior-neutrality", () => {
 
     // A child whose entire pending workload is unreferenced timers has to reach its own exit while each of them is still an hour from firing, inside the bound
     // `runChild` puts on its spawn.
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     // The child imports this repo's own clock by absolute path, quoted through JSON.stringify so a scratch root carrying a quote or a backslash still yields a
     // valid specifier. Composing the source by concatenation keeps the file free of template literals, as everything else here is.
@@ -1251,7 +1232,7 @@ describe("armDeadline - a cancellable deadline on a clock's own timer", () => {
      * its deadline before it exits and the other never does: a released timer is cleared outright, and one left armed is unreferenced, so neither may hold the
      * child's event loop open. The children run side by side, so the row's wait stays within a single bound.
      */
-    await using scratch = await makeScratchRoot();
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const importLine = "import { armDeadline } from " + JSON.stringify(CLOCK_PATH) + ";\n\n";
     const [ released, armed ] = await Promise.all([

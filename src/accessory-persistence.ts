@@ -24,9 +24,31 @@ import { APIEvent } from "./homebridge-enums.ts";
 import type { Clock } from "./clock.ts";
 import { systemClock } from "./clock.ts";
 
-// How long the save window stays open: it opens at the first mark after a save and carries every accessory marked before it closes. A second gathers a startup pass or a
-// burst of toggles into one cache write while keeping short the stretch in which a crash could lose a change, and a clean shutdown saves whatever is waiting regardless.
-const SAVE_WINDOW_MS = 1000;
+/**
+ * How long the save window stays open, in milliseconds: it opens at the first mark after a save and carries every accessory marked before it closes. A second gathers
+ * a startup pass or a burst of toggles into one cache write while keeping short the stretch in which a crash could lose a change, and a clean shutdown saves whatever
+ * is waiting regardless.
+ *
+ * A consumer's test reads it to advance its clock by one window rather than restating the number, so the test keeps measuring the window the helper arms.
+ *
+ * @category Accessory
+ */
+export const ACCESSORY_SAVE_WINDOW_MS = 1000;
+
+/**
+ * The part of Homebridge's `API` that {@link AccessoryPersistence} reaches: the accessory cache's update and unregister calls, and the shutdown event. The `API`
+ * Homebridge hands a plugin satisfies it, and so does the testing entry's `TestHomebridgeApi`, so a suite hands the helper its API double with no cast.
+ *
+ * @category Accessory
+ */
+export interface AccessoryPersistenceApi extends Pick<API, "unregisterPlatformAccessories" | "updatePlatformAccessories"> {
+
+  /**
+   * Listen for Homebridge's shutdown, at which the helper saves whatever is still waiting. A property rather than a method, so the compiler compares the
+   * listener's parameters strictly: an `API` whose `on` does not accept this event fails to satisfy the interface.
+   */
+  readonly on: (event: "shutdown", listener: () => void) => unknown;
+}
 
 /**
  * Construction options for {@link AccessoryPersistence}.
@@ -36,10 +58,10 @@ const SAVE_WINDOW_MS = 1000;
 export interface AccessoryPersistenceOptions {
 
   /**
-   * The Homebridge API the plugin was handed. Saves go through its `updatePlatformAccessories`, removals through its `unregisterPlatformAccessories`, and its shutdown
-   * event saves whatever is still waiting.
+   * The Homebridge API the plugin was handed, typed as the part of it the helper reaches, {@link AccessoryPersistenceApi}. Saves go through its
+   * `updatePlatformAccessories`, removals through its `unregisterPlatformAccessories`, and its shutdown event saves whatever is still waiting.
    */
-  api: API;
+  api: AccessoryPersistenceApi;
 
   /**
    * The time source the save window is armed on. Defaults to {@link systemClock}; a test injects a `TestClock` so the window comes due on its virtual timeline.
@@ -119,7 +141,7 @@ function isBridged(accessory: PlatformAccessory): boolean {
  */
 export class AccessoryPersistence {
 
-  readonly #api: API;
+  readonly #api: AccessoryPersistenceApi;
 
   readonly #clock: Clock;
 
@@ -200,7 +222,7 @@ export class AccessoryPersistence {
     }
 
     // The window is unref'd because it is never a reason to keep the process alive: Homebridge's shutdown saves whatever it holds.
-    this.#window ??= this.#clock.schedule(() => this.flush(), SAVE_WINDOW_MS, { unref: true });
+    this.#window ??= this.#clock.schedule(() => this.flush(), ACCESSORY_SAVE_WINDOW_MS, { unref: true });
   }
 
   /**

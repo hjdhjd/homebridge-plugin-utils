@@ -1,18 +1,19 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * clock.ts: An injectable wall-clock interface - the current time, an abortable delay, and a callback timer - and the cancellable deadline built on its timer, so
- * time-dependent code can be driven deterministically under test.
+ * clock.ts: An injectable clock interface - the current time, a monotonic reading, an abortable delay, and a callback timer - and the cancellable deadline built on
+ * its timer, so time-dependent code can be driven deterministically under test.
  */
 
 /**
- * An injectable wall-clock interface, and the cancellable deadline built on it.
+ * An injectable clock interface, and the cancellable deadline built on it.
  *
- * Time-dependent code reads the platform time primitives it needs: the current epoch time (`Date.now()`), a delay that can be cancelled (`node:timers/promises`
- * `setTimeout`), and a callback timer (the global `setTimeout` / `setInterval`). Calling those directly bakes real wall-clock time into the code, so a test cannot
- * exercise a pacing or timeout path without multi-second real waits. Holding a {@link Clock} instead - the abstraction over those primitives - inverts the
- * dependency: production wires {@link systemClock}, whose `now()` IS `Date.now()`, whose `delay()` IS `node:timers/promises` `setTimeout`, and whose `schedule()` IS
- * the global callback timers, so routing through Clock is behavior-neutral; a test wires a `TestClock` (see `clock-double.ts`) that advances virtual time
- * explicitly, so the consumer's time-dependent path runs deterministically and instantly.
+ * Time-dependent code reads the platform time primitives it needs: the current epoch time (`Date.now()`), a monotonic reading no wall-clock change moves
+ * (`process.hrtime`), a delay that can be cancelled (`node:timers/promises` `setTimeout`), and a callback timer (the global `setTimeout` / `setInterval`). Calling
+ * those directly bakes real time into the code, so a test cannot exercise a pacing or timeout path without multi-second real waits. Holding a {@link Clock} instead -
+ * the abstraction over those primitives - inverts the dependency: production wires {@link systemClock}, whose `now()` IS `Date.now()`, whose `monotonic()` IS
+ * `process.hrtime.bigint()` read in milliseconds, whose `delay()` IS `node:timers/promises` `setTimeout`, and whose `schedule()` IS the global callback timers, so
+ * routing through Clock is behavior-neutral; a test wires a `TestClock` (see `clock-double.ts`) that advances virtual time explicitly, so the consumer's
+ * time-dependent path runs deterministically and instantly.
  *
  * A deadline handed to an abortable call is a function over the contract rather than a member of it: {@link armDeadline} arms one of a clock's own callback timers
  * to abort a signal, and answers a {@link Deadline} its holder disposes when the work it bounds settles. Every clock that implements `schedule` therefore answers a
@@ -37,9 +38,9 @@
 import timersPromises from "node:timers/promises";
 
 /**
- * The injectable wall-clock contract: the platform time primitives time-dependent code reads. A consumer holds a `Clock` rather than calling `Date.now()` /
- * `node:timers/promises` `setTimeout` / the global callback timers directly, so a test can substitute a controllable double (`TestClock`) and drive time
- * deterministically while production behavior stays unchanged through {@link systemClock}.
+ * The injectable clock contract: the platform time primitives time-dependent code reads. A consumer holds a `Clock` rather than calling `Date.now()` /
+ * `process.hrtime` / `node:timers/promises` `setTimeout` / the global callback timers directly, so a test can substitute a controllable double (`TestClock`) and
+ * drive time deterministically while production behavior stays unchanged through {@link systemClock}.
  *
  * `delay` and `schedule` deliberately sit on different platform entry points: `delay` keeps the promise primitive from `node:timers/promises` and that primitive's
  * `AbortError` semantics, while `schedule` reaches the global callback timers. A consumer's choice of shape - an awaited wait or an armed callback - is what decides
@@ -68,6 +69,17 @@ export interface Clock {
    * @returns A promise that resolves after the delay, or rejects with an `AbortError` if the signal aborts first.
    */
   delay(ms: number, init?: { signal?: AbortSignal }): Promise<void>;
+
+  /**
+   * Return a reading of the platform's monotonic clock: an integer count of microseconds on `process.hrtime`'s timeline, from its origin, divided by 1000, so the
+   * reading is in milliseconds and `Math.round(reading * 1000)` recovers the count exactly. A wall-clock change never moves it, so a later reading less an earlier
+   * one is the time that passed between them however the time of day was set meanwhile. Whether it advances across a system suspend depends on the platform's
+   * monotonic clock. Its origin is the platform's rather than the process's, so an uptime is a consumer's own difference from a reading it took when it started.
+   * The production {@link systemClock} implements this as `process.hrtime.bigint()` truncated to whole microseconds.
+   *
+   * @returns The monotonic reading, in milliseconds to the microsecond.
+   */
+  monotonic(): number;
 
   /**
    * Return the current time as epoch milliseconds. The production {@link systemClock} implements this as `Date.now()`.
@@ -225,10 +237,11 @@ function delayUntilAbort({ signal }: { signal?: AbortSignal } = {}): Promise<voi
 }
 
 /**
- * The behavior-neutral production {@link Clock}: `now()` IS `Date.now()`, `delay()` IS `node:timers/promises` `setTimeout`, and `schedule()` IS the global callback
- * timers. A consumer that routes its time reads through this clock instead of calling those primitives directly cannot observe any behavior change - it is the same
- * platform calls, one indirection removed - except where the platform timer's range runs out: past the ceiling, where the platform would fire at once and this clock
- * fires when asked, and at an infinite span, which the platform would fire at once and this clock never fires.
+ * The behavior-neutral production {@link Clock}: `now()` IS `Date.now()`, `monotonic()` IS `process.hrtime.bigint()` truncated to whole microseconds and read in
+ * milliseconds, `delay()` IS `node:timers/promises` `setTimeout`, and `schedule()` IS the global callback timers. A consumer that routes its time reads through this
+ * clock instead of calling those primitives directly cannot observe any behavior change - it is the same platform calls, one indirection removed - except where the
+ * platform timer's range runs out: past the ceiling, where the platform would fire at once and this clock fires when asked, and at an infinite span, which the
+ * platform would fire at once and this clock never fires.
  *
  * @see Clock
  *
@@ -251,6 +264,12 @@ export const systemClock: Clock = {
 
     return pastCeiling(ms) ? delayPastCeiling(ms, init) : timersPromises.setTimeout(ms, undefined, init);
   },
+
+  /* The reading is truncated to whole microseconds before it becomes a `number`, because nanoseconds since the platform's origin, which is near boot on common
+   * hosts, outgrow the integers a `number` holds exactly after about a hundred days. A count of microseconds stays exact, and its reading in milliseconds rounds
+   * back to it, for years past any realistic uptime, so a consumer recovering the microseconds with `Math.round` gets back the very count this read.
+   */
+  monotonic: (): number => Number(process.hrtime.bigint() / 1000n) / 1000,
   now: (): number => Date.now(),
 
   /* An infinite window never comes due, so it arms nothing and answers a disposer with nothing to cancel. A window the platform can carry is the platform's own

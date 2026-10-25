@@ -65,7 +65,8 @@ export interface RateBudgetOptions {
  * `Date.now()`, which a clock correction on the host can step. A backward step keeps the grants issued before it inside the window for about the size of the step, so
  * the budget admits fewer calls than the contract allows and never more; a forward step ages them out early and can release one burst of up to `capacity` inside a
  * true window. Both are accepted by design: a synchronized host slews small offsets and steps by seconds against windows of minutes, the large forward steps come at
- * boot with an empty log or after a suspend the remote clock shared, and a monotonic source would go blind across that suspend instead.
+ * boot with an empty log or after a suspend the remote clock shared, and on a platform whose monotonic clock stops during a suspend, a monotonic source would go
+ * blind across that suspend instead.
  *
  * @example
  *

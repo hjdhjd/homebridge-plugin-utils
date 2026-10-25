@@ -362,6 +362,7 @@ describe("RateBudget - cancellation", () => {
     const failingClock: Clock = {
 
       delay: (): Promise<void> => Promise.reject(failure),
+      monotonic: (): number => clock.monotonic(),
       now: (): number => clock.now(),
       schedule: (callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable => clock.schedule(callback, ms, init)
     };

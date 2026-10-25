@@ -274,6 +274,7 @@ describe("WakeableWait - misuse and a clock that faults", () => {
       const faulty: Clock = {
 
         delay: (): Promise<void> => Promise.reject(fault),
+        monotonic: (): number => clock.monotonic(),
         now: (): number => clock.now(),
         schedule: (callback: () => void, ms: number, init?: { repeat?: boolean; unref?: boolean }): Disposable => clock.schedule(callback, ms, init)
       };

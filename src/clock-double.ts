@@ -8,15 +8,20 @@
  * A reusable, controllable {@link Clock} test double.
  *
  * The {@link Clock} contract in `clock.ts` exists so a consuming plugin's time-dependent code can be driven without real wall-clock waits. This module ships the fake
- * that cashes that in: a {@link TestClock} over one virtual timeline a test advances explicitly. `now()` returns the virtual time; `delay()` registers a pending wait
- * that resolves only when {@link TestClock.advance} crosses its deadline, or rejects when its signal aborts - matching `node:timers/promises` `setTimeout`'s
- * `AbortError` shape; `schedule()` registers a callback timer that runs inside `advance` when its deadline is crossed, once or on repeat. A deadline from
- * `armDeadline` is one of those callback timers: a one-shot entry that aborts its signal when `advance` crosses it, with the same `TimeoutError` the platform's
- * `AbortSignal.timeout` aborts with, and that leaves the timeline when its holder disposes it. No real timers and no wall-clock are used, so a consumer's pacing,
- * timeout, and heartbeat paths all run deterministically and instantly under test.
+ * that cashes that in: a {@link TestClock} over one virtual timeline a test advances explicitly. `now()` returns the virtual time; `monotonic()` returns a reading
+ * that moves with it forward and never back; `delay()` registers a pending wait that resolves only when {@link TestClock.advance} crosses its deadline, or rejects
+ * when its signal aborts - matching `node:timers/promises` `setTimeout`'s `AbortError` shape; `schedule()` registers a callback timer that runs inside `advance`
+ * when its deadline is crossed, once or on repeat. A deadline from `armDeadline` is one of those callback timers: a one-shot entry that aborts its signal when
+ * `advance` crosses it, with the same `TimeoutError` the platform's `AbortSignal.timeout` aborts with, and that leaves the timeline when its holder disposes it.
+ * No real timers and no wall-clock are used, so a consumer's pacing, timeout, and heartbeat paths all run deterministically and instantly under test.
  *
  * Every shape shares ONE timeline, which is the point: a scenario spanning a backoff wait, a liveness deadline, and a bounded call's deadline is driven by a single
  * `advance` rather than by a clock for the waits and a mock-timer harness for the deadlines, and they interleave exactly as the platform would order them.
+ *
+ * The monotonic reading is kept beside that timeline rather than on it, as the `requested` ledger below is. It starts at the seed and moves with every forward
+ * step, and a step that is not forward, a backward one or `NaN`, leaves it still, so it never runs backward as the platform's monotonic clock never does, while
+ * the virtual time takes every step as asked. The pending entries keep following the virtual time, so a backward step still moves them: each comes due that much
+ * further out, where the platform's timers would not move when a wall clock is set back.
  *
  * An infinite span never comes due, on the production clock and its double alike: the double registers no entry for one, so an infinite delay settles only when its
  * signal aborts, an infinite callback timer never fires, and `pending`, `nextDeadline` and `advanceToNext` never meet it. A `NaN` span comes due one millisecond out,
@@ -136,6 +141,9 @@ export class TestClock implements Clock {
    */
   public readonly requested: number[] = [];
 
+  // The virtual monotonic reading. Seeded by the constructor and moved only by a forward `advance`.
+  #monotonic: number;
+
   // The current virtual time. Seeded by the constructor and moved only by `advance`.
   #now: number;
 
@@ -145,19 +153,22 @@ export class TestClock implements Clock {
   readonly #pending: ClockEntry[] = [];
 
   /**
-   * Construct a clock seeded at `start` (default `0`). The seed is the initial value `now()` returns; `advance` moves it forward (or back, for a negative delta).
+   * Construct a clock seeded at `start` (default `0`). The seed is where the virtual time and the monotonic reading start; `advance` moves the virtual time forward
+   * (or back, for a negative delta) and the monotonic reading forward alone.
    *
    * @param start - The initial virtual time, in the consumer's relative timeline. Defaults to `0`.
    */
   public constructor(start = 0) {
 
+    this.#monotonic = start;
     this.#now = start;
   }
 
   /**
    * Advance virtual time by `ms`, resolving every delay and running every callback timer whose deadline the new time has reached. The delta is applied regardless of
    * sign, so a negative `ms` moves time backward; `advance(0)` moves time nowhere but STILL flushes any already-due entry (a `delay(0)`, a zero-delay callback timer, or
-   * an entry with a non-positive `ms`), so a zero or negative window is never a lost wakeup.
+   * an entry with a non-positive `ms`), so a zero or negative window is never a lost wakeup. The monotonic reading moves by a forward `ms` alone, and holds still on
+   * any other, a negative or `NaN` one included.
    *
    * Due entries settle in ASCENDING deadline order; entries that share a deadline keep their FIFO registration order, because each pass snapshots before any removal and
    * the numeric sort is stable - matching how the platform fires equal-deadline timers in scheduling order. A delay is removed by identity and has its abort listener
@@ -173,6 +184,12 @@ export class TestClock implements Clock {
   public advance(ms: number): void {
 
     this.#now += ms;
+
+    // A step that is not forward leaves the monotonic reading where it was, and the comparison reads `NaN` as not forward, so the reading stays numeric.
+    if(ms > 0) {
+
+      this.#monotonic += ms;
+    }
 
     // Settle in passes rather than in one sweep, because a callback can arm an already-due entry from inside its own fire (a watchdog re-arm at an elapsed window, a
     // zero-delay one-shot). Each pass re-snapshots, so those entries settle in this same advance; the loop ends the first time a pass finds nothing due.
@@ -308,6 +325,18 @@ export class TestClock implements Clock {
     }
 
     return promise;
+  }
+
+  /**
+   * Return the virtual monotonic reading: the seed, plus every forward step {@link TestClock.advance} has taken. A backward or `NaN` step leaves it where it was, so
+   * it never decreases, and it equals the virtual time until the first such step. Like the virtual time, it is a relative timeline seeded at `start`, not the
+   * platform's.
+   *
+   * @returns The virtual monotonic reading.
+   */
+  public monotonic(): number {
+
+    return this.#monotonic;
   }
 
   /**

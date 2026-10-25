@@ -1,11 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * clock.test.ts: Unit tests for the injectable Clock contract - the compile-time conformance and behavior-neutrality of the production systemClock (its now() tracks
- * Date.now(), its delay() IS node:timers/promises setTimeout including the AbortError shape, its schedule() IS the global callback timers read at call time and
+ * Date.now(), its monotonic() reads process.hrtime in whole microseconds, never decreasing and rising across a real wait while the wall clock is stepped back,
+ * its delay() IS node:timers/promises setTimeout including the AbortError shape, its schedule() IS the global callback timers read at call time and
  * forwards an unref to the platform handle's own unref(), past the platform timer's ceiling every member that arms time carries the delay as a chain of arms
  * that fires at the requested moment without the platform's overflow warning, an infinite span arms nothing and never elapses - its delay settling only when its
  * signal aborts, with the primitive's own AbortError, and a process holding only infinite waits and timers exiting on its own - while NaN and negative infinity keep
- * the platform's one-millisecond handling), plus the shipped controllable TestClock double (advanceable virtual time, deadline-ordered resolution, the
+ * the platform's one-millisecond handling), plus the shipped controllable TestClock double (advanceable virtual time, the monotonic reading that moves with each
+ * forward step and holds still on a backward or NaN one, deadline-ordered resolution, the
  * advance(0)/negative flush, the matched node:timers/promises AbortError on abort, the no-listener-leak teardown on every resolution path, the requested history
  * across every settlement path, the earliest-pending-deadline read, the step that lands on that deadline, the callback timers that share that one timeline with the
  * delays, the unref it accepts and ignores because a virtual timeline has no process to hold open, the window past the ceiling that is an ordinary entry on a
@@ -32,6 +34,12 @@ const CLOCK_PATH = fileURLToPath(new URL("./clock.ts", import.meta.url));
 
 // The prefix every row's scratch folder is named with, so a folder a killed run leaves behind names this suite.
 const SCRATCH_PREFIX = "hbpu-clock-";
+
+// How many successive monotonic reads a row compares, enough that a reading which ran backward even rarely would show.
+const MONOTONIC_READS = 10000;
+
+// The wall-clock time a row seeds mocked `Date` with before stepping it back to half of it.
+const MOCKED_WALL_CLOCK_MS = 1000000;
 
 // How long a child process may take to reach its own exit before its spawn's deadline kills it. Generous enough for a cold type-stripping start on a slow CI host,
 // and short enough that the kill lands well inside the runner's own per-test timeout.
@@ -144,6 +152,54 @@ describe("systemClock - conformance and behavior-neutrality", () => {
     const after = Date.now();
 
     assert.ok((observed >= before) && (observed <= after), "systemClock.now() must read the wall clock, falling within the surrounding Date.now() readings");
+  });
+
+  test("monotonic() reads the platform's monotonic clock, between bracketing reads taken in its own truncated microseconds", () => {
+
+    // The bracket reads the clock the way the member is documented to, truncated to whole microseconds and then put in milliseconds, so a read landing on the same
+    // microsecond as a bound compares equal to it rather than falling outside a finer one.
+    const bracket = (): number => Number(process.hrtime.bigint() / 1000n) / 1000;
+    const before = bracket();
+    const observed = systemClock.monotonic();
+    const after = bracket();
+
+    assert.ok((observed >= before) && (observed <= after), "systemClock.monotonic() must fall within the surrounding reads: " + [ before, observed, after ].join(" "));
+    assert.equal(Math.round(observed * 1000) / 1000, observed, "the reading must be a whole count of microseconds, in milliseconds");
+  });
+
+  test("monotonic() never decreases across successive reads", () => {
+
+    let decreases = 0;
+    let previous = systemClock.monotonic();
+
+    for(let read = 0; read < MONOTONIC_READS; read++) {
+
+      const current = systemClock.monotonic();
+
+      if(current < previous) {
+
+        decreases++;
+      }
+
+      previous = current;
+    }
+
+    assert.equal(decreases, 0, "no reading may fall below the one before it");
+  });
+
+  test("monotonic() rises across a real wait while mock timers step the wall clock back", async (t) => {
+
+    // Only `Date` is mocked, so the wait below runs on the real timers while the wall clock is set back underneath it.
+    t.mock.timers.enable({ apis: ["Date"], now: MOCKED_WALL_CLOCK_MS });
+
+    const before = systemClock.monotonic();
+
+    t.mock.timers.setTime(MOCKED_WALL_CLOCK_MS / 2);
+
+    await timersPromises.setTimeout(5);
+
+    assert.ok(Date.now() < MOCKED_WALL_CLOCK_MS, "the wall clock must have been stepped back");
+    assert.ok(systemClock.monotonic() > before, "the monotonic reading must rise across the real wait whatever the wall clock did");
   });
 
   test("delay() resolves after the real elapsed time", async () => {
@@ -572,6 +628,49 @@ describe("TestClock - construction and now()", () => {
 
     clock.advance(-100);
     assert.equal(clock.now(), 1150, "a negative advance must move the virtual time backward by the delta");
+  });
+
+  test("monotonic() starts at the seed and equals the virtual time through forward steps", () => {
+
+    const clock = new TestClock(1000);
+
+    assert.equal(clock.monotonic(), 1000, "the reading must start at the seed");
+
+    clock.advance(250);
+    clock.advance(0);
+    clock.advance(50);
+
+    assert.equal(clock.monotonic(), 1300, "each forward step must move the reading by its delta");
+    assert.equal(clock.monotonic(), clock.now(), "and the reading must equal the virtual time through forward steps");
+  });
+
+  test("monotonic() stays still on a backward step and moves by the next forward one", () => {
+
+    const clock = new TestClock(1000);
+
+    clock.advance(500);
+    clock.advance(-200);
+
+    assert.equal(clock.now(), 1300, "the backward step moves the virtual time");
+    assert.equal(clock.monotonic(), 1500, "a backward step must leave the reading where it was");
+
+    clock.advance(100);
+
+    assert.equal(clock.monotonic(), 1600, "the next forward step must move the reading by that step alone");
+  });
+
+  test("monotonic() stays still on a NaN step and moves by the next forward one", () => {
+
+    const clock = new TestClock(1000);
+
+    clock.advance(Number.NaN);
+
+    assert.ok(Number.isNaN(clock.now()), "the NaN step carries the virtual time to NaN");
+    assert.equal(clock.monotonic(), 1000, "a NaN step must leave the reading where it was, so it stays numeric");
+
+    clock.advance(100);
+
+    assert.equal(clock.monotonic(), 1100, "the next forward step must move the reading by that step alone");
   });
 });
 

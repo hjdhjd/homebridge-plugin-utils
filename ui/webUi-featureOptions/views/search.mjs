@@ -87,6 +87,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
 
   /* Counts and visible-toggle pill highlight update on any state change that touches the projection. Reading the projection here hits the memoized cache when
    * nothing relevant changed (e.g., a devices:loaded outcome that misses the pending request returns state unchanged, so the read hits the cached projection).
+   * A staged write that failed touches the projection too: its rollback puts the configured options back to what the host accepted, and the modified count follows.
    *
    * A controller list arriving without a model reaches what this panel shows only through the reducer's reconciliation - a selection falling back to global, a
    * departed controller's device list and notice emptied with it - so the panel follows the arrival when a settled fact moved and costs a few reference
@@ -94,7 +95,7 @@ export const mountSearchView = ({ configTable, root, signal, store }) => {
    */
   effect({
 
-    events: [ "model:loaded", ...MUTATING_ACTIONS, "controllers:loaded", "filter:changed", "scope:changed", "devices:loaded" ],
+    events: [ "model:loaded", ...MUTATING_ACTIONS, "staging:failed", "controllers:loaded", "filter:changed", "scope:changed", "devices:loaded" ],
     fn: (action, previous) => {
 
       if(!refs.total) {

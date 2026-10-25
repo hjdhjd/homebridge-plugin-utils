@@ -105,6 +105,29 @@ describe("mountSearchView - panel build", () => {
   });
 });
 
+describe("mountSearchView - the modified count", () => {
+
+  test("after a failed staged write the modified count reads the restored configuration", () => {
+
+    using dom = createTestDom();
+
+    const { root, store } = setup();
+    const modified = () => root.querySelector("#statusInfo strong.text-warning").textContent;
+
+    store.dispatch({ args: { enabled: false, option: "Motion.Detect" }, type: "option:set" });
+
+    assert.equal(modified(), "1", "precondition: the edit is counted as a modification");
+
+    // The stage carrying the edit to the host fails: the drain dispatches the write's start and then its failure, which rolls the configured options back to the
+    // anchor the model loaded with.
+    store.dispatch({ snapshot: store.state.configuredOptions, type: "staging:started" });
+    store.dispatch({ error: new Error("simulated staging refusal"), type: "staging:failed" });
+
+    assert.deepEqual(store.state.configuredOptions, [], "precondition: the rollback restored the configuration the model loaded with");
+    assert.equal(modified(), "0", "the modified count reads the restored configuration");
+  });
+});
+
 describe("mountSearchView - filter pill click", () => {
 
   test("clicking 'Modified' dispatches filter:changed with mode=modified", () => {

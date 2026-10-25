@@ -185,42 +185,62 @@ const GLOBAL_ONLY_REGION_IDS = REGION_IDS.filter((id) => !GLOBAL_ONLY_HIDDEN_REG
  *   for that mount's life, so a hook that registers listeners or subscriptions registers them once against that signal and they die with the mount. That signal is
  *   the mount's lifetime, so a resource meant to outlive the panel - a poll whose cache survives a navigation - belongs to the page instead and is registered
  *   without it.
- * @property {(removals: readonly [import("./featureOptions.js").RemovedListEntry, ...import("./featureOptions.js").RemovedListEntry[]]) => void}
- *   [onListEntriesRemoved] - Invoked after a mutation removes one or more entries from any `multiple: true` option's configured list - a list editor's chip
- *   removed, a checkbox-group member unchecked, the option disabled or cleared entirely, a bulk options reset, or a model revert - covering a free-form list and
- *   a `choices`-backed checkbox group identically, since both store through the same grammar. Called with every removal the mutation produced, grouped one
- *   record per option-and-scope pair; a mutation that removes nothing fires {@link FeatureOptionsConfig.onOptionsEdited} alone, never this hook, so the list
- *   this hook receives is never empty - the same guarantee the engine's own `RemovedListEntry.entries` carries for the entries inside one record, and the reason
- *   both are typed as non-empty tuples rather than plain arrays. When it does fire, it is called BEFORE {@link FeatureOptionsConfig.onOptionsEdited} for the
- *   same mutation, once per mutation, never once per removed entry. An exception this hook or the removal computation throws ends the effect's handler before
+ * @property {(removals: readonly [import("./featureOptions.js").RemovedListEntry, ...import("./featureOptions.js").RemovedListEntry[]],
+ *   args: { signal: AbortSignal }) => void} [onListEntriesRemoved] - Invoked after a mutation removes one or more entries from any `multiple: true` option's
+ *   configured list - a list editor's chip removed, a checkbox-group member unchecked, the option disabled or cleared entirely, a bulk options reset, or a model
+ *   revert - covering a free-form list and a `choices`-backed checkbox group identically, since each stores through the same grammar. Called with every removal
+ *   the mutation produced, grouped one record per option-and-scope pair, and then with ONE options bag whose `signal` is the cycle's signal, which aborts when the
+ *   cycle ends - `hide()` once its flush is done, `cleanup()`, a re-show, or a {@link webUiFeatureOptions#commitConfig} re-entry - so work the hook arms is
+ *   scoped under it. A mutation that removes nothing fires {@link FeatureOptionsConfig.onOptionsEdited} alone, never this hook, so the list this hook receives is
+ *   never empty - the same guarantee the engine's own `RemovedListEntry.entries` carries for the entries inside one record, and the reason each is typed as a
+ *   non-empty tuple rather than a plain array. When it does fire, it is called BEFORE {@link FeatureOptionsConfig.onOptionsEdited} for the same mutation, once
+ *   per mutation, never once per removed entry. An exception this hook or the removal computation throws ends the effect's handler before
  *   that mutation's `onOptionsEdited` call, exactly as a throwing {@link FeatureOptionsConfig.onOptionsEdited} already does; the store's `EventTarget` reports
  *   the exception as an uncaught error rather than returning it to the gesture that dispatched, and listeners registered after this effect still run.
  *   A call reports an edit the page has accepted, consistent with the rule that a state transition which is not an edit fires neither hook: a host that refuses
  *   the write leaves the store restored to the last configuration the host accepted, with the staging failure surfaced and this hook not re-fired for the
- *   rollback, so a consumer holding state derived from a reported removal reconciles it against editedConfig. This is a derived notification: the page keeps no
- *   copy of any list, so a consumer that needs to know what a list currently holds reads it fresh from editedConfig rather than accumulating this hook's own
- *   arguments over time. {@link webUiFeatureOptions#commitConfig}'s own in-place establishment dispatches `model:loaded`, which is not one of the events either
- *   hook subscribes to, so a plugin's own commitConfig call from inside this hook does not echo back into it. A removal that arrives through `model:loaded` - a
- *   commitConfig round trip establishing a new model from the host - fires neither this hook nor {@link FeatureOptionsConfig.onOptionsEdited}; only a dispatch
- *   of one of the events this shared effect subscribes to fires either hook. A plugin MAY call commitConfig from inside this hook: the write is queued behind
- *   the pending stage of the very edit that triggered the hook, so the entry this hook reports as removed has already reached the host by the time the
- *   plugin's own write composes against it.
- * @property {() => void} [onLoaded] - Invoked once per show cycle immediately after that cycle's model has loaded: the catalog and the plugin's controllers are in
- *   the store, {@link webUiFeatureOptions.editedConfig} answers the live overlay, and the options view has rendered the catalog's categories - the page is
- *   established, and a consumer that needs to act at that moment has one signal for it. Every SHOW cycle that reaches a loaded model announces it once, the
- *   global-only path and every menu relaunch or retry that gets there included; a cycle that failed before that point, or that a newer cycle superseded, never
- *   announces at all. An establishment by {@link webUiFeatureOptions#commitConfig} is not a show cycle and does not announce: the page it re-establishes is the
- *   one the consumer is already standing on, and the call's own result is what tells that consumer the configuration moved.
- *   The device list arrives later in the cycle and is not this hook's promise. Invoked with no arguments and no debounce.
- * @property {() => void} [onOptionsEdited] - Invoked after an option mutation has transitioned the store AND changed the configured options - an option set or
- *   cleared, the options reset, or the model reverted - so a consumer reading editedConfig from inside the callback sees the post-edit state. The gate is the
- *   configured options coming out of the dispatch as a different array than they went in as, not the dispatch itself: a coordinated configuration write holds
- *   the store and answers each of those actions with the configuration untouched, and an unheld mutation can reduce to a no-op in its own right - clearing an
- *   option nothing was configured under, or resetting a configuration that is already empty - and neither announces anything. Invoked once per mutation with no
- *   arguments and no debounce; a consumer that needs coalescing applies its own. A call reports an edit the page has accepted rather than one the host has
- *   stored: a host that refuses the write leaves the store restored to the last configuration the host accepted, with the staging failure surfaced and this hook
- *   not re-fired for the rollback, so a consumer holding state derived from an edit reconciles it against editedConfig. A plugin MAY call
+ *   rollback, so a consumer holding state derived from a reported removal reconciles it in {@link FeatureOptionsConfig.onOptionsRolledBack}, which announces
+ *   that rollback. This is a derived notification: the page keeps no copy of any list, so a consumer that needs to know what a list currently holds reads it
+ *   fresh from editedConfig rather than accumulating this hook's own arguments over time. {@link webUiFeatureOptions#commitConfig}'s own in-place establishment
+ *   dispatches `model:loaded`, which the edit hooks' shared effect does not subscribe to, so a plugin's own commitConfig call from inside this hook does not echo
+ *   back into it. A removal that arrives through `model:loaded` - a commitConfig round trip establishing a new model from the host - fires neither this hook nor
+ *   {@link FeatureOptionsConfig.onOptionsEdited}; only a dispatch of an event that shared effect subscribes to fires an edit hook. A plugin MAY call
+ *   commitConfig from inside this hook: the write is queued behind the pending stage of the very edit that triggered the hook, so the entry this hook reports
+ *   as removed has already reached the host by the time the plugin's own write composes against it.
+ * @property {(args: { signal: AbortSignal }) => void} [onLoaded] - Invoked once per show cycle immediately after that cycle's model has loaded: the catalog and
+ *   the plugin's controllers are in the store, {@link webUiFeatureOptions.editedConfig} answers the live overlay, and the options view has rendered the catalog's
+ *   categories - the page is established, and a consumer that needs to act at that moment has one announcement to act on. Every SHOW cycle that reaches a loaded
+ *   model announces it once, the global-only path and every menu relaunch or retry that gets there included; a cycle that failed before that point, or that a
+ *   newer cycle superseded, never announces at all. An establishment by {@link webUiFeatureOptions#commitConfig} is not a show cycle and does not announce: the
+ *   page it re-establishes is the one the consumer is already standing on, and the call's own result is what tells that consumer the configuration moved. The
+ *   device list arrives later in the cycle and is not this hook's promise. Invoked with no debounce and with ONE options bag whose `signal` is the cycle's signal,
+ *   which aborts when the cycle ends - `hide()` once its flush is done, `cleanup()`, a re-show, or a {@link webUiFeatureOptions#commitConfig} re-entry - so work
+ *   the hook arms is scoped under it, and the next cycle's call is handed a signal of its own.
+ * @property {(args: { signal: AbortSignal }) => void} [onOptionsEdited] - Invoked after an option mutation has transitioned the store AND changed the configured
+ *   options - an option set or cleared, the options reset, or the model reverted - so a consumer reading editedConfig from inside the callback sees the post-edit
+ *   state. The gate is the configured options coming out of the dispatch as a different array than they went in as, not the dispatch itself: a coordinated
+ *   configuration write holds the store and answers each of those actions with the configuration untouched, and an unheld mutation can reduce to a no-op in its
+ *   own right - clearing an option nothing was configured under, or resetting a configuration that is already empty - and neither announces anything. Invoked
+ *   once per mutation with no debounce and with ONE options bag whose `signal` is the cycle's signal, which aborts when the cycle ends - `hide()` once its flush
+ *   is done, `cleanup()`, a re-show, or a {@link webUiFeatureOptions#commitConfig} re-entry - so a consumer that needs coalescing applies its own and scopes its
+ *   timer under that signal. A call reports an edit the page has accepted rather than one the host has stored: a host that refuses the write leaves the store
+ *   restored to the last configuration the host accepted, with the staging failure surfaced and this hook not re-fired for the rollback, so a consumer holding
+ *   state derived from an edit reconciles it in {@link FeatureOptionsConfig.onOptionsRolledBack}, which announces that rollback. A plugin MAY call
  *   {@link webUiFeatureOptions#commitConfig} from inside the callback - the write is queued behind the pending stage of the very edit that triggered it.
+ * @property {(args: { signal: AbortSignal }) => void} [onOptionsRolledBack] - Invoked after a staged write that failed has rolled the configured options back to the last
+ *   configuration the host accepted, so a consumer reading editedConfig from inside the callback sees the restored state: this is the moment a consumer holding state
+ *   derived from an edit reconciles it. Invoked once per rollback with no debounce, and only when the rollback hands back a different array than the configured options
+ *   held, the gate the edit hooks read too: a write that fails after a Revert to Saved landed on the last accepted array itself restores nothing and announces nothing,
+ *   while a re-show over the same options can leave the revert target an equal copy of that array, so the rollback of a revert onto that copy announces a configuration
+ *   that reads unchanged. The rollback lands wherever a pending edit is drained, so the call can arrive during hide()'s flush and during the drains inside
+ *   {@link webUiFeatureOptions#refreshControllers} and {@link webUiFeatureOptions#commitConfig} as well as after the staging debounce; a page torn down before the write
+ *   fails never calls it. It receives ONE options bag whose `signal` is the cycle's signal, which aborts when the cycle ends - `hide()` once its flush is done,
+ *   `cleanup()`, a re-show, or a {@link webUiFeatureOptions#commitConfig} re-entry - so work the hook arms is scoped under it, and a call that arrives during hide()'s
+ *   flush is handed a live signal that aborts at the `cleanup()` after it. The staging failure is surfaced as it is without the hook, and neither
+ *   {@link FeatureOptionsConfig.onOptionsEdited} nor {@link FeatureOptionsConfig.onListEntriesRemoved} fires for the rollback, since it is not an edit the page accepted.
+ *   An option change made from inside the callback is not staged until the next edit or flush, because the drain whose failure the call reports is still finishing when
+ *   it runs, so one made during the flush of hide() or of the page's async disposal is dropped with the page. An exception the callback throws surfaces as a throwing
+ *   edit hook's does: the store's `EventTarget` reports it as an uncaught error, and the staging failure is still surfaced.
  * @property {Object} [sidebar] - Sidebar configuration options.
  * @property {string} [sidebar.controllerLabel="Controllers"] - Label for the controllers section.
  * @property {Function} [sidebar.deviceContent] - Synchronous hook supplying a device link's rendered content: `(device) => Node | string | null`. Invoked once per
@@ -475,6 +495,7 @@ export class webUiFeatureOptions {
       onListEntriesRemoved = undefined,
       onLoaded = undefined,
       onOptionsEdited = undefined,
+      onOptionsRolledBack = undefined,
       sidebar = {},
       statusPanel = undefined,
       ui = {}
@@ -553,6 +574,7 @@ export class webUiFeatureOptions {
       onListEntriesRemoved,
       onLoaded,
       onOptionsEdited,
+      onOptionsRolledBack,
       renderDeviceContent: sidebar.deviceContent,
       renderGlobalGlyph: sidebar.globalGlyph,
       sidebarRefresh: sidebar.refresh,
@@ -845,7 +867,8 @@ export class webUiFeatureOptions {
       /* Notify the plugin's optional edit hook after any option mutation has transitioned the store, so a consumer reading editedConfig from inside the callback
        * sees the post-edit state. We subscribe to exactly the mutation events the staging effect stages (see effects/staging.mjs); the two subscriptions
        * must stay in lockstep, since every mutation the staging effect stages is one the consumer should hear about. The effect() immediate-run pass hands the
-       * body `undefined`, so we notify only on a real dispatch, never at registration before model:loaded. Registered on the page signal so teardown detaches it.
+       * body `undefined`, so we notify only on a real dispatch, never at registration before model:loaded. Registered on the page signal so teardown detaches it,
+       * and each hook is handed that same signal, so work a hook arms is detached with it.
        *
        * A dispatch of one of those types is not by itself an edit, which is why the changed-reference test stands beside the action test. A coordinated
        * configuration write holds the store and answers every one of these actions with the state reference it was handed, and a mutation can reduce to nothing
@@ -885,11 +908,39 @@ export class webUiFeatureOptions {
 
             if(removals.length) {
 
-              this.#config.onListEntriesRemoved(removals);
+              this.#config.onListEntriesRemoved(removals, { signal });
             }
           }
 
-          this.#config.onOptionsEdited?.();
+          this.#config.onOptionsEdited?.({ signal });
+        },
+        signal,
+        store: this.#store
+      });
+
+      /* Notify the plugin's optional rollback hook after a staged write that failed has rolled the configured options back, so a consumer reading editedConfig
+       * from inside the callback sees the configuration the host accepted. It is an effect of its own on `staging:failed` alone rather than one more event on the
+       * edit hooks' effect above: those hooks report an edit the page accepted and a plugin may write from inside them, so re-running their bodies for a rollback
+       * would change what every existing consumer hears and could loop against a host that keeps refusing.
+       *
+       * The gate is the edit hooks' gate, the configured options coming out of the dispatch as a different array than they went in as. A write can fail after the
+       * options are already back at the anchor - a Revert to Saved made while the write was out, before any write succeeded and on a cycle whose load set the
+       * revert target, lands on the anchor by reference - and that rollback restores nothing, so it announces nothing. The call runs inside the drain's failure
+       * dispatch, ahead of the drain's toast, and a throw from it is handled as a throwing edit hook's is: the store's EventTarget reports it as an uncaught
+       * error, and the drain goes on to surface the failure. Registered on the page signal, so a page torn down while its write is out never calls the hook,
+       * which the drain's own abort check before that dispatch also guarantees.
+       */
+      effect({
+
+        events: ["staging:failed"],
+        fn: (action, previous) => {
+
+          if(!action || (previous.configuredOptions === this.#store.state.configuredOptions)) {
+
+            return;
+          }
+
+          this.#config.onOptionsRolledBack?.({ signal });
         },
         signal,
         store: this.#store
@@ -1053,8 +1104,11 @@ export class webUiFeatureOptions {
        * No staleness guard sits on this call, and its absence is the design rather than an oversight. Nothing awaits between the dispatch and here, and every path a
        * supersession takes returns before the dispatch, so a superseded cycle can never arrive at this line - a guard here would be a branch that cannot be taken. A
        * hook that throws propagates to whoever called show().
+       *
+       * The hook is handed this boot's own signal, as every page-cycle hook is, rather than reading the page's controller field: a hook that keeps the bag and reads
+       * it late still holds the cycle that called it, where the field would answer with whichever cycle stands by then.
        */
-      this.#config.onLoaded?.();
+      this.#config.onLoaded?.({ signal });
 
       /* Wait for the theming registration's initial lighting-mode read, so the first paint lands with the mode already applied rather than showing the default and
        * correcting under the user's eye. Both of the registration's host-signal routes go live synchronously, ahead of that read, so first-paint correctness is the

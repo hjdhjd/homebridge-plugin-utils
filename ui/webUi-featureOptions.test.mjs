@@ -2593,9 +2593,18 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
       requestResponses: new Map([[ "/getOptions", FEATURES ]])
     });
 
+    // The write is held at the host until the page has torn down, and only then rejects. The gate is what lets the teardown land while the write is out, which is
+    // the moment the drain's page-signal check exists for.
+    const gate = Promise.withResolvers();
+    let writes = 0;
+
     fake.updatePluginConfig = async () => {
 
-      // DOMException with name "AbortError" is the canonical shape thrown by signal-aware browser primitives. The helper's name check matches on this.
+      writes++;
+
+      await gate.promise;
+
+      // DOMException with name "AbortError" is the canonical shape thrown by signal-aware browser primitives.
       throw new DOMException("operation aborted", "AbortError");
     };
 
@@ -2617,11 +2626,16 @@ describe("webUiFeatureOptions - detached-operation error contract", () => {
     motionCheckbox.checked = false;
     motionCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
 
+    await waitFor(() => writes === 1, { message: "the stage did not reach the host write past the debounce" });
+
+    // Tear the page down with the write still out, then let the write reject. The drain finds the page signal aborted when the rejection reaches it, and
+    // returns before the rollback and the toast.
+    orchestrator.cleanup();
+    gate.resolve();
     await flush();
 
+    assert.equal(writes, 1, "the stage reached the host exactly once, so the rejection this row covers is a real write's");
     assert.equal(fake.observed.toasts.length, toastsBefore, "an AbortError rejection must be absorbed silently - no toast emitted");
-
-    orchestrator.cleanup();
   });
 });
 
@@ -4578,6 +4592,51 @@ describe("webUiFeatureOptions - onOptionsEdited edit hook", () => {
 
     orchestrator.cleanup();
   });
+
+  test("onOptionsEdited is handed the cycle's signal, the one onLoaded received, live during the call and aborted once cleanup() ends the cycle", async () => {
+
+    using dom = createTestDom();
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig(),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    // Each call records what it was handed and whether its signal was live at that moment, so the row reads the bag as the hook saw it rather than afterwards.
+    const edits = [];
+    const loaded = [];
+    const orchestrator = new webUiFeatureOptions({
+
+      onLoaded: (...args) => loaded.push(args),
+      onOptionsEdited: (...args) => edits.push({ args, live: args[0]?.signal?.aborted === false })
+    });
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    clickCategoryHeader(skeleton.configTable.querySelector("details[data-category='Motion']"));
+
+    const checkbox = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+
+    assert.equal(edits.length, 1, "precondition: the edit was announced once");
+    assert.equal(edits[0].args.length, 1, "the hook is handed one options bag");
+    assert.equal(edits[0].live, true, "carrying a signal that is live while the hook runs");
+    assert.equal(edits[0].args[0].signal, loaded[0]?.[0]?.signal, "and it is the cycle's signal, the very one this cycle's onLoaded was handed");
+
+    orchestrator.cleanup();
+
+    assert.equal(edits[0].args[0].signal.aborted, true, "cleanup() ends the cycle, so the signal the hook kept has aborted");
+  });
 });
 
 describe("webUiFeatureOptions - onListEntriesRemoved removal hook", () => {
@@ -4821,6 +4880,276 @@ describe("webUiFeatureOptions - onListEntriesRemoved removal hook", () => {
     assert.ok(writes.some((payload) => payload[0].controllers?.length === 1), "and the plugin's patch composed against it afterwards");
 
     orchestrator.cleanup();
+  });
+
+  test("a removal hands the hook its removals first and the cycle's signal second, live during the call and aborted once hide() ends the cycle", async () => {
+
+    using dom = createTestDom();
+
+    const calls = [];
+    const { homebridgeInstall, orchestrator, skeleton } = await openListPage({
+
+      config: ["Enable.Motion.Plates=a,b"],
+      onListEntriesRemoved: (...args) => calls.push({ args, live: args[1]?.signal?.aborted === false })
+    });
+
+    using install = homebridgeInstall;
+
+    listEditor(skeleton, "Plates").querySelectorAll(".fo-list-remove")[0].click();
+    await flush();
+
+    assert.equal(calls.length, 1, "precondition: the removal was announced once");
+    assert.deepEqual([...calls[0].args[0]], [{ entries: ["a"], id: "", option: "Motion.Plates" }], "the removals keep their place as the first argument");
+    assert.equal(calls[0].live, true, "and the second is the bag whose signal is live while the hook runs");
+
+    await orchestrator.hide();
+
+    assert.equal(calls[0].args[1].signal.aborted, true, "hide() ends the cycle once its flush is done, so the signal the hook kept has aborted");
+  });
+});
+
+describe("webUiFeatureOptions - onOptionsRolledBack rollback hook", () => {
+
+  /* The rollback hook gives a plugin the moment a staged write that failed has put the configured options back to what the host accepted, which no edit hook announces.
+   * Each row holds the host write on a gate until the row releases it, so the row can tell a call made while the write is out from one made once its failure
+   * has landed, and can tear the page down or revert in between.
+   */
+
+  // Open the canonical page with the given hooks over a saved configuration, with every host write held until the row releases it and then refused. The count
+  // of writes that reached the host is read through `writes()`, which is how a row knows the stage is past its debounce and out at the host.
+  const openRefusingPage = async (hooks = {}) => {
+
+    const skeleton = createSkeletonFeatureOptionsDom();
+    const fake = createFakeHomebridge({
+
+      config: makePluginConfig({ options: ["Enable.Audio.Volume.75"] }),
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+    const gate = Promise.withResolvers();
+    let writes = 0;
+
+    fake.updatePluginConfig = async () => {
+
+      writes++;
+
+      await gate.promise;
+
+      throw new Error("simulated staging refusal");
+    };
+
+    const homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions(hooks);
+
+    await orchestrator.show(await openTestSession());
+    await flush();
+
+    return { fake, homebridgeInstall, orchestrator, refuse: () => gate.resolve(), saved: [...orchestrator.editedConfig[0].options], skeleton, writes: () => writes };
+  };
+
+  // Turn Motion.Detect off, an edit away from the saved configuration, and wait until its stage is out at the host.
+  const editAndStage = async ({ skeleton, writes }) => {
+
+    clickCategoryHeader(skeleton.configTable.querySelector("details[data-category='Motion']"));
+
+    const checkbox = skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitFor(() => writes() === 1, { message: "the stage did not reach the host write past the debounce" });
+  };
+
+  test("a refused staged write calls onOptionsRolledBack once after the rollback, while onOptionsEdited heard the edit alone", async () => {
+
+    using dom = createTestDom();
+
+    let editCount = 0;
+    const rollbacks = [];
+    const toastsInHook = [];
+    const page = await openRefusingPage({
+
+      onOptionsEdited: () => editCount++,
+      onOptionsRolledBack: () => {
+
+        rollbacks.push([...(page.orchestrator.editedConfig[0]?.options ?? [])]);
+        toastsInHook.push(page.fake.observed.toasts.length);
+      }
+    });
+
+    using homebridgeInstall = page.homebridgeInstall;
+
+    await editAndStage(page);
+
+    assert.equal(editCount, 1, "precondition: the edit was announced once");
+    assert.notDeepEqual(page.orchestrator.editedConfig[0].options, page.saved, "precondition: the edit moved the configuration off the saved one");
+    assert.equal(rollbacks.length, 0, "the hook is not called while the write is out, before its failure lands");
+
+    const toastsBefore = page.fake.observed.toasts.length;
+
+    page.refuse();
+    await flush();
+
+    assert.equal(rollbacks.length, 1, "the rollback is announced once");
+    assert.deepEqual(rollbacks[0], page.saved, "editedConfig read inside the hook answers the restored configuration, so the rollback landed before the call");
+    assert.deepEqual(page.orchestrator.editedConfig[0].options, page.saved, "and the configuration rests at the one the host accepted");
+    assert.equal(editCount, 1, "the rollback is not an edit, so onOptionsEdited did not fire again");
+    assert.deepEqual(toastsInHook, [toastsBefore], "the hook ran inside the failure dispatch, ahead of the drain's toast");
+    assert.equal(page.fake.observed.toasts.length, toastsBefore + 1, "the failure is surfaced as it is without the hook");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a Revert to Saved made while the write is out, before any write succeeded, leaves the hook uncalled when that write fails", async (t) => {
+
+    using dom = createTestDom();
+
+    // The failure's dispatch is read through a spy on the store's dispatch, which is how this row knows the refused write reached the rollback rather than being
+    // swallowed by the drain.
+    const dispatches = t.mock.method(FeatureOptionsStore.prototype, "dispatch");
+    let rollbackCount = 0;
+    const page = await openRefusingPage({ onOptionsRolledBack: () => rollbackCount++ });
+
+    using homebridgeInstall = page.homebridgeInstall;
+
+    await editAndStage(page);
+
+    // Revert to Saved with the write still out. Nothing has been staged yet, so the revert lands on the staged anchor by reference and the staging effect has
+    // nothing new to write.
+    document.querySelector("button[data-action='reset-toggle']").click();
+    await flush();
+    document.querySelector("button[data-action='reset-revert']").click();
+    await flush();
+
+    assert.deepEqual(page.orchestrator.editedConfig[0].options, page.saved, "precondition: the revert put the options back at the saved configuration");
+
+    page.refuse();
+    await flush();
+
+    const failure = dispatches.mock.calls.find((call) => call.arguments[0]?.type === "staging:failed");
+
+    assert.ok(failure, "precondition: the refused write reached the rollback, since the revert left the drain no newer edit to retry with");
+    assert.equal(rollbackCount, 0, "the rollback found the options already at the anchor, so it restored nothing and announced nothing");
+    assert.deepEqual(page.orchestrator.editedConfig[0].options, page.saved, "and the configuration rests at the saved one");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a page torn down while its write is out never calls onOptionsRolledBack", async () => {
+
+    using dom = createTestDom();
+
+    let rollbackCount = 0;
+    const page = await openRefusingPage({ onOptionsRolledBack: () => rollbackCount++ });
+
+    using homebridgeInstall = page.homebridgeInstall;
+
+    await editAndStage(page);
+
+    page.orchestrator.cleanup();
+    page.refuse();
+    await flush();
+
+    assert.equal(rollbackCount, 0, "the page signal had aborted when the refusal arrived, so the torn-down page heard nothing");
+  });
+
+  test("an option change made inside onOptionsRolledBack is written by the next flush, not by the drain whose failure it heard", async () => {
+
+    using dom = createTestDom();
+
+    let rollbackCount = 0;
+    const page = await openRefusingPage({
+
+      onOptionsRolledBack: () => {
+
+        rollbackCount++;
+
+        // The plugin makes its own edit through the page, turning Motion.Detect off again while the drain whose failure this call reports is still finishing. Only
+        // the first call edits, so the flush's own refused write rolls back without leaving another edit behind.
+        if(rollbackCount === 1) {
+
+          const checkbox = page.skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+          checkbox.checked = false;
+          checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+    });
+
+    using homebridgeInstall = page.homebridgeInstall;
+
+    await editAndStage(page);
+
+    page.refuse();
+    await flush();
+
+    assert.equal(rollbackCount, 1, "precondition: the refused write rolled back and called the hook once");
+    assert.notDeepEqual(page.orchestrator.editedConfig[0].options, page.saved, "precondition: the hook's edit moved the configuration off the saved one");
+
+    await settleStaging();
+
+    assert.equal(page.writes(), 1, "past the debounce the host has seen only the refused write, so the failed drain ended without staging the hook's edit");
+
+    window.dispatchEvent(new Event("blur"));
+    await settleStaging();
+
+    assert.equal(page.writes(), 2, "the window blur's flush wrote the hook's edit, the one write after the refusal");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a config without onOptionsRolledBack rolls back without throwing", async () => {
+
+    using dom = createTestDom();
+
+    const page = await openRefusingPage();
+
+    using homebridgeInstall = page.homebridgeInstall;
+
+    await editAndStage(page);
+
+    const toastsBefore = page.fake.observed.toasts.length;
+
+    page.refuse();
+    await flush();
+
+    assert.deepEqual(page.orchestrator.editedConfig[0].options, page.saved, "the rollback restored the configuration the host accepted");
+    assert.equal(page.fake.observed.toasts.length, toastsBefore + 1, "and the failure surfaced, with no hook to call");
+
+    page.orchestrator.cleanup();
+  });
+
+  test("a rollback during hide()'s flush hands onOptionsRolledBack a live signal, which aborts at the cleanup() hide() ends with", async () => {
+
+    using dom = createTestDom();
+
+    const calls = [];
+    const page = await openRefusingPage({ onOptionsRolledBack: (...args) => calls.push({ args, live: args[0]?.signal?.aborted === false }) });
+
+    using homebridgeInstall = page.homebridgeInstall;
+
+    // The edit is left inside the staging debounce, so the write that fails is the one hide()'s own flush drains.
+    clickCategoryHeader(page.skeleton.configTable.querySelector("details[data-category='Motion']"));
+
+    const checkbox = page.skeleton.configTable.querySelector("[id='Motion.Detect']");
+
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+
+    const hiding = page.orchestrator.hide();
+
+    await waitFor(() => page.writes() === 1, { message: "hide()'s flush did not reach the host write" });
+
+    assert.equal(calls.length, 0, "precondition: nothing has rolled back while the flush's write is out");
+
+    page.refuse();
+    await hiding;
+
+    assert.equal(calls.length, 1, "the refused write the flush drained rolled back and called the hook once");
+    assert.equal(calls[0].live, true, "handing it a signal that was live while it ran, inside the flush");
+    assert.equal(calls[0].args[0].signal.aborted, true, "which has aborted since, at the cleanup() hide() ends with");
   });
 });
 
@@ -8255,6 +8584,38 @@ describe("webUiFeatureOptions - the onLoaded hook", () => {
     assert.equal(calls.length, 1, "while the catalog behind both was read once");
 
     orchestrator.cleanup();
+  });
+
+  test("hands each cycle's onLoaded a signal of its own, live during the call, and a re-show aborts the previous cycle's", async () => {
+
+    using dom = createTestDom();
+
+    const { homebridgeGuard } = arrange();
+
+    using homebridgeInstall = homebridgeGuard;
+
+    const seen = [];
+    const orchestrator = new webUiFeatureOptions({ onLoaded: (...args) => seen.push({ args, live: args[0]?.signal?.aborted === false }) });
+    const session = await openTestSession();
+
+    await orchestrator.show(session);
+    await flush();
+
+    assert.equal(seen.length, 1, "precondition: the first cycle announced once");
+    assert.equal(seen[0].args.length, 1, "the hook is handed one options bag");
+    assert.equal(seen[0].live, true, "carrying a signal that is live while the hook runs");
+
+    await orchestrator.show(session);
+    await flush();
+
+    assert.equal(seen.length, 2, "precondition: the re-show announced once more");
+    assert.equal(seen[1].live, true, "the re-show's call is handed a live signal");
+    assert.notEqual(seen[1].args[0].signal, seen[0].args[0].signal, "and a fresh one, never the previous cycle's");
+    assert.equal(seen[0].args[0].signal.aborted, true, "while the previous cycle's signal aborted when the re-show ended that cycle");
+
+    orchestrator.cleanup();
+
+    assert.equal(seen[1].args[0].signal.aborted, true, "and cleanup() ends the cycle that stood, aborting its signal too");
   });
 });
 

@@ -195,12 +195,13 @@ const commonRules = {
 
 /**
  * Browser-environment globals typically present in Homebridge webUI files - `window`, `document`, `fetch`, the Homebridge configuration API entry
- * point, and a few timer functions. Each is declared as `"readonly"` so `no-undef` accepts references without permitting reassignment.
+ * point, a few timer functions, and `performance`, the monotonic clock a page measures elapsed time by. Each is declared as `"readonly"` so `no-undef` accepts
+ * references without permitting reassignment.
  *
  * Pass into the `languageOptions.globals` slot of a flat config block scoped to UI files.
  */
 const globalsUi = Object.fromEntries([ "clearInterval", "clearTimeout", "console", "container", "document", "fetch", "getComputedStyle", "homebridge",
-  "setInterval", "setTimeout", "window" ].map((key) => [ key, "readonly" ]));
+  "performance", "setInterval", "setTimeout", "window" ].map((key) => [ key, "readonly" ]));
 
 /**
  * Node-environment globals: every global the Node runtime running the linter provides - `process`, `console`, `fetch`, `Buffer`, `setImmediate`, and the rest -

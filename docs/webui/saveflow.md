@@ -59,7 +59,7 @@ to, which then resolves `superseded` with nothing written.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, so a check reads the members the card put on its action typed as the card declared them. |
+| <a id="type-parameter-taction"></a> `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, so a check reads the members the card put on its action typed as the card declared them. |
 
 #### Properties
 
@@ -80,8 +80,8 @@ One card's save flow, as [createSaveFlow](#createsaveflow) builds it.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TPlatform` *extends* `object` | `object` | The platform configuration object the card's commit hands every composer the flow runs. |
-| `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, which every check and every result carries. |
+| <a id="type-parameter-tplatform"></a> `TPlatform` *extends* `object` | `object` | The platform configuration object the card's commit hands every composer the flow runs. |
+| <a id="type-parameter-taction-1"></a> `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, which every check and every result carries. |
 
 #### Methods
 
@@ -115,8 +115,8 @@ a rejected press never leaves the card unable to save.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TValue` | `unknown` | The value a passed check hands the composer, inferred from what the check answers. |
-| `TReason` | `unknown` | The reason a declined check refused with, inferred from what the check answers. |
+| <a id="type-parameter-tvalue"></a> `TValue` | `unknown` | The value a passed check hands the composer, inferred from what the check answers. |
+| <a id="type-parameter-treason"></a> `TReason` | `unknown` | The reason a declined check refused with, inferred from what the check answers. |
 
 ###### Parameters
 
@@ -236,8 +236,8 @@ What [createSaveFlow](#createsaveflow) takes: the page's commit, the card's Save
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TPlatform` *extends* `object` | `object` | The platform configuration object the commit hands the composer, `object` unless the commit names the plugin's own configuration type. |
-| `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, [SaveAction](#saveaction) itself unless the card's action carries members of its own. |
+| <a id="type-parameter-tplatform-1"></a> `TPlatform` *extends* `object` | `object` | The platform configuration object the commit hands the composer, `object` unless the commit names the plugin's own configuration type. |
+| <a id="type-parameter-taction-2"></a> `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, [SaveAction](#saveaction) itself unless the card's action carries members of its own. |
 
 #### Properties
 
@@ -262,10 +262,10 @@ What one press of the card's Save hands [SaveFlow.save](#save): the check, the c
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TPlatform` *extends* `object` | `object` | The platform configuration object the commit hands the composer. |
-| `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, which the check reads on its context. |
-| `TValue` | `unknown` | The value a passed check hands the composer. |
-| `TReason` | `unknown` | The reason a declined check refused with. |
+| <a id="type-parameter-tplatform-2"></a> `TPlatform` *extends* `object` | `object` | The platform configuration object the commit hands the composer. |
+| <a id="type-parameter-taction-3"></a> `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, which the check reads on its context. |
+| <a id="type-parameter-tvalue-1"></a> `TValue` | `unknown` | The value a passed check hands the composer. |
+| <a id="type-parameter-treason-1"></a> `TReason` | `unknown` | The reason a declined check refused with. |
 
 #### Properties
 
@@ -301,8 +301,8 @@ the card, which delivers it from the result. One refusal is delivered once.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TValue` | `unknown` | The value a passed check hands the composer, which the result carries. |
-| `TReason` | `unknown` | The reason a declined check refused with, which the result carries. |
+| <a id="type-parameter-tvalue-2"></a> `TValue` | `unknown` | The value a passed check hands the composer, which the result carries. |
+| <a id="type-parameter-treason-2"></a> `TReason` | `unknown` | The reason a declined check refused with, which the result carries. |
 
 ***
 
@@ -349,14 +349,14 @@ type SaveFlowResult<TAction, TValue, TReason> =
   action: TAction;
   deliver: SaveDelivery;
   presented: () => boolean;
-} & 
+} & (
   | {
   kind: "declined";
   reason: TReason;
 }
   | {
   value: TValue;
-} & CommitConfigResult;
+} & CommitConfigResult);
 ```
 
 What became of a press, tagged by `kind`:
@@ -378,9 +378,9 @@ Each member but `busy` and `superseded` carries the press's `action`, `deliver` 
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, carried back as the press's `action`. |
-| `TValue` | `unknown` | The value a passed check handed the composer. |
-| `TReason` | `unknown` | The reason a declined check refused with. |
+| <a id="type-parameter-taction-4"></a> `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, carried back as the press's `action`. |
+| <a id="type-parameter-tvalue-3"></a> `TValue` | `unknown` | The value a passed check handed the composer. |
+| <a id="type-parameter-treason-3"></a> `TReason` | `unknown` | The reason a declined check refused with. |
 
 ***
 
@@ -417,8 +417,8 @@ re-enable the control while the write still runs.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TPlatform` *extends* `object` | `object` | The platform configuration object the commit hands the composer, inferred from the commit, so a commit typed against a plugin's own configuration types every composer the flow runs. |
-| `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, inferred from the starter, so the check's context and the result's `action` carry the card's own members. |
+| <a id="type-parameter-tplatform-3"></a> `TPlatform` *extends* `object` | `object` | The platform configuration object the commit hands the composer, inferred from the commit, so a commit typed against a plugin's own configuration types every composer the flow runs. |
+| <a id="type-parameter-taction-5"></a> `TAction` *extends* [`SaveAction`](#saveaction) | [`SaveAction`](#saveaction) | What the card's starter answers, inferred from the starter, so the check's context and the result's `action` carry the card's own members. |
 
 #### Parameters
 

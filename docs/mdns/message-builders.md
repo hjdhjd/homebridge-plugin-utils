@@ -160,7 +160,7 @@ Encode a set of records as a response datagram, through the production encoder.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | \{ `additionals?`: readonly [`DnsRecord`](message.md#dnsrecord)[]; `answers?`: readonly [`DnsRecord`](message.md#dnsrecord)[]; `authorities?`: readonly [`DnsRecord`](message.md#dnsrecord)[]; `truncated?`: `boolean`; \} | The response. |
+| `options?` | \{ `additionals?`: readonly [`DnsRecord`](message.md#dnsrecord)[]; `answers?`: readonly [`DnsRecord`](message.md#dnsrecord)[]; `authorities?`: readonly [`DnsRecord`](message.md#dnsrecord)[]; `truncated?`: `boolean`; \} | The response. |
 | `options.additionals?` | readonly [`DnsRecord`](message.md#dnsrecord)[] | The additional section. Defaults to empty. |
 | `options.answers?` | readonly [`DnsRecord`](message.md#dnsrecord)[] | The answer section. Defaults to empty. |
 | `options.authorities?` | readonly [`DnsRecord`](message.md#dnsrecord)[] | The authority section. Defaults to empty. |

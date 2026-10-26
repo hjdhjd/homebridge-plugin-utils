@@ -6,15 +6,21 @@
 
 # mqtt-publish
 
-The MQTT publish-outcome vocabulary the client and its shipped test double share: the error a publish is refused with while the client holds no broker session, the
-pure router that classifies a guarded publish's failure into the one line that reports it, and the per-topic memory a change-gated publish is answered against.
+The MQTT publish-outcome vocabulary and the graceful end the client and its shipped test double share: the error a publish is refused with while the client holds
+no broker session, the pure router that classifies a guarded publish's failure into the one line that reports it, the per-topic memory a change-gated publish is
+answered against, the sequence that states a plugin's final words before the client tears down, with its default grace and the warning a teardown logs when
+words go unsaid, the end's state with the admission a publish faces once the end has begun, and the check that tells a callback the end or the abort cut short apart
+from one that failed, with the line each owner logs for a connect handler cut short.
 
-All three live here rather than beside the client because the double stands in for the client without standing in for its transport. The double's only edge to
-`mqttClient.ts` is a type import, which the compiler erases, and the `/testing` entry point aggregates every shipped double...so a value import from the client
+Every piece lives here rather than beside the client because the double stands in for the client without standing in for its transport. The double's only edge
+to `mqttClient.ts` is a type import, which the compiler erases, and the `/testing` entry point aggregates every shipped double...so a value import from the client
 would pull the mqtt package and everything under it into the load closure of any consumer test process that reaches for any double at all. This module carries no
-runtime dependency beyond `./util.ts`, which lets the client and the double share one refusal and one classification without either one paying for a broker
+runtime dependency beyond `./util.ts` and `./clock.ts`, which lets the client and the double share every piece here while the double pays for no broker
 library. The memory is here for the same reason: the double has to answer "is this the same payload?" exactly as the client does, and one class the two of them
-import by value is what keeps them from drifting on the comparison or on how a payload is kept.
+import by value is what keeps them from drifting on the comparison or on how a payload is kept. The end sequence is here for it too: the grace, the order the
+words are stated in and the warning have one definition, so a consumer's suite on the double sees the end a plugin meets on the client. So are the end's state, its
+admission, the check and the connect handler's cancelled line, which is what keeps the two from disagreeing about which publish the end lets through, which failure is
+a cancellation, and how a cancelled connect handler reads in the log.
 
 ## Utilities
 
@@ -141,7 +147,7 @@ preserve by being held: retaining it grows memory for as long as the outage last
 delivers hours-old state changes and events to the broker as though they had just happened. Refusing on the spot keeps memory flat and keeps the broker's view of
 the plugin honest...the caller learns immediately, and the next state change publishes normally once the session is back. A consumer holding state a subscriber may
 have missed in the meantime restates it for itself from [MqttClient.onConnect](mqttClient.md#onconnect), which runs on every session the client
-establishes.
+establishes until [MqttClient.end](mqttClient.md#end) begins.
 
 [MqttClient.publishGuarded](mqttClient.md#publishguarded) has no caller to answer, so it absorbs the refusal into a single debug line. A consumer
 awaiting [MqttClient.publish](mqttClient.md#publish) directly tells the refusal apart from a delivery failure with `error instanceof
@@ -163,7 +169,7 @@ new MqttOfflineError(message?): MqttOfflineError;
 
 | Parameter | Type | Default value |
 | ------ | ------ | ------ |
-| `message` | `string` | `"The MQTT client is not connected to the broker."` |
+| `message?` | `string` | `"The MQTT client is not connected to the broker."` |
 
 ###### Returns
 
@@ -171,15 +177,118 @@ new MqttOfflineError(message?): MqttOfflineError;
 
 ###### Overrides
 
-```ts
-Error.constructor
-```
+`Error.constructor`
 
 #### Properties
 
 | Property | Modifier | Type | Overrides |
 | ------ | ------ | ------ | ------ |
-| <a id="name"></a> `name` | `readonly` | `"MqttOfflineError"` | `Error.name` |
+| <a id="name"></a> `name` | `public readonly` | `"MqttOfflineError"` | `Error.name` |
+
+***
+
+### MqttEndState
+
+```ts
+type MqttEndState = 
+  | {
+  kind: "open";
+}
+  | {
+  kind: "stating";
+  window: AbortSignal;
+  words: Promise<unknown[]>;
+}
+  | {
+  kind: "closing";
+  words: Promise<unknown[]>;
+};
+```
+
+Where an MQTT owner's graceful end stands: not begun, stating the final words, or closing with the abort that follows them. The client and the shipped double
+each hold one, and that one value answers every question the end raises - whether `end()` has begun, the promise a repeat call is handed, whether a teardown is
+the end's own, and which signal a publish is admitted under while the words are stated - so those answers cannot disagree.
+
+- `open`    - The end has not begun.
+- `stating` - The end is stating the words. `window` is the signal [stateMqttFinalWords](#statemqttfinalwords) hands each handler, recorded before the first one runs, and
+              `words` is the promise `end()` returned.
+- `closing` - The words have settled, and the end's own abort follows in the same turn. `words` is that same promise.
+
+***
+
+### MQTT\_CONNECT\_HANDLER\_CANCELLED
+
+```ts
+const MQTT_CONNECT_HANDLER_CANCELLED: "The MQTT connect handler was cancelled before completion." = "The MQTT connect handler was cancelled before completion.";
+```
+
+The line a connect handler is reported with at debug when the owner's own lifecycle cut it short - an `HbpuAbortError` once the end has begun, a refused publish among
+them, or any failure once the owner has aborted - rather than when it failed on its own terms. [isMqttCallbackCutShort](#ismqttcallbackcutshort) tells the two apart.
+
+The client logs it from its connect pass and the shipped double from its own, each on its own logger, so a consumer's suite reads on the double the line a plugin's log
+carries in the field.
+
+***
+
+### MQTT\_DEFAULT\_END\_GRACE\_MS
+
+```ts
+const MQTT_DEFAULT_END_GRACE_MS: 1000 = 1000;
+```
+
+The grace [MqttClient.end](mqttClient.md#end) gives a plugin's final words when its caller names none, in milliseconds.
+
+A second is long enough for a retained word to reach a broker on the local network many times over, and short enough to fit well inside the window Homebridge
+gives a shutdown before it ends the process, leaving room for everything else a plugin tears down.
+
+***
+
+### MQTT\_UNSAID\_WORDS\_WARNING
+
+```ts
+const MQTT_UNSAID_WORDS_WARNING: string;
+```
+
+The warning a teardown logs when a plugin's final words go unsaid: the client was aborted - directly, through a parent signal, or while `end()` was still stating
+the words - while [MqttClient.onEnd](mqttClient.md#onend) registrations were held. Its one format argument is the number of registrations held.
+
+The client logs it from its teardown and the shipped double from its abort, each on its own logger, so a plugin's log names the misorder in the field and a
+consumer's suite reads the same line on the double.
+
+***
+
+### assertAdmittedDuringMqttEnd()
+
+```ts
+function assertAdmittedDuringMqttEnd(options): void;
+```
+
+Refuse a publish the graceful end does not admit. Pure function: it reads the end's state and the publish's own signal and nothing else, and the client's
+publish and the shipped double's each call it by value, so neither can let through a publish the other refuses while the words are stated.
+
+The rule is identity. Before the end begins every publish is admitted here. While it is stating, a publish is admitted only when its own signal is the very
+signal the end handed its handlers, and one with no signal or with any other signal is refused, a signal composed from the window and a second signal among
+them. A signal composed from the window and nothing else is the window itself, since composing a single signal hands it back unchanged, so a word passed
+through that way is admitted. Once the end is closing nothing is admitted, though by then an owner's abort check answers ahead of this one.
+
+The refusal is a cancellation rather than a fault: `HbpuAbortError("shutdown")` reaches a guarded publish's aborted line at debug and nothing else, so a state
+loop still publishing while the words are stated goes quiet without the plugin having to quiet it first.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `end`: [`MqttEndState`](#mqttendstate); `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | The end's state and the publish's signal. |
+| `options.end` | [`MqttEndState`](#mqttendstate) | Where the owner's end stands. See [MqttEndState](#mqttendstate). |
+| `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The publish's own signal as its caller supplied it, never one composed with the owner's lifetime, which is never the window. |
+
+#### Returns
+
+`void`
+
+#### Throws
+
+`HbpuAbortError("shutdown")` once the end has begun, unless the end is stating and `signal` is its window.
 
 ***
 
@@ -212,6 +321,41 @@ louder rather than quieter and is the right direction for a log-volume mechanism
 `string`
 
 The tag this rejection is weighed by.
+
+***
+
+### isMqttCallbackCutShort()
+
+```ts
+function isMqttCallbackCutShort(options): boolean;
+```
+
+Answer whether a consumer callback an MQTT owner wraps - a raw message handler, a setter or a connect handler - or the response publish that answers a get was cut
+short by the owner's own lifecycle rather than failing on its own terms. Pure function: it reads the failure, the end's state and the owner's lifetime signal and
+nothing else, and the client and the shipped double each call it by value, so neither can report as a fault what the other reports as a cancellation.
+
+A callback was cut short when it fails with an [HbpuAbortError](util.md#hbpuaborterror) once the end has begun, or fails in any way once the owner's signal has aborted. An
+`HbpuAbortError` is what the end hands a callback still running: a publish it issues once the end has begun is refused with `HbpuAbortError("shutdown")` through
+[assertAdmittedDuringMqttEnd](#assertadmittedduringmqttend). Once the owner's signal has aborted the failure's shape says nothing, because an owner may be aborted with any reason - a parent
+signal's bare `abort()` among them - and a publish then rejects with that reason verbatim, so the signal's state answers alone. That is the rule a setter lives under
+through [runWithAbort](util.md#runwithabort), which answers `null` once its signal has aborted whatever the setter threw, so a raw handler, a connect handler and a
+get's response read a teardown as a setter does. At any other time a failure is the callback's own - its own work timing out with `HbpuAbortError("timeout")` among
+them - and keeps the line that reports a failure with its reason.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `end`: [`MqttEndState`](#mqttendstate); `error`: `unknown`; `signal`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | The callback's failure and the owner's state. |
+| `options.end` | [`MqttEndState`](#mqttendstate) | Where the owner's end stands. See [MqttEndState](#mqttendstate). |
+| `options.error` | `unknown` | The value the callback threw or rejected with, unchanged. |
+| `options.signal` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The owner's lifetime signal itself, never one composed from it, which would also abort on a deadline of the callback's own. |
+
+#### Returns
+
+`boolean`
+
+`true` when `error` is an `HbpuAbortError` and the end has begun, or when `signal` has aborted whatever `error` is, and `false` otherwise.
 
 ***
 
@@ -254,3 +398,40 @@ both run this router inside a repeat-demoting attempt, so a genuine failure whos
 #### Returns
 
 `void`
+
+***
+
+### stateMqttFinalWords()
+
+```ts
+function stateMqttFinalWords(options): Promise<unknown[]>;
+```
+
+State a plugin's final words: the sequence [MqttClient.end](mqttClient.md#end) and the shipped double's `end()` each run before they tear down.
+
+One window bounds the whole statement, closing when the grace runs out on `clock` or when `signal`, the owner's lifetime, aborts, whichever comes first. The
+window goes to `onWindow` once it is composed and before any handler runs, which is where an owner records it as the signal its end admits a publish under, so
+a word a handler issues synchronously meets an end that already knows its window. Each handler is then invoked synchronously, in the order given, with the
+window's signal and before anything is awaited, so every word is issued while the owner still holds its session, and a handler that throws has refused exactly
+as one whose promise rejects has. The wait for the words is bounded by the window, so a word still unsettled when it closes refuses with the window's reason -
+the deadline's `TimeoutError`, or the owner's abort reason - and a handler that never settles holds shutdown for the grace at most. Once every word has settled,
+the sequence yields one turn of the event loop through [yieldMacrotask](clock.md#yieldmacrotask), because mqtt.js reports a publish written while its bytes
+are still corked and hands them to the socket on a deferred tick: an owner that tore its connection down on the same turn would destroy them unsent.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `clock`: [`Clock`](clock.md#clock); `grace`: `number`; `handlers`: readonly ((`signal`) => \| `void` \| [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>)[]; `onWindow`: (`window`) => `void`; `signal`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | The words to state and the window that bounds them. |
+| `options.clock` | [`Clock`](clock.md#clock) | The time source the grace is armed on. |
+| `options.grace` | `number` | The grace, in milliseconds. The caller has already refused one that is not a positive, finite number. |
+| `options.handlers` | readonly ((`signal`) => \| `void` \| [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>)[] | A snapshot of the registered handlers, in registration order. See [MqttEndHandler](mqttClient.md#mqttendhandler). |
+| `options.onWindow` | (`window`) => `void` | Invoked once, synchronously, with the window each handler is then handed. It runs outside the isolation each handler gets, so it must not throw; each owner's callback only assigns its end's state. |
+| `options.signal` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The owner's lifetime signal. |
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`unknown`[]\>
+
+The refusals, in registration order: the value each refusing handler threw or rejected with, or the window's reason for one still unsettled when it
+         closed. A word that settled leaves nothing behind, so an end whose every word was stated resolves an empty array. Never rejects.

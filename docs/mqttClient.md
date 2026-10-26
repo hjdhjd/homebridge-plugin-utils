@@ -21,15 +21,23 @@ an outage and nothing replays after it, and [MqttClient.connected](#connected) a
 [MqttConfig.reconnectInterval](#reconnectinterval) for the setting that leaves automatic reconnection disabled entirely.
 
 Because nothing replays, a consumer holding state a subscriber may have missed during the outage - a door's position, a lock's state - restates it for itself.
-[MqttClient.onConnect](#onconnect) registers a handler the client runs on every session it establishes, the first one included. The client owns detecting the connect and
-delivering the notification; which topics carry state worth restating, and which carry momentary events that must never be replayed, is the consumer's call.
+[MqttClient.onConnect](#onconnect) registers a handler the client runs on every session it establishes, the first one included, until [MqttClient.end](#end) begins. The
+client owns detecting the connect and delivering the notification; which topics carry state worth restating, and which carry momentary events that must never be
+replayed, is the consumer's call.
 
-The client also states its own availability on the rail, which it owns end to end. On every session it establishes it publishes a retained `online` on
-`<prefix>/availability`, ahead of those connect registrations, and it hands the broker a last will carrying a retained `offline` on the same topic, so the broker
-itself answers for a plugin that stopped without saying so. For what the two words mean at the device scope, and the entry a plugin spreads into its own catalog
-to say it there, see [mqttAvailabilityEntry](mqtt-topics.md#mqttavailabilityentry). One consequence a consumer composing the two scopes has to know: the
-client keeps one identity across reconnects, so a reconnect that arrives while the broker still holds the previous connection takes that session over and the
-previous connection's will goes out, which means a retained `offline` can outlive a live plugin until its next connect replaces it.
+The client also states its own availability on the rail, which it owns end to end. On every session it establishes before its end begins it publishes a retained
+`online` on `<prefix>/availability`, ahead of those connect registrations, and it hands the broker a last will carrying a retained `offline` on the same topic, so
+the broker itself answers for a plugin that stopped without saying so. For what the availability words mean at the device scope, and the entry a plugin spreads
+into its own catalog to say it there, see [mqttAvailabilityEntry](mqtt-topics.md#mqttavailabilityentry-1). One consequence a consumer composing the plugin and
+device scopes has to know: the client keeps one identity across reconnects, so a reconnect that arrives while the broker still holds the previous connection
+takes that session over and the previous connection's will goes out, which means a retained `offline` can outlive a live plugin until its next connect replaces
+it.
+
+A plugin that has something of its own to say as it shuts down - each device's retained `offline`, say - registers those final words with
+[MqttClient.onEnd](#onend) and awaits [MqttClient.end](#end) in its shutdown, in the order `end()` states. `end()` states every registered word within a bounded grace
+and then tears down exactly as `abort()` does, so the will still fires and the plugin's own `offline` still comes from the broker. From the moment it begins the
+client admits those words alone and dispatches no inbound message and no connect handler, so nothing the plugin still has running needs quieting first. `abort()`
+and a parent signal's abort stay immediate: they state nothing, and a teardown that leaves registered words unsaid logs a warning naming how many.
 
 For a state topic a plugin re-derives on a schedule, the `ifChanged` option on [MqttPublishInit](#mqttpublishinit) publishes only when the payload moved, remembering per
 topic the payload this client last issued there for the life of a session.
@@ -57,7 +65,7 @@ const feature = new AbortController();
 
 mqtt.subscribe("device1/status", (payload) => log.info("Status: %s.", payload.toString()), { signal: feature.signal });
 
-// Restate held state on every session the client establishes, since a publish is never queued across an outage.
+// Restate held state on every session the client establishes until end() begins, since a publish is never queued across an outage.
 mqtt.onConnect(() => mqtt.publishGuarded("device1/status", device.status, { ifChanged: true }), { signal: feature.signal });
 
 // Abort-aware publish.
@@ -89,7 +97,7 @@ a client (so `#mqtt` stays non-null) and then immediately runs the regular teard
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `config` | [`MqttConfig`](#mqttconfig) | Static broker / topic configuration. See [MqttConfig](#mqttconfig). |
-| `init` | [`MqttClientInit`](#mqttclientinit) | Optional init options. See [MqttClientInit](#mqttclientinit). |
+| `init?` | [`MqttClientInit`](#mqttclientinit) | Optional init options. See [MqttClientInit](#mqttclientinit). |
 
 ###### Returns
 
@@ -103,7 +111,7 @@ a client (so `#mqtt` stays non-null) and then immediately runs the regular teard
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this client's lifetime. Aborts exactly once when [MqttClient.abort](#abort) is called or when the parent signal fires. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this client's lifetime. Aborts exactly once when [MqttClient.abort](#abort) is called or when the parent signal fires. |
 
 #### Accessors
 
@@ -135,7 +143,8 @@ arrives, cleared when the connection closes, and the same flag its send path con
 Composing them keeps this getter and [MqttClient.aborted](#aborted) in agreement at every instant. Derived from both; no field of its own.
 
 This is the reading [MqttClient.publish](#publish) takes before it hands anything to mqtt.js, so a consumer that would rather not attempt a publish it knows will
-be refused asks the same question here first.
+be refused asks the same question here first. It keeps reading `true` once [MqttClient.end](#end) has begun, while the session still holds, because the final
+words need that session; the end's own admission is what refuses every other publish from then on.
 
 ###### Returns
 
@@ -146,24 +155,22 @@ be refused asks the same question here first.
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
-`AsyncDisposable` implementation. Aborts the client (defaulting to `"shutdown"`), which tears the MQTT connection down and rejects any pending publishes through
-the regular teardown path.
+`AsyncDisposable` implementation. Ends the client through [MqttClient.end](#end), so a scope that owns the client states its final words before the connection
+comes down.
 
 ###### Returns
 
 [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
 
-A promise that resolves once teardown has been scheduled. MQTT.js's `end(true)` completes synchronously for userland purposes, so the awaited microtask
-         is all the ordering the caller needs.
+A promise that resolves once the final words have settled and the client has torn down, which takes at most the default grace when any words are
+         registered.
 
 ###### Implementation of
 
-```ts
-AsyncDisposable.[asyncDispose]
-```
+`AsyncDisposable.[asyncDispose]`
 
 ##### abort()
 
@@ -172,6 +179,7 @@ abort(reason?): void;
 ```
 
 Abort the client and tear the connection down. Defaults to `HbpuAbortError("shutdown")` when no reason is supplied; explicit reasons pass through unchanged.
+The teardown is immediate and states no final words; [MqttClient.end](#end) is the graceful counterpart that states them first.
 
 Safe to call more than once. After this runs, every subsequent `publish`, `subscribe*`, or `unsubscribe` call is a no-op.
 
@@ -185,6 +193,66 @@ Safe to call more than once. After this runs, every subsequent `publish`, `subsc
 
 `void`
 
+##### end()
+
+```ts
+end(options?): Promise<unknown[]>;
+```
+
+End the client gracefully: state the final words every [MqttClient.onEnd](#onend) registration holds, wait for them within a bounded grace, and then tear down
+exactly as [MqttClient.abort](#abort) does, so the broker still publishes the client's will.
+
+Every handler is invoked at once, in registration order, while the session still holds, and is handed a signal that closes when the grace runs out or the
+client is torn down. The end waits for the words to settle within that window, waits one turn of the event loop so the words mqtt.js has corked reach the
+socket, and then aborts the client with `HbpuAbortError("shutdown")`. A word handed to the socket can still be lost by a broker that has stopped reading, so
+the end is the client's best statement rather than a delivery guarantee.
+
+From the moment it begins, the end keeps the client quiet but for the words. A publish is admitted only when its own signal is the one each handler was
+handed, and any other is refused with `HbpuAbortError("shutdown")`, which a guarded publish reports at debug alone; no inbound message, `/get` or `/set` reaches
+a handler, getter or setter; and a session established during the grace runs no connect handler. A plugin's publishers and inbound handlers therefore need
+no quieting before the end begins.
+
+The shutdown order follows from that. A plugin's shutdown awaits this as its first act, before it aborts the signal the client lives on or any signal an end
+registration carries or derives from. Aborting first, or calling this without waiting for it, leaves the words unsaid, and the teardown logs a warning naming
+how many.
+
+A second call returns the first call's promise, whether the first is still running or has finished. A call on a client that has already aborted resolves an
+empty array at once, since its teardown has already run.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options?` | \{ `grace?`: `number`; \} | Optional end options. |
+| `options.grace?` | `number` | The longest the end waits for the words, in milliseconds. Defaults to [one second](mqtt-publish.md#mqtt_default_end_grace_ms). |
+
+###### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`unknown`[]\>
+
+A promise resolving with the refusals in registration order - the value each refusing handler threw or rejected with, or the window's reason for a word
+         still unsettled when it closed - and an empty array when every word was stated. It never rejects.
+
+###### Throws
+
+`TypeError` synchronously when `grace` is not a positive, finite number of milliseconds.
+
+###### Example
+
+```ts
+// Each device states its own retained offline as the plugin shuts down, and stops asking once the device itself goes away.
+mqtt.onEnd((signal) => mqtt.publish(device.mac + "/availability", "offline", { retain: true, signal }), { signal: device.signal });
+
+// The platform's shutdown states the words as its first act, and only then aborts the signal the client lives on. Nothing else needs quieting first.
+async function shutdown(): Promise<void> {
+
+  await mqtt.end();
+  shutdownController.abort(new HbpuAbortError("shutdown"));
+}
+
+api.on("shutdown", () => void shutdown());
+```
+
 ##### onConnect()
 
 ```ts
@@ -195,12 +263,16 @@ Register `handler` to run each time the client establishes a session with the br
 have missed can restate it. The client owns detecting the connect and delivering the notification; what is worth restating is the consumer's policy - state
 belongs here, a momentary event never does, since a replayed event is the event happening a second time.
 
+Once [MqttClient.end](#end) has begun, a session established invokes no handler: the end admits its final words alone, so a restatement could only be refused.
+
 A handler runs once the change-gated memory has been cleared and while [MqttClient.connected](#connected) reads `true`, so a publish issued from inside it is admitted
 and a change-gated publish of an unchanged payload goes out again: a subscriber that missed the change while the broker was away hears the current value.
 
 Handlers run in registration order, and none is awaited before the next is invoked, so a slow handler holds nothing back. A throw or a rejection from one is
-logged as `"The MQTT connect handler failed: ..."` and disturbs neither the connection nor the handlers around it. Registering the same function twice is one
-registration, as it is on a topic.
+logged as `"The MQTT connect handler failed: ..."` and disturbs neither the connection nor the handlers around it. One that fails with an [HbpuAbortError](util.md#hbpuaborterror) once
+`end()` has begun, or fails in any way once the client has aborted - a publish it issued that the end refused, or one the abort cut short, among them - was cut short
+by the client's own lifecycle rather than failing, and is logged at debug as [MQTT\_CONNECT\_HANDLER\_CANCELLED](mqtt-publish.md#mqtt_connect_handler_cancelled)
+instead. Registering the same function twice is one registration, as it is on a topic.
 
 Registering while a session is already held invokes nothing until the connect after it...the notification answers the future, while
 [MqttClient.connected](#connected) answers the present for a consumer that wants to act on the session it is already holding.
@@ -210,7 +282,37 @@ Registering while a session is already held invokes nothing until the connect af
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `handler` | [`MqttConnectHandler`](#mqttconnecthandler) | Callback invoked on each connect to the broker. See [MqttConnectHandler](#mqttconnecthandler). |
-| `init` | [`MqttSubscribeInit`](#mqttsubscribeinit) | Optional per-registration options. See [MqttSubscribeInit](#mqttsubscribeinit). |
+| `init?` | [`MqttSubscribeInit`](#mqttsubscribeinit) | Optional per-registration options. See [MqttSubscribeInit](#mqttsubscribeinit). |
+
+###### Returns
+
+`void`
+
+##### onEnd()
+
+```ts
+onEnd(handler, init?): void;
+```
+
+Register `handler` to state a plugin's final words when [MqttClient.end](#end) runs, such as a device's retained `offline`. What is worth saying on the way out
+is the consumer's policy; the client owns stating it while the session still holds, bounding the wait, and handing the words to the socket before it tears down.
+
+The registration rules are [MqttClient.onConnect](#onconnect)'s: an aborted client or a pre-aborted signal registers nothing, registering the same function twice is
+one registration, handlers are invoked in registration order, and a supplied signal releases the registration when it - or the client - aborts. Once `end()`
+has begun it has already settled which handlers it invokes, so a registration made from then on is never invoked.
+
+Nothing invokes a registration but `end()`. A teardown by [MqttClient.abort](#abort) or by the parent signal states nothing, and logs a warning naming how many
+registrations went unsaid, so a plugin that aborts before `end()` has finished hears about it in its own log.
+
+A word goes out under the signal its handler is handed, the one signal the end admits a publish under, so a publish under any other is refused once `end()`
+has begun.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `handler` | [`MqttEndHandler`](#mqttendhandler) | Callback that states the plugin's final words. See [MqttEndHandler](#mqttendhandler) for the signal it is handed and how to publish under it. |
+| `init?` | [`MqttSubscribeInit`](#mqttsubscribeinit) | Optional per-registration options. See [MqttSubscribeInit](#mqttsubscribeinit). |
 
 ###### Returns
 
@@ -229,30 +331,40 @@ publish(
 Publish `payload` to `topic`, returning a promise that resolves once mqtt.js reports the publish written to the connection, or rejects on failure, on abort,
 or because there is no broker session to carry it.
 
+Written to the connection means handed to mqtt.js's stream, not yet to the socket: the bytes reach the socket on a deferred tick, after the caller's synchronous
+run and microtask chain finish, so an abort issued from that chain can lose a publish that has already resolved, and a broker that has stopped reading can lose
+one even once it is handed to the socket. A plugin's final words therefore go through [MqttClient.end](#end), which lets that tick run before it tears down.
+
 The topic is prefixed with the configured [MqttConfig.topicPrefix](#topicprefix) before being sent; callers supply the topic tail (for example, `"device1/status"`).
 
 A publish issued while [MqttClient.connected](#connected) reads `false` is refused on the spot rather than held for delivery once the broker returns, so nothing is
 retained during an outage and nothing replays after it. See [MqttOfflineError](mqtt-publish.md#mqttofflineerror) for the reasoning.
 
 With `ifChanged` set on [MqttPublishInit](#mqttpublishinit), the publish goes out only when the payload differs from the last one a change-gated publish issued on that topic.
-The gate answers after the abort check and the placeholder refusal and before the trace and the offline refusal, so a torn-down client keeps rejecting with its own
-reason, an unchanged payload during an outage resolves rather than being refused, and a suppressed publish leaves no line in the log, since nothing was attempted.
-The memory takes a payload when the publish is issued, as it is handed to mqtt.js once the offline refusal has answered, so a change-gated publish issued before an
-earlier one completes is weighed against the earlier payload: a repeat ends at the gate, and a return to the value before it goes out. A refused publish issues
-nothing and writes nothing, and a publish that fails once issued forgets its payload while the topic's entry still carries its own token, so the retry goes out and
-a later publish that has taken the topic since keeps its own entry. The forget runs once the rejection unwinds, so a publish of the same payload issued in the same
-turn as the abort is weighed against the aborted payload and suppressed, while one issued after the rejection has settled goes out. The memory is cleared on every
-connect and at teardown, which is what makes the first change-gated publish after an outage always go out: a subscriber that missed a change while the broker was
-away hears the current value on the next pass. Only a change-gated publish is weighed against the memory or written into it, so a publish without the option on the
-same topic neither reads nor updates it, and a [MqttClient.subscribeGet](#subscribeget) republish stays a plain restatement. The boundary is state, never events: an
-event's payload repeating is the event happening again - a second ring on a doorbell topic, a second detection on a motion topic - and the gate would swallow it. The
-comparison is [MqttLastPayloads](mqtt-publish.md#mqttlastpayloads)'s rule: strings by value, Buffers by their bytes, a string never the same as a Buffer, and a
-remembered Buffer copied. The promise reads as "this value has been issued to the broker this session". A suppressed publish resolves on the strength of an earlier
-change-gated publish of the same payload, which was issued and may still be in flight; if that earlier publish then fails, its own caller hears the rejection and
-the memory forgets the payload, while the suppressed caller has already resolved.
+The gate answers after the abort check, the end's admission and the placeholder refusal and before the trace and the offline refusal, so a torn-down client keeps
+rejecting with its own reason, an unchanged payload during an outage resolves rather than being refused, an unchanged payload the end does not admit is refused
+rather than resolved, and a suppressed publish leaves no line in the log, since nothing was attempted. The memory takes a payload when the publish is issued, as it
+is handed to mqtt.js once the offline refusal has answered, so a change-gated publish issued before an earlier one completes is weighed against the earlier payload:
+a repeat ends at the gate, and a return to the value before it goes out. A refused publish issues nothing and writes nothing, and a publish that fails once issued
+forgets its payload while the topic's entry still carries its own token, so the retry goes out and a later publish that has taken the topic since keeps its own
+entry. The forget runs once the rejection unwinds, so a publish of the same payload issued in the same turn as the abort is weighed against the aborted payload and
+suppressed, while one issued after the rejection has settled goes out. The memory is cleared on every connect and at teardown, which is what makes the first
+change-gated publish after an outage always go out: a subscriber that missed a change while the broker was away hears the current value on the next pass. Only a
+change-gated publish is weighed against the memory or written into it, so a publish without the option on the same topic neither reads nor updates it, and a
+[MqttClient.subscribeGet](#subscribeget) republish stays a plain restatement. The boundary is state, never events: an event's payload repeating is the event happening again -
+a second ring on a doorbell topic, a second detection on a motion topic - and the gate would swallow it. The comparison is
+[MqttLastPayloads](mqtt-publish.md#mqttlastpayloads)'s rule: strings by value, Buffers by their bytes, a string never the same as a Buffer, and a remembered
+Buffer copied. The promise reads as "this value has been issued to the broker this session". A suppressed publish resolves on the strength of an earlier change-gated
+publish of the same payload, which was issued and may still be in flight; if that earlier publish then fails, its own caller hears the rejection and the memory
+forgets the payload, while the suppressed caller has already resolved.
 
-A tail still carrying a brace is refused through [assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic), after the abort check and before
-anything else, so an unresolved placeholder never reaches the broker.
+Once [MqttClient.end](#end) has begun, a publish is admitted only when its own `signal` is the window the end handed its handlers, and any other is refused
+with `HbpuAbortError("shutdown")` through [assertAdmittedDuringMqttEnd](mqtt-publish.md#assertadmittedduringmqttend). The admission answers right after
+the abort check, so an aborted client or an aborted publish signal still rejects with its own reason, and ahead of everything after it, so a refused publish
+sends nothing and leaves no trace line. It is read when the publish is issued, so a publish already handed to mqtt.js when the end begins is not recalled.
+
+A tail still carrying a brace is refused through [assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic), after the abort check and the end's
+admission and before anything else, so an unresolved placeholder never reaches the broker.
 
 ###### Parameters
 
@@ -260,15 +372,15 @@ anything else, so an unresolved placeholder never reaches the broker.
 | ------ | ------ | ------ |
 | `topic` | `string` | The relative topic (tail) to publish to. |
 | `payload` | `string` \| `Buffer`\<`ArrayBufferLike`\> | The payload to publish. Buffers and strings are passed through unchanged. |
-| `init` | [`MqttPublishInit`](#mqttpublishinit) | Optional per-publish options. See [MqttPublishInit](#mqttpublishinit). |
+| `init?` | [`MqttPublishInit`](#mqttpublishinit) | Optional per-publish options. See [MqttPublishInit](#mqttpublishinit). |
 
 ###### Returns
 
 [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
 
 A promise that resolves once mqtt.js reports the publish written - or at once, with nothing sent, when `ifChanged` finds the payload unchanged -
-         rejects with [MqttOfflineError](mqtt-publish.md#mqttofflineerror) when the client is not connected to the broker,
-         and otherwise rejects with the abort reason or the underlying error.
+         rejects with `HbpuAbortError("shutdown")` when the end has begun and does not admit it, rejects with [MqttOfflineError](mqtt-publish.md#mqttofflineerror) when the client is not
+         connected to the broker, and otherwise rejects with the abort reason or the underlying error.
 
 ##### publishGuarded()
 
@@ -298,7 +410,7 @@ and what lets a change-gated publish suppress itself just as quietly when its pa
 | ------ | ------ | ------ |
 | `topic` | `string` | The relative topic (tail) to publish to. |
 | `payload` | `string` \| `Buffer`\<`ArrayBufferLike`\> | The payload to publish. Buffers and strings are passed through unchanged. |
-| `init` | [`MqttPublishInit`](#mqttpublishinit) | Optional per-publish options. See [MqttPublishInit](#mqttpublishinit). |
+| `init?` | [`MqttPublishInit`](#mqttpublishinit) | Optional per-publish options. See [MqttPublishInit](#mqttpublishinit). |
 
 ###### Returns
 
@@ -315,9 +427,11 @@ subscribe(
 ```
 
 Subscribe to `topic` with the given handler. The topic is prefixed with the configured [MqttConfig.topicPrefix](#topicprefix) before being registered with the broker.
-Multiple handlers may subscribe to the same topic; each gets independent delivery. A tail still carrying a brace is refused through
-[assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic), after the aborted short-circuit, so an unresolved placeholder never becomes a
-subscription.
+Multiple handlers may subscribe to the same topic; each gets independent delivery until [MqttClient.end](#end) begins, from which point no message reaches any
+handler. A tail still carrying a brace is refused through [assertResolvedMqttTopic](mqtt-topics.md#assertresolvedmqtttopic), after the aborted
+short-circuit, so an unresolved placeholder never becomes a subscription.
+
+A handler's failure is reported as [MqttHandler](#mqtthandler) states: at error, or at debug when [MqttClient.end](#end) or the client's abort cut it short.
 
 ###### Parameters
 
@@ -325,7 +439,7 @@ subscription.
 | ------ | ------ | ------ |
 | `topic` | `string` | The relative topic (tail) to subscribe to. |
 | `handler` | [`MqttHandler`](#mqtthandler) | Callback invoked with each received payload. |
-| `init` | [`MqttSubscribeInit`](#mqttsubscribeinit) | Optional per-subscription options. See [MqttSubscribeInit](#mqttsubscribeinit). |
+| `init?` | [`MqttSubscribeInit`](#mqttsubscribeinit) | Optional per-subscription options. See [MqttSubscribeInit](#mqttsubscribeinit). |
 
 ###### Returns
 
@@ -343,7 +457,8 @@ subscribeGet(
 ```
 
 Subscribe to the `/get` child of `topic`. When a `"true"` message arrives on the get topic, the provided `getValue` callback runs and its return value is
-published back on the parent topic. The classic HomeKit "get" pattern, wrapped once.
+published back on the parent topic. The classic HomeKit "get" pattern, wrapped once. Once [MqttClient.end](#end) has begun, no get is answered: the getter does not
+run and nothing is published back. The response's outcome is logged as [MqttGetHandler](#mqttgethandler) states.
 
 ###### Parameters
 
@@ -352,7 +467,7 @@ published back on the parent topic. The classic HomeKit "get" pattern, wrapped o
 | `topic` | `string` | The relative topic (tail); the `/get` suffix is appended automatically. |
 | `type` | `string` | Human-readable label used in log messages (for example, `"Temperature"`). |
 | `getValue` | [`MqttGetHandler`](#mqttgethandler) | Callback returning the current value as a string, invoked on each incoming `"true"` message. |
-| `init` | [`MqttSubscribeInit`](#mqttsubscribeinit) | Optional per-subscription options. See [MqttSubscribeInit](#mqttsubscribeinit). |
+| `init?` | [`MqttSubscribeInit`](#mqttsubscribeinit) | Optional per-subscription options. See [MqttSubscribeInit](#mqttsubscribeinit). |
 
 ###### Returns
 
@@ -374,6 +489,11 @@ Subscribe to the `/set` child of `topic`. Each incoming message invokes `setValu
 capable APIs so the setter's work actually stops when the timeout elapses or the client aborts; signal-unaware setters continue to run but the subscription slot
 is released either way, so a hanging setter cannot tie up the slot indefinitely.
 
+Once [MqttClient.end](#end) has begun, no set is dispatched. A setter already running when it begins carries on, and a publish it issues once the end has
+begun is refused with an [HbpuAbortError](util.md#hbpuaborterror), which [MqttSetHandler](#mqttsethandler)'s log-routing contract reports as a cancellation rather than as a failure. An
+`HbpuAbortError` a setter fails with before the end begins and while the signal it was handed is still live is its own failure, and keeps the error line with its
+reason; once that signal has aborted, on the client's abort or on the setter's own configured `timeout`, the setter reads as cancelled whatever it fails with.
+
 ###### Parameters
 
 | Parameter | Type | Description |
@@ -381,7 +501,7 @@ is released either way, so a hanging setter cannot tie up the slot indefinitely.
 | `topic` | `string` | The relative topic (tail); the `/set` suffix is appended automatically. |
 | `type` | `string` | Human-readable label used in log messages. |
 | `setValue` | [`MqttSetHandler`](#mqttsethandler) | Callback invoked with each received value. Receives three arguments: `(value, rawValue, signal)`. See [MqttSetHandler](#mqttsethandler). |
-| `init` | [`MqttSubscribeSetInit`](#mqttsubscribesetinit) | Optional per-subscription options including a handler-invocation `timeout`. See [MqttSubscribeSetInit](#mqttsubscribesetinit). |
+| `init?` | [`MqttSubscribeSetInit`](#mqttsubscribesetinit) | Optional per-subscription options including a handler-invocation `timeout`. See [MqttSubscribeSetInit](#mqttsubscribesetinit). |
 
 ###### Returns
 
@@ -425,6 +545,7 @@ Construction-time options for [MqttClient](#mqttclient).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
+| <a id="clock"></a> `clock?` | [`Clock`](clock.md#clock) | Optional. The time source the grace of [MqttClient.end](#end) is armed on. Defaults to [!systemClock \| systemClock](#clock). |
 | <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) composed with the client's internal controller. When the parent aborts, the MQTT connection ends permanently. |
 
 ***
@@ -461,14 +582,14 @@ Per-publish options accepted by [MqttClient.publish](#publish) and [MqttClient.p
 
 ### MqttSubscribeInit
 
-Per-subscription options accepted by [MqttClient.subscribe](#subscribe), [MqttClient.subscribeGet](#subscribeget), [MqttClient.subscribeSet](#subscribeset), and
-[MqttClient.onConnect](#onconnect).
+Per-subscription options accepted by [MqttClient.subscribe](#subscribe), [MqttClient.subscribeGet](#subscribeget), [MqttClient.subscribeSet](#subscribeset),
+[MqttClient.onConnect](#onconnect), and [MqttClient.onEnd](#onend).
 
 #### Properties
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="signal-3"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). When it aborts, the specific handler is removed and (if it was the last handler on the topic) the underlying MQTT subscription is dropped. Composes with the connection-level signal: a client-level abort removes every handler regardless of per-subscription state. On [MqttClient.onConnect](#onconnect) what the signal releases is the connect registration alone - no broker subscription stands behind one, so nothing reaches the wire when it aborts. |
+| <a id="signal-3"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). When it aborts, the specific handler is removed and (if it was the last handler on the topic) the underlying MQTT subscription is dropped. Composes with the connection-level signal: a client-level abort removes every handler regardless of per-subscription state. On [MqttClient.onConnect](#onconnect) and [MqttClient.onEnd](#onend) what the signal releases is the registration alone - no broker subscription stands behind one, so nothing reaches the wire when it aborts. |
 
 ***
 
@@ -534,10 +655,42 @@ type MqttConnectHandler = () =>
   | void;
 ```
 
-A handler invoked by [MqttClient.onConnect](#onconnect) each time the client establishes a session with the broker.
+A handler invoked by [MqttClient.onConnect](#onconnect) each time the client establishes a session with the broker, until [MqttClient.end](#end) begins: a session
+established during the end invokes none.
 
 It takes no argument because a first connect and a reconnect are the same event here: mqtt.js does not tell the two apart, and a consumer restating held state has
 the same work to do either way. Returning a promise is supported, and the client does not await it, so one handler's pace never sets another's.
+
+#### Returns
+
+  \| [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
+  \| `void`
+
+***
+
+### MqttEndHandler
+
+```ts
+type MqttEndHandler = (signal) => 
+  | Promise<void>
+  | void;
+```
+
+A handler invoked by [MqttClient.end](#end) to state a plugin's final words, registered through [MqttClient.onEnd](#onend).
+
+It receives the signal of the end's window, which closes when the grace runs out or the client is torn down, whichever comes first. Hand that signal itself to
+every publish the handler issues, because once the end has begun a publish under any other signal, or under none, is refused, which is what keeps a state loop
+still running from restating a value behind the word. Return the promise of those words: the end waits on that promise, and a word still unsettled when the
+window closes comes back as a refusal rather than holding shutdown. State the words without `ifChanged`, because the change gate weighs a word against whatever
+the topic was last issued with, a publish the plugin's own teardown cancelled in the same turn included, and can suppress it. A handler never awaits `end()`,
+which waits on the handler, so awaiting it would hold the end until the grace runs out. Nor can a word wait on an inbound reply, since no inbound message is
+dispatched once the end has begun.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `signal` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The end's window, which aborts when the grace runs out or the client is torn down. |
 
 #### Returns
 
@@ -552,8 +705,12 @@ the same work to do either way. Returning a promise is supported, and the client
 type MqttGetHandler = () => string;
 ```
 
-A handler invoked by [MqttClient.subscribeGet](#subscribeget) when a "true" message arrives on the `/get` topic. Returns the current value as a string that will be published
-on the parent topic as the response.
+A handler invoked by [MqttClient.subscribeGet](#subscribeget) when a "true" message arrives on the `/get` topic, until [MqttClient.end](#end) begins, from which point no get
+is answered. Returns the current value as a string that will be published on the parent topic as the response.
+
+Its value goes back as a response publish, whose outcome is logged once it settles: at info as `"MQTT: X status published."` when it went out, and at error as
+`"MQTT: failed to publish X status: message."` when it failed. A response the client's own lifecycle cut short - one [MqttClient.end](#end) refused, or any that fails
+once the client has aborted - is no failure, and is logged at debug as `"MQTT: get response for X was cancelled before completion."` instead.
 
 #### Returns
 
@@ -570,6 +727,11 @@ type MqttHandler = (payload) =>
 ```
 
 A handler for raw MQTT messages delivered on a subscribed topic.
+
+A handler that throws, or whose promise rejects, is logged at error as `"MQTT: handler for X threw: message."` and disturbs neither the connection nor the handlers
+beside it. One that fails with an [HbpuAbortError](util.md#hbpuaborterror) once [MqttClient.end](#end) has begun, or fails in any way once the client has aborted - a publish it issued
+that the end refused, or one the abort cut short, among them - was cut short by the client's own lifecycle rather than failing, and is logged at debug as
+`"MQTT: handler for X was cancelled before completion."` instead.
 
 #### Parameters
 
@@ -592,7 +754,8 @@ type MqttSetHandler = (value, rawValue, signal) =>
   | void;
 ```
 
-A handler invoked by [MqttClient.subscribeSet](#subscribeset) when a value is received on the `/set` topic.
+A handler invoked by [MqttClient.subscribeSet](#subscribeset) when a value is received on the `/set` topic, until [MqttClient.end](#end) begins, from which point no set is
+dispatched.
 
 Receives three arguments:
 
@@ -607,11 +770,17 @@ Receives three arguments:
 **Log-routing contract.** How the setter settles determines which log line `subscribeSet` emits:
 
 - **Return normally** (work completed successfully) - logs INFO `"MQTT: set message received for X: value."`.
-- **Throw a non-abort error** (work failed for a reason unrelated to cancellation) - logs ERROR `"MQTT: error setting X to value: message."`.
-- **Throw while the composed signal is already aborted** (the connection-level abort or the per-invocation timeout, whichever fired first) - logs WARN
-  `"MQTT: set handler for X was cancelled before completion."`, regardless of what value is thrown. A setter that catches its own abort and returns normally
-  is indistinguishable to the wrapper from a successful completion, which is why a signal-aware setter that wants cancellation reflected in the log stream
-  should rethrow once it observes the signal has aborted, rather than swallow it.
+- **Throw while the composed signal is live** (work failed for a reason of its own) - logs ERROR `"MQTT: error setting X to value: message."`, naming the
+  reason. An [HbpuAbortError](util.md#hbpuaborterror) takes this line too, the setter's own work timing out with `HbpuAbortError("timeout")` among them, unless the next case
+  holds.
+- **Throw while the composed signal is already aborted** (the connection-level abort or the per-invocation timeout, whichever fired first), whatever value is
+  thrown, **or throw an [HbpuAbortError](util.md#hbpuaborterror) once [MqttClient.end](#end) has begun**, a publish the setter issued that the end refused among them - logs WARN
+  `"MQTT: set handler for X was cancelled before completion."`. A setter that catches its own abort and returns normally is indistinguishable to the wrapper
+  from a successful completion, which is why a signal-aware setter that wants cancellation reflected in the log stream should rethrow once it observes the
+  signal has aborted, rather than swallow it.
+
+A raw handler, a connect handler and a get's response that the client's abort or its end cuts short are read by the same rule, and each is reported at debug where a
+setter warns.
 
 #### Parameters
 
@@ -882,7 +1051,7 @@ The MQTT feature-option group [mqttFeatureOptions](#mqttfeatureoptions) returns:
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TMeta` | `unknown` | The concrete type of the opaque meta annotation the composing plugin's catalog carries, mirroring [FeatureOptionEntry](featureOptions.md#featureoptionentry) and [FeatureCategoryEntry](featureOptions.md#featurecategoryentry) so both halves of the group speak the same channel. Defaults to `unknown`, which is what an un-parameterized call resolves to. |
+| <a id="type-parameter-tmeta"></a> `TMeta` | `unknown` | The concrete type of the opaque meta annotation the composing plugin's catalog carries, mirroring [FeatureOptionEntry](featureOptions.md#featureoptionentry) and [FeatureCategoryEntry](featureOptions.md#featurecategoryentry) so both halves of the group speak the same channel. Defaults to `unknown`, which is what an un-parameterized call resolves to. |
 
 #### Properties
 
@@ -977,7 +1146,7 @@ alone.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TMeta` | `unknown` | The concrete type of the opaque meta annotation the composing plugin's catalog carries, threaded onto both halves of the group so the result assigns straight into a `FeatureOptionEntry<TMeta>[]` catalog rather than needing a bridge on the plugin side. Defaults to `unknown`, which is what an un-parameterized call resolves to; the group sets no `meta` of its own, so the parameter is a compile-time thread with nothing behind it at runtime. |
+| <a id="type-parameter-tmeta-1"></a> `TMeta` | `unknown` | The concrete type of the opaque meta annotation the composing plugin's catalog carries, threaded onto both halves of the group so the result assigns straight into a `FeatureOptionEntry<TMeta>[]` catalog rather than needing a bridge on the plugin side. Defaults to `unknown`, which is what an un-parameterized call resolves to; the group sets no `meta` of its own, so the parameter is a compile-time thread with nothing behind it at runtime. |
 
 #### Parameters
 

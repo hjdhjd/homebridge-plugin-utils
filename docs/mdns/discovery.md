@@ -43,7 +43,7 @@ the browser's own suite, plus the consumer's classification and the one boundary
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The consumer's device type. |
+| <a id="type-parameter-t"></a> `T` | The consumer's device type. |
 
 #### Properties
 
@@ -67,13 +67,14 @@ A live discovery: the stream of what changed, the snapshot of what is there, and
 
 #### Extends
 
-- `AsyncIterable`\<[`MdnsDiscoveryEvent`](#mdnsdiscoveryevent)\<`T`\>\>.[`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose)
+- `AsyncIterable`\<[`MdnsDiscoveryEvent`](#mdnsdiscoveryevent)\<`T`\>\>
+- [`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose)
 
 #### Type Parameters
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The consumer's device type. |
+| <a id="type-parameter-t-1"></a> `T` | The consumer's device type. |
 
 #### Properties
 
@@ -130,7 +131,7 @@ One change to the set of devices. A `lost` event carries the device alone, becau
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The consumer's device type. |
+| <a id="type-parameter-t-2"></a> `T` | The consumer's device type. |
 
 ***
 
@@ -146,7 +147,7 @@ Browse a service type and project what turns up through the consumer's own `clas
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The consumer's device type. |
+| <a id="type-parameter-t-3"></a> `T` | The consumer's device type. |
 
 #### Parameters
 

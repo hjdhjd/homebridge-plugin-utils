@@ -56,7 +56,7 @@ Construct a configurable recording-process fake.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | [`TestRecordingProcessInit`](#testrecordingprocessinit) | Optional configuration. See [TestRecordingProcessInit](#testrecordingprocessinit). Every field defaults, so a bare `new TestRecordingProcess()` is valid. |
+| `init?` | [`TestRecordingProcessInit`](#testrecordingprocessinit) | Optional configuration. See [TestRecordingProcessInit](#testrecordingprocessinit). Every field defaults, so a bare `new TestRecordingProcess()` is valid. |
 
 ###### Returns
 
@@ -66,9 +66,9 @@ Construct a configurable recording-process fake.
 
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="abortcalls"></a> `abortCalls` | `readonly` | `unknown`[] | `[]` | - |
-| <a id="stdin"></a> `stdin` | `readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | `undefined` | Writable standard input stream the recording bytes are fed into. |
-| <a id="stdinwrites"></a> `stdinWrites` | `readonly` | `Buffer`\<`ArrayBufferLike`\>[] | `[]` | - |
+| <a id="abortcalls"></a> `abortCalls` | `public readonly` | `unknown`[] | `[]` | - |
+| <a id="stdin"></a> `stdin` | `public readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | `undefined` | Writable standard input stream the recording bytes are fed into. |
+| <a id="stdinwrites"></a> `stdinWrites` | `public readonly` | `Buffer`\<`ArrayBufferLike`\>[] | `[]` | - |
 
 #### Accessors
 
@@ -216,7 +216,7 @@ the simplification is invisible to it; a future `segments()`-first consumer must
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this process's own signal; aborting either terminates this generator call. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this process's own signal; aborting either terminates this generator call. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -244,7 +244,7 @@ never resolved, and hands over one that resolved before the abort; this double's
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this process's own signal; aborting either terminates this generator call. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this process's own signal; aborting either terminates this generator call. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -298,7 +298,7 @@ Construct a recording-process factory fake.
 
 | Property | Modifier | Type | Default value |
 | ------ | ------ | ------ | ------ |
-| <a id="createcalls"></a> `createCalls` | `readonly` | \{ `init`: [`FfmpegRecordingInit`](record.md#ffmpegrecordinginit); `options`: [`FfmpegOptions`](options.md#ffmpegoptions); `process`: [`TestRecordingProcess`](#testrecordingprocess); \}[] | `[]` |
+| <a id="createcalls"></a> `createCalls` | `public readonly` | \{ `init`: [`FfmpegRecordingInit`](record.md#ffmpegrecordinginit); `options`: [`FfmpegOptions`](options.md#ffmpegoptions); `process`: [`TestRecordingProcess`](#testrecordingprocess); \}[] | `[]` |
 
 #### Methods
 

@@ -58,15 +58,13 @@ Construct a new authentication error.
 
 ###### Overrides
 
-```ts
-Error.constructor
-```
+`Error.constructor`
 
 #### Properties
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="kind"></a> `kind` | `readonly` | [`LogAuthErrorKind`](#logautherrorkind-1) | The failure classification. `"permanent"` failures must not be retried; `"transient"` failures may be. |
+| <a id="kind"></a> `kind` | `public readonly` | [`LogAuthErrorKind`](#logautherrorkind-1) | The failure classification. `"permanent"` failures must not be retried; `"transient"` failures may be. |
 
 ***
 

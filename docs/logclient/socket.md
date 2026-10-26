@@ -88,7 +88,7 @@ attempt is already in flight (unless the signal was pre-aborted, in which case t
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this socket's lifetime. Aborts exactly once - when [LogSocket.abort](#abort) is called, the parent signal fires, or the reconnect loop gives up on a permanent failure - and `signal.reason` names the cause. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this socket's lifetime. Aborts exactly once - when [LogSocket.abort](#abort) is called, the parent signal fires, or the reconnect loop gives up on a permanent failure - and `signal.reason` names the cause. |
 
 #### Accessors
 
@@ -138,7 +138,7 @@ The number of stdout lines dropped because the consumer fell behind the high-wat
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the socket (defaulting to `"shutdown"`) and awaits the reconnect loop's completion before returning, so callers using
@@ -152,9 +152,7 @@ A promise that resolves once the reconnect loop has fully exited.
 
 ###### Implementation of
 
-```ts
-LogSocketLike.[asyncDispose]
-```
+`LogSocketLike.[asyncDispose]`
 
 ##### abort()
 
@@ -656,7 +654,7 @@ yields the exact, deterministic 500, 1000, 2000, 4000, 5000, 5000, ... sequence.
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `attempt` | `number` | `undefined` | The 1-indexed connect attempt about to run. Called only for the second and later attempts (the first runs with no wait). |
-| `random` | () => `number` | `Math.random` | Source of `[0, 1)` randomness for the jitter. Defaults to `Math.random`; held fixed in tests for a deterministic schedule. |
+| `random?` | () => `number` | `Math.random` | Source of `[0, 1)` randomness for the jitter. Defaults to `Math.random`; held fixed in tests for a deterministic schedule. |
 
 #### Returns
 

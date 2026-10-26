@@ -44,7 +44,7 @@ Construct a log-socket double.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | [`TestLogSocketInit`](#testlogsocketinit) | Optional configuration. See [TestLogSocketInit](#testlogsocketinit). Every field defaults, so a bare `new TestLogSocket()` is valid. |
+| `init?` | [`TestLogSocketInit`](#testlogsocketinit) | Optional configuration. See [TestLogSocketInit](#testlogsocketinit). Every field defaults, so a bare `new TestLogSocket()` is valid. |
 
 ###### Returns
 
@@ -54,7 +54,7 @@ Construct a log-socket double.
 
 | Property | Modifier | Type | Default value |
 | ------ | ------ | ------ | ------ |
-| <a id="abortcalls"></a> `abortCalls` | `readonly` | `unknown`[] | `[]` |
+| <a id="abortcalls"></a> `abortCalls` | `public readonly` | `unknown`[] | `[]` |
 
 #### Accessors
 
@@ -123,7 +123,7 @@ The composed abort signal representing the socket's lifetime. Aborts exactly onc
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the socket (defaulting to `"shutdown"`).
@@ -136,9 +136,7 @@ A resolved promise once the abort has been issued.
 
 ###### Implementation of
 
-```ts
-LogSocketLike.[asyncDispose]
-```
+`LogSocketLike.[asyncDispose]`
 
 ##### abort()
 
@@ -218,7 +216,7 @@ Construct a log-socket-factory double.
 
 | Property | Modifier | Type | Default value |
 | ------ | ------ | ------ | ------ |
-| <a id="createcalls"></a> `createCalls` | `readonly` | \{ `init`: [`LogSocketInit`](socket.md#logsocketinit); `socket`: [`TestLogSocket`](#testlogsocket); \}[] | `[]` |
+| <a id="createcalls"></a> `createCalls` | `public readonly` | \{ `init`: [`LogSocketInit`](socket.md#logsocketinit); `socket`: [`TestLogSocket`](#testlogsocket); \}[] | `[]` |
 
 #### Methods
 
@@ -275,7 +273,7 @@ Construct a controllable WebSocket double.
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `url` | `string` | `""` | The connect URL the factory was asked to build. Defaults to an empty string for tests that do not assert on the URL. |
+| `url?` | `string` | `""` | The connect URL the factory was asked to build. Defaults to an empty string for tests that do not assert on the URL. |
 
 ###### Returns
 
@@ -285,9 +283,9 @@ Construct a controllable WebSocket double.
 
 | Property | Modifier | Type | Default value |
 | ------ | ------ | ------ | ------ |
-| <a id="closecodes"></a> `closeCodes` | `readonly` | `number`[] | `[]` |
-| <a id="sent"></a> `sent` | `readonly` | `string`[] | `[]` |
-| <a id="url"></a> `url` | `readonly` | `string` | `undefined` |
+| <a id="closecodes"></a> `closeCodes` | `public readonly` | `number`[] | `[]` |
+| <a id="sent"></a> `sent` | `public readonly` | `string`[] | `[]` |
+| <a id="url"></a> `url` | `public readonly` | `string` | `undefined` |
 
 #### Accessors
 
@@ -422,7 +420,7 @@ records a second code.
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `code` | `number` | `1000` | The close code. Defaults to 1000 (normal closure), matching the platform default. |
+| `code?` | `number` | `1000` | The close code. Defaults to 1000 (normal closure), matching the platform default. |
 
 ###### Returns
 
@@ -444,7 +442,7 @@ Dispatch a `close` event to every registered close listener and flip `readyState
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `code` | `number` | `1000` | The close code to deliver. Defaults to 1000. |
+| `code?` | `number` | `1000` | The close code to deliver. Defaults to 1000. |
 
 ###### Returns
 
@@ -462,7 +460,7 @@ Dispatch an `error` event to every registered error listener, simulating a trans
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `event` | `unknown` | The error event payload. Defaults to an object carrying an `error` field, the shape the socket's error describer reads. |
+| `event?` | `unknown` | The error event payload. Defaults to an object carrying an `error` field, the shape the socket's error describer reads. |
 
 ###### Returns
 
@@ -552,9 +550,9 @@ Construct a WebSocket-factory double.
 
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="create-1"></a> `create` | `readonly` | (`url`) => [`WebSocketLike`](socket.md#websocketlike) | `undefined` | The [WebSocketFactory](socket.md#websocketfactory-1) function this double exposes. Bound as an arrow property so it can be passed directly as the `webSocketFactory` dependency-inversion boundary without losing `this`. |
-| <a id="sockets"></a> `sockets` | `readonly` | [`TestWebSocket`](#testwebsocket)[] | `[]` | - |
-| <a id="urls"></a> `urls` | `readonly` | `string`[] | `[]` | - |
+| <a id="create-1"></a> `create` | `public readonly` | (`url`) => [`WebSocketLike`](socket.md#websocketlike) | `...` | The [WebSocketFactory](socket.md#websocketfactory-1) function this double exposes. Bound as an arrow property so it can be passed directly as the `webSocketFactory` dependency-inversion boundary without losing `this`. |
+| <a id="sockets"></a> `sockets` | `public readonly` | [`TestWebSocket`](#testwebsocket)[] | `[]` | - |
+| <a id="urls"></a> `urls` | `public readonly` | `string`[] | `[]` | - |
 
 #### Methods
 

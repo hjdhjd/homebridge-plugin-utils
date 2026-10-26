@@ -21,7 +21,7 @@ writes no heading above a region it declares nothing for.
 
 That block is the one row this module emits from its own knowledge rather than from the catalog. Its words come from the same constants the client publishes, so
 the statement a plugin's document makes and the statement on the wire cannot drift. A plugin's per-device availability rows are a separate matter and come from
-the catalog like every other row, through the shipped [mqttAvailabilityEntry](mqtt-topics.md#mqttavailabilityentry) a plugin spreads into it.
+the catalog like every other row, through the shipped [mqttAvailabilityEntry](mqtt-topics.md#mqttavailabilityentry-1) a plugin spreads into it.
 
 What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when it
 declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. A row credits the kinds its verb's narrowing

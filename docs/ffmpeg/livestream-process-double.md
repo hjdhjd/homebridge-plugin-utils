@@ -73,7 +73,7 @@ Construct a double.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The parent signal the real process would compose into its lifetime: the one a consumer passes in its [FfmpegLivestreamInit](record.md#ffmpeglivestreaminit). Aborting it ends the double with that signal's reason. |
 
 ###### Returns
@@ -84,7 +84,7 @@ Construct a double.
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing this double's lifetime, composed from the parent signal the constructor received and this double's own, as the real process composes its parent with its own. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing this double's lifetime, composed from the parent signal the constructor received and this double's own, as the real process composes its parent with its own. |
 
 #### Accessors
 
@@ -108,7 +108,7 @@ is the one act this double records.
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation: it records the call and ends the lifetime as [TestLivestreamProcess.abort](#abort) does with no reason, defaulting to
@@ -123,9 +123,7 @@ A promise that resolves once the abort has run.
 
 ###### Implementation of
 
-```ts
-LivestreamProcess.[asyncDispose]
-```
+`LivestreamProcess.[asyncDispose]`
 
 ##### abort()
 
@@ -237,7 +235,7 @@ signal aborts.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this double's own signal; aborting it terminates only this generator call, not the double. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this double's own signal; aborting it terminates only this generator call, not the double. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -264,7 +262,7 @@ initialization item and every segment fed, then returns.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this double's own signal; aborting it terminates only this generator call, not the double. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with this double's own signal; aborting it terminates only this generator call, not the double. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -310,7 +308,7 @@ new TestLivestreamProcessFactory(): TestLivestreamProcessFactory;
 
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="createcalls"></a> `createCalls` | `readonly` | \{ `init`: [`FfmpegLivestreamInit`](record.md#ffmpeglivestreaminit); `options`: [`FfmpegOptions`](options.md#ffmpegoptions); `process`: [`TestLivestreamProcess`](#testlivestreamprocess); \}[] | `[]` | Every create call's options and init and the process it answered, in order, so a test can assert the boundary was reached with what it expected and can drive the process that came back. |
+| <a id="createcalls"></a> `createCalls` | `public readonly` | \{ `init`: [`FfmpegLivestreamInit`](record.md#ffmpeglivestreaminit); `options`: [`FfmpegOptions`](options.md#ffmpegoptions); `process`: [`TestLivestreamProcess`](#testlivestreamprocess); \}[] | `[]` | Every create call's options and init and the process it answered, in order, so a test can assert the boundary was reached with what it expected and can drive the process that came back. |
 
 #### Methods
 

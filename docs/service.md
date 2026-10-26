@@ -27,7 +27,7 @@ created service takes and an optional callback fired only on creation.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `T` *extends* `Service` | `Service` | The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back. |
+| <a id="type-parameter-t"></a> `T` *extends* `Service` | `Service` | The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back. |
 
 #### Properties
 
@@ -51,7 +51,7 @@ acquisition and a validated service that already existed or was just created are
 
 | Type Parameter | Default type |
 | ------ | ------ |
-| `T` *extends* `Service` | `Service` |
+| <a id="type-parameter-t-1"></a> `T` *extends* `Service` | `Service` |
 
 #### Properties
 
@@ -75,7 +75,7 @@ same type.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `T` *extends* `Service` | `Service` | The concrete Service subclass being looked up. Inferred from `serviceType` so callers receive the specific subclass type back. |
+| <a id="type-parameter-t-2"></a> `T` *extends* `Service` | `Service` | The concrete Service subclass being looked up. Inferred from `serviceType` so callers receive the specific subclass type back. |
 
 #### Properties
 
@@ -95,7 +95,7 @@ The facts about a device that [notResponding](#notresponding) binds once: the cl
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="errorclass"></a> `errorClass` | `readonly` | (`status`) => `Error` | The plugin's `api.hap.HapStatusError`, typed by its constructor shape so a plugin's own status-error double fits it as readily as the HAP class does. The type describes the constructor and not what it does with what it is handed, so a class that ignores the status satisfies it too...the tests assert the status a refusal carries rather than only the class it is an instance of. |
+| <a id="errorclass"></a> `errorClass` | `readonly` | new (`status`) => `Error` | The plugin's `api.hap.HapStatusError`, typed by its constructor shape so a plugin's own status-error double fits it as readily as the HAP class does. The type describes the constructor and not what it does with what it is handed, so a class that ignores the status satisfies it too...the tests assert the status a refusal carries rather than only the class it is an instance of. |
 | <a id="status"></a> `status?` | `readonly` | `HAPStatus` | The HAP status a refusal carries. Defaults to `HAPStatus.SERVICE_COMMUNICATION_FAILURE`, the status HomeKit renders as Not Responding, so a consumer names one only when it means a different status. |
 | <a id="unavailable"></a> `unavailable` | `readonly` | () => `boolean` | The plugin's own availability composition, answering `true` while the device cannot be reached. It is read on each wrapped call rather than captured when the wrapper is built: a device that goes offline refuses the very next call, and one that comes back answers it. |
 
@@ -145,7 +145,7 @@ says it should exist, plus the verdict itself.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `T` *extends* `Service` | `Service` | The concrete Service subclass being reconciled. Inferred from `serviceType` so callers receive the specific subclass type back. |
+| <a id="type-parameter-t-3"></a> `T` *extends* `Service` | `Service` | The concrete Service subclass being reconciled. Inferred from `serviceType` so callers receive the specific subclass type back. |
 
 #### Properties
 
@@ -163,7 +163,7 @@ says it should exist, plus the verdict itself.
 ### AcquireServiceTarget
 
 ```ts
-type AcquireServiceTarget<T> = WithUUID<typeof Service> & (displayName?, subtype?) => T;
+type AcquireServiceTarget<T> = WithUUID<typeof Service> & (new (displayName?, subtype?) => T);
 ```
 
 The constructor shape [acquireService](#acquireservice) expects for a Service subclass. Every HAP Service subclass (Lightbulb, Switch, Television, ...) satisfies both halves
@@ -181,7 +181,7 @@ assertion.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `T` *extends* `Service` | `Service` | The concrete Service subclass produced by the constructor. Inferred from the call site so callers receive the specific subclass type back. |
+| <a id="type-parameter-t-4"></a> `T` *extends* `Service` | `Service` | The concrete Service subclass produced by the constructor. Inferred from the call site so callers receive the specific subclass type back. |
 
 ***
 
@@ -200,7 +200,7 @@ and it is read from HAP's own type so HAP stays the source of truth for it.
 ### CharacteristicTarget
 
 ```ts
-type CharacteristicTarget = WithUUID<typeof Characteristic> & () => Characteristic;
+type CharacteristicTarget = WithUUID<typeof Characteristic> & (new () => Characteristic);
 ```
 
 The characteristic class both HAP calls in [updateServices](#updateservices) are handed: `testCharacteristic` matches a service's attached characteristics against the class's
@@ -264,7 +264,7 @@ leaves a service behind to read. Reading `transition` narrows `service`: a check
 
 | Type Parameter | Default type |
 | ------ | ------ |
-| `T` *extends* `Service` | `Service` |
+| <a id="type-parameter-t-5"></a> `T` *extends* `Service` | `Service` |
 
 ***
 
@@ -282,7 +282,7 @@ specified name and added where necessary; re-acquiring an existing service retur
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `Service` | The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back rather than the wider `Service` type. |
+| <a id="type-parameter-t-6"></a> `T` *extends* `Service` | The concrete Service subclass being acquired. Inferred from `serviceType` so callers receive the specific subclass type back rather than the wider `Service` type. |
 
 #### Parameters
 
@@ -405,7 +405,7 @@ than delegating it.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `Service` | The concrete Service subclass being looked up. Inferred from `serviceType` so callers receive the specific subclass type back. |
+| <a id="type-parameter-t-7"></a> `T` *extends* `Service` | The concrete Service subclass being looked up. Inferred from `serviceType` so callers receive the specific subclass type back. |
 
 #### Parameters
 
@@ -504,10 +504,48 @@ capabilityGate - the same bind-once shape, applied to whether a service should e
 
 ***
 
+### presenceChanged()
+
+```ts
+function presenceChanged(transition): boolean;
+```
+
+Answer whether a presence gate changed what HAP serializes for the service, the question a persistence save keys on: `attached` and `removed` put something on
+or took something off, so the accessory cache holds a stale copy until it is saved, while `kept` and `absent` left the service as the gate found it.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `transition` | [`PresenceTransition`](#presencetransition) | The transition a presence gate answered. See [PresenceTransition](#presencetransition). |
+
+#### Returns
+
+`boolean`
+
+`true` for `"attached"` and `"removed"`, and `false` for `"kept"` and `"absent"`.
+
+#### Remarks
+
+A plugin that saves through [AccessoryPersistence](accessory-persistence.md#accessorypersistence) marks the accessory wherever a gate's answer reads `true`
+here, so every gate reaches the save through one spelling of the check rather than a comparison against the transition's literals at each call site.
+
+#### Example
+
+```typescript
+// Save the accessory when the gate attached or removed the characteristic, and leave the cache alone when it kept or never had it.
+if(presenceChanged(validCharacteristic({ characteristic: Characteristic.StatusTampered, service, validate: tamperEnabled }))) {
+
+  this.platform.persistence.persist(accessory);
+}
+```
+
+***
+
 ### setAccessoryName()
 
 ```ts
-function setAccessoryName(accessory, name): void;
+function setAccessoryName(accessory, name): boolean;
 ```
 
 Updates the display name of an accessory and of its AccessoryInformation service to the specified value.
@@ -521,14 +559,22 @@ Updates the display name of an accessory and of its AccessoryInformation service
 
 #### Returns
 
-`void`
+`boolean`
+
+True when the call wrote anything, a display name or a characteristic, and false when every name already carried the sanitized name or nothing was
+left after sanitizing.
 
 #### Remarks
 
 An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to two names. This writes all
 of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName` owns the accessory display names (the
 `PlatformAccessory`'s own and the HAP accessory's beneath it), and [setServiceName](#setservicename) owns the AccessoryInformation service's `ConfiguredName` and `Name`
-characteristics. `ConfiguredName` is what makes a rename stick in the Home app, since it is the name a user can edit there.
+characteristics. `ConfiguredName` is what makes a rename stick in the Home app, since it is the name a user can edit there, so whether to sync a device's name
+at all stays the plugin's policy: a call with the device's name replaces a name the user gave the accessory.
+
+Each name is compared before it is written, and only what differs is written, so a plugin calls this on every refresh of a device's name and saves the accessory
+only when the answer is true, with no comparison of its own. A comparison of its own would misread a fresh accessory: HAP seeds the information service's `Name`
+with the display name, so a fresh accessory already reads as named while it still lacks the `ConfiguredName` this adds.
 
 The name is sanitized through the same HomeKit naming rules [acquireService](#acquireservice) applies, so a caller may pass a raw device name straight through. A name with
 nothing left after sanitizing is not applied anywhere: an accessory has to answer to something, and a blank one is worse than the name it already had.
@@ -536,8 +582,11 @@ nothing left after sanitizing is not applied anywhere: an accessory has to answe
 #### Example
 
 ```typescript
-// Rename an accessory after the device reports a new name.
-setAccessoryName(accessory, device.name);
+// Rename an accessory after the device reports a new name, and save it to Homebridge's accessory cache only when the rename changed something.
+if(setAccessoryName(accessory, device.name)) {
+
+  this.platform.persistence.persist(accessory);
+}
 ```
 
 #### See
@@ -550,7 +599,7 @@ setAccessoryName(accessory, device.name);
 ### setServiceName()
 
 ```ts
-function setServiceName(service, name): void;
+function setServiceName(service, name): boolean;
 ```
 
 Updates the displayName and applicable name characteristics of a service to the specified value.
@@ -564,12 +613,37 @@ Updates the displayName and applicable name characteristics of a service to the 
 
 #### Returns
 
-`void`
+`boolean`
+
+True when the call wrote anything, the display name or a characteristic, and false when each already carried the sanitized name or nothing was left
+after sanitizing.
 
 #### Remarks
 
-This function ensures the name is validated, updates the service's `displayName`, and sets the `ConfiguredName` and `Name`
-characteristics when supported by the service type.
+This function ensures the name is validated, then compares the service's `displayName`, and its `ConfiguredName` and `Name` characteristics, against it, writing
+only those that differ. A name characteristic the service carries is kept in step whatever the service's kind, and one it lacks is added where the kind supports
+it, registered first as one of the service's optional characteristics, so HAP adds it without a warning, on a service restored from the accessory cache too.
+Each characteristic's presence is read before its value, because HAP's `getCharacteristic` attaches whatever it is asked for, so a missing one is always added
+as a reported write rather than silently by the read, and one the kind does not support is never added at all. A plugin calls this on every refresh of a name and
+saves the accessory only when the answer is true, with no comparison of its own. Whether to sync a device's name at all stays the plugin's policy, because
+`ConfiguredName` is a name a controller can write, so a call with the device's name replaces a name the user gave the service.
+
+HAP cuts a name characteristic's value past the characteristic's maximum length, its own `maxLen` or HAP's default for a string, so each characteristic is
+written and compared in that cut form, with any end HomeKit's naming rule forbids stripped from the cut...a long name is written once, with no warning from HAP,
+and reads as unchanged afterward. The display name carries the whole name.
+
+A name with nothing left after sanitizing is not applied, as [setAccessoryName](#setaccessoryname) refuses one: a service has to answer to something, and a blank name is worse
+than the one it already carries.
+
+#### Example
+
+```typescript
+// Rename a service after the device reports a new name for it, and save the accessory only when the rename changed something.
+if(setServiceName(service, zone.name)) {
+
+  this.platform.persistence.persist(accessory);
+}
+```
 
 #### See
 
@@ -582,7 +656,7 @@ characteristics when supported by the service type.
 ### updatePresenceCharacteristic()
 
 ```ts
-function updatePresenceCharacteristic(options): void;
+function updatePresenceCharacteristic(options): PresenceTransition;
 ```
 
 Reconcile one characteristic's presence on a service against the reading behind it, applying the same additive-eager / subtractive-conservative asymmetry
@@ -596,7 +670,11 @@ Reconcile one characteristic's presence on a service against the reading behind 
 
 #### Returns
 
-`void`
+[`PresenceTransition`](#presencetransition)
+
+The transition the call performed: `"attached"` or `"kept"` on a reported reading, `"kept"` or `"absent"` on a hold, and `"removed"` or `"absent"` on an
+absent reading from a reachable device. The characteristic is present afterward when the answer is `"attached"` or `"kept"`, and [presenceChanged](#presencechanged) answers
+whether the call changed what HAP serializes. See [PresenceTransition](#presencetransition).
 
 #### Remarks
 
@@ -614,7 +692,14 @@ stacking one, so rebinding every pass is what keeps a pull honest and costs noth
 
 ```typescript
 // Follow one metric's liveness, mapping the sensor's own metric into a reading.
-updatePresenceCharacteristic({ characteristic: Characteristic.PM2_5Density, reachable: this.isReachable, read: () => toReading(this.metric), service });
+const transition = updatePresenceCharacteristic({ characteristic: Characteristic.PM2_5Density, reachable: this.isReachable,
+  read: () => toReading(this.metric), service });
+
+// An attach or a removal changed what the accessory cache holds, so the accessory is marked for a save.
+if(presenceChanged(transition)) {
+
+  this.platform.persistence.persist(this.accessory);
+}
 ```
 
 #### See
@@ -738,7 +823,7 @@ exist and it does not, removes it when the verdict says it should not and it doe
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `Service` | The concrete Service subclass being reconciled. Inferred from `serviceType` so callers receive the specific subclass type back. |
+| <a id="type-parameter-t-8"></a> `T` *extends* `Service` | The concrete Service subclass being reconciled. Inferred from `serviceType` so callers receive the specific subclass type back. |
 
 #### Parameters
 

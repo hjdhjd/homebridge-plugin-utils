@@ -136,7 +136,7 @@ occurred from the return value alone.
 | ------ | ------ | ------ | ------ |
 | `buffer` | `Buffer` | `undefined` | The buffer containing ISO BMFF box data. |
 | `type` | `string` | `undefined` | The 4-character ASCII box type to search for (e.g. "moof", "traf", "trun"). Must be exactly 4 characters. |
-| `start` | `number` | `0` | Optional. The byte offset to begin searching from. Defaults to 0. |
+| `start?` | `number` | `0` | Optional. The byte offset to begin searching from. Defaults to 0. |
 | `end?` | `number` | `undefined` | Optional. The byte offset to stop searching at. Defaults to the buffer length. |
 
 #### Returns

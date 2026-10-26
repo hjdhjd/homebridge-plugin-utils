@@ -107,7 +107,7 @@ has no form. One trailing dot is removed from the host, and a host left empty by
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `address` | `unknown` | The value to read, of any type. |
-| `options` | [`AddressFormOptions`](#addressformoptions) | The scheme the plugin dials the address under, `https` when absent. |
+| `options?` | [`AddressFormOptions`](#addressformoptions) | The scheme the plugin dials the address under, `https` when absent. |
 
 #### Returns
 

@@ -19,6 +19,9 @@ A few details matter here:
   conventions transparently.
 - We MUST call `splitter.flush()` at end-of-response. The splitter withholds a chunk-final lone line-feed pending a possible split `\n\r`/`\r\n` pair in the next
   chunk; at end-of-response no next chunk arrives, so without a flush the final line of the file would be stranded in the carry and silently lost.
+- A silent server fails the download rather than holding it open. Each wait on the server - for the response to begin, and for every read of its body - is bounded by
+  `DOWNLOAD_STALL_MS` through one [Watchdog](../util.md#watchdog), so a transfer that stops partway surfaces as an actionable error instead of an open-ended hang. Only those waits
+  are bounded: while a line is out with the consumer no window runs, so a slow reader downstream is never mistaken for a stalled server.
 
 The transport asks for `colour=yes` (the raw file with ANSI intact) rather than `colour=no`, because the server's color stripping shifts byte offsets, and the ANSI
 color IS the severity-level signal the parser reads. When the log method is `systemd`/`custom` the endpoint returns 400; we map that to a clear "no log file on
@@ -30,7 +33,7 @@ The `fetch` implementation is injected (defaulting to the global `fetch`) so the
 
 ### DownloadLogOptions
 
-Options accepted by [downloadLog](#downloadlog): the connection target plus the raw token, an injectable `fetch` dependency, and an optional abort signal.
+Options accepted by [downloadLog](#downloadlog): the connection target plus the raw token, an injectable `fetch` and time source, and an optional abort signal.
 
 #### Extends
 
@@ -40,6 +43,7 @@ Options accepted by [downloadLog](#downloadlog): the connection target plus the 
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
+| <a id="clock"></a> `clock?` | `readonly` | [`Clock`](../clock.md#clock) | Optional [Clock](../clock.md#clock) the stall bound is armed on. Omitted, the bound runs on real time; a test injects a `TestClock` so a stall is driven by advancing virtual time rather than by waiting. | - |
 | <a id="fetch"></a> `fetch?` | `readonly` | \{ (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; \} | The fetch implementation to use. Defaults to the global `fetch`. Injected so the download flow is testable without a live server. | - |
 | <a id="host"></a> `host` | `readonly` | `string` | The hostname or IP of the homebridge-config-ui-x server. | [`SocketTarget`](endpoints.md#sockettarget).[`host`](endpoints.md#host-1) |
 | <a id="port"></a> `port` | `readonly` | `number` | The TCP port the server listens on. | [`SocketTarget`](endpoints.md#sockettarget).[`port`](endpoints.md#port-1) |
@@ -80,4 +84,5 @@ An async iterable of raw log lines (escapes intact, terminators removed), in fil
 #### Throws
 
 `Error` when the server returns a 400 (the log method is not file-backed, so there is no file to download - the message advises `--follow`), or any other
-        non-2xx status, or when the response carries no body. Propagates `options.signal`'s reason (typically an `HbpuAbortError`) when the signal aborts.
+        non-2xx status, or when the response carries no body, or when the server sends no data for `DOWNLOAD_STALL_MS` while the download waits on it. Propagates
+        `options.signal`'s reason (typically an `HbpuAbortError`) when the signal aborts.

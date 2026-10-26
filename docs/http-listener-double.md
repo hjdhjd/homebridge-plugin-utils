@@ -61,7 +61,7 @@ Construct a double.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | \{ `port?`: `number`; `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional construction options. |
+| `options?` | \{ `port?`: `number`; `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional construction options. |
 | `options.port?` | `number` | The port [TestHttpListener.boundPort](#boundport) reports while the double is live. Defaults to 0, which is what the real class reports before it has bound anything, so a test that asserts on a port passes one of its own. |
 | `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The caller's lifetime, composed into [TestHttpListener.signal](#signal), mirroring the real class's own composition. |
 
@@ -73,9 +73,9 @@ Construct a double.
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="ready"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Mirrors [HttpListener.ready](http-listener.md#ready), and marked handled as that one is. A double is bound the moment it exists, so this resolves on construction; a double built over a lifetime that had already ended rejects with that lifetime's reason, exactly as the real class does when it never gets to call `listen()`. |
-| <a id="routes"></a> `routes` | `readonly` | `ReadonlyMap`\<[`HttpListenerPath`](http-listener.md#httplistenerpath), [`TestHttpListenerRoute`](#testhttplistenerroute-1)\> | The routes currently registered, keyed by exact path or by the catch-all sentinel - the wiring view a test asserts through. It is the same store [TestHttpListener.deliver](#deliver) matches against, so what a test reads and what a delivery meets cannot disagree. Registrations leave it when their handle is disposed and when the double aborts. |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing this double's lifetime, mirroring [HttpListener.signal](http-listener.md#signal). It aborts exactly once - when [TestHttpListener.abort](#abort) is called, when the caller's signal fires, or when the double is disposed. |
+| <a id="ready"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Mirrors [HttpListener.ready](http-listener.md#ready), and marked handled as that one is. A double is bound the moment it exists, so this resolves on construction; a double built over a lifetime that had already ended rejects with that lifetime's reason, exactly as the real class does when it never gets to call `listen()`. |
+| <a id="routes"></a> `routes` | `public readonly` | `ReadonlyMap`\<[`HttpListenerPath`](http-listener.md#httplistenerpath), [`TestHttpListenerRoute`](#testhttplistenerroute-1)\> | The routes currently registered, keyed by exact path or by the catch-all sentinel - the wiring view a test asserts through. It is the same store [TestHttpListener.deliver](#deliver) matches against, so what a test reads and what a delivery meets cannot disagree. Registrations leave it when their handle is disposed and when the double aborts. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing this double's lifetime, mirroring [HttpListener.signal](http-listener.md#signal). It aborts exactly once - when [TestHttpListener.abort](#abort) is called, when the caller's signal fires, or when the double is disposed. |
 
 #### Accessors
 
@@ -113,7 +113,7 @@ has closed.
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation, mirroring the real class's: it aborts the double, defaulting to `"shutdown"`. There is no socket to wait on, so it resolves
@@ -127,9 +127,7 @@ A promise that resolves once the abort has run.
 
 ###### Implementation of
 
-```ts
-AsyncDisposable.[asyncDispose]
-```
+`AsyncDisposable.[asyncDispose]`
 
 ##### abort()
 
@@ -170,7 +168,7 @@ this call rather than becoming the 500 the real class logs and writes.
 | ------ | ------ | ------ | ------ |
 | `path` | [`HttpListenerPath`](http-listener.md#httplistenerpath) | `undefined` | The path the delivery is addressed to. |
 | `request` | [`HttpListenerRequest`](http-listener.md#httplistenerrequest) | `undefined` | The request to hand the matched handler. |
-| `method` | `string` | `"POST"` | The delivery's HTTP method, compared against the matched route's filter. Defaults to `"POST"`. |
+| `method?` | `string` | `"POST"` | The delivery's HTTP method, compared against the matched route's filter. Defaults to `"POST"`. |
 
 ###### Returns
 
@@ -196,7 +194,7 @@ Register a handler for one path, mirroring [HttpListener.route](http-listener.md
 | ------ | ------ | ------ |
 | `path` | [`HttpListenerPath`](http-listener.md#httplistenerpath) | The path to route, or the catch-all sentinel. |
 | `handler` | [`HttpListenerHandler`](http-listener.md#httplistenerhandler) | The function that answers requests to that path. |
-| `options` | [`HttpListenerRouteOptions`](http-listener.md#httplistenerrouteoptions) | Optional per-route options. |
+| `options?` | [`HttpListenerRouteOptions`](http-listener.md#httplistenerrouteoptions) | Optional per-route options. |
 
 ###### Returns
 

@@ -83,7 +83,7 @@ Either input being empty short-circuits: an empty `live` returns `history`, and 
 | ------ | ------ | ------ |
 | `history` | readonly [`LogRecord`](types.md#logrecord)[] | The trailing history records, in chronological order (oldest first). |
 | `live` | readonly [`LogRecord`](types.md#logrecord)[] | The seed-plus-live records, in chronological order (oldest first); its leading records are the seed that overlaps history's tail. |
-| `options` | [`StitchOptions`](#stitchoptions) | Optional bounds. See [StitchOptions](#stitchoptions). |
+| `options?` | [`StitchOptions`](#stitchoptions) | Optional bounds. See [StitchOptions](#stitchoptions). |
 
 #### Returns
 

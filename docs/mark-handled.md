@@ -34,7 +34,7 @@ unhandled-rejection tracker.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The resolved value type. |
+| <a id="type-parameter-t"></a> `T` | The resolved value type. |
 
 #### Parameters
 

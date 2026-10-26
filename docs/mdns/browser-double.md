@@ -76,11 +76,11 @@ Construct a double.
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="options"></a> `options` | `readonly` | [`MdnsBrowserOptions`](browser.md#mdnsbrowseroptions) | The options this double was constructed with, exposed so a test can assert on what the consumer asked for - its service type above all. |
-| <a id="ready"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Mirrors [MdnsBrowser.ready](browser.md#ready), and marked handled as that one is. A double is listening the moment it exists, so this resolves at construction; one built over a lifetime that had already ended rejects with that lifetime's reason, exactly as the real class does when it never gets to bind. |
-| <a id="services"></a> `services` | `readonly` | `ReadonlyMap`\<`string`, [`MdnsService`](browser.md#mdnsservice)\> | The services this double currently holds, keyed by the folded instance name. It is the same store the verbs read and write, so what a test reads and what a delivery meets cannot disagree. |
-| <a id="settled"></a> `settled` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Mirrors [MdnsBrowser.settled](browser.md#settled), and marked handled as that one is. It stays pending until [TestMdnsBrowser.settle](#settle) is called, because when a warmup is over is the test's decision here rather than a clock's, and it rejects with the lifetime's reason when the lifetime ends first. |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing this double's lifetime, composed from the caller's and this double's own, mirroring the real class's composition. |
+| <a id="options"></a> `options` | `public readonly` | [`MdnsBrowserOptions`](browser.md#mdnsbrowseroptions) | The options this double was constructed with, exposed so a test can assert on what the consumer asked for - its service type above all. |
+| <a id="ready"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Mirrors [MdnsBrowser.ready](browser.md#ready), and marked handled as that one is. A double is listening the moment it exists, so this resolves at construction; one built over a lifetime that had already ended rejects with that lifetime's reason, exactly as the real class does when it never gets to bind. |
+| <a id="services"></a> `services` | `public readonly` | `ReadonlyMap`\<`string`, [`MdnsService`](browser.md#mdnsservice)\> | The services this double currently holds, keyed by the folded instance name. It is the same store the verbs read and write, so what a test reads and what a delivery meets cannot disagree. |
+| <a id="settled"></a> `settled` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Mirrors [MdnsBrowser.settled](browser.md#settled), and marked handled as that one is. It stays pending until [TestMdnsBrowser.settle](#settle) is called, because when a warmup is over is the test's decision here rather than a clock's, and it rejects with the lifetime's reason when the lifetime ends first. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing this double's lifetime, composed from the caller's and this double's own, mirroring the real class's composition. |
 
 #### Accessors
 
@@ -103,7 +103,7 @@ get aborted(): boolean;
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation, mirroring the real class's: it aborts the double, defaulting to `"shutdown"`. There is no socket to wait on, so it
@@ -117,9 +117,7 @@ A promise that resolves once the abort has run.
 
 ###### Implementation of
 
-```ts
-MdnsBrowserLike.[asyncDispose]
-```
+`MdnsBrowserLike.[asyncDispose]`
 
 ##### abort()
 
@@ -250,7 +248,7 @@ new TestMdnsBrowserFactory(): TestMdnsBrowserFactory;
 
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="createcalls"></a> `createCalls` | `readonly` | \{ `browser`: [`TestMdnsBrowser`](#testmdnsbrowser); `options`: [`MdnsBrowserOptions`](browser.md#mdnsbrowseroptions); \}[] | `[]` | Every create call's options and the browser it answered, in order, so a test can assert the boundary was reached with the options it expected and can drive the browser that came back. |
+| <a id="createcalls"></a> `createCalls` | `public readonly` | \{ `browser`: [`TestMdnsBrowser`](#testmdnsbrowser); `options`: [`MdnsBrowserOptions`](browser.md#mdnsbrowseroptions); \}[] | `[]` | Every create call's options and the browser it answered, in order, so a test can assert the boundary was reached with the options it expected and can drive the browser that came back. |
 
 #### Methods
 

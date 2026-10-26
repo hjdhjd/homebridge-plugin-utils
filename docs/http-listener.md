@@ -83,8 +83,8 @@ milliseconds, or `port` is not an integer from 0 to 65535. Each refusal names th
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="ready"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves on the first successful bind, and rejects with `signal.reason` if the lifetime ends before one happens. Marked handled, so a consumer that never awaits it - one that simply registers routes and lets the listener come up on its own - does not turn a shutdown into an unhandled rejection. |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this listener's lifetime. Aborts exactly once - when [HttpListener.abort](#abort) is called, when the caller's signal fires, or when the server fails in a way it cannot come back from; `signal.reason` names the cause. |
+| <a id="ready"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves on the first successful bind, and rejects with `signal.reason` if the lifetime ends before one happens. Marked handled, so a consumer that never awaits it - one that simply registers routes and lets the listener come up on its own - does not turn a shutdown into an unhandled rejection. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this listener's lifetime. Aborts exactly once - when [HttpListener.abort](#abort) is called, when the caller's signal fires, or when the server fails in a way it cannot come back from; `signal.reason` names the cause. |
 
 #### Accessors
 
@@ -122,7 +122,7 @@ one it was given.
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the listener (defaulting to `"shutdown"`) and awaits the server's own close, so the port is bindable again by the time
@@ -136,9 +136,7 @@ A promise that resolves once the server has closed.
 
 ###### Implementation of
 
-```ts
-AsyncDisposable.[asyncDispose]
-```
+`AsyncDisposable.[asyncDispose]`
 
 ##### abort()
 
@@ -178,7 +176,7 @@ Register a handler for one path.
 | ------ | ------ | ------ |
 | `path` | [`HttpListenerPath`](#httplistenerpath) | The path to route, exactly as a sender will address it, or [HTTP\_LISTENER\_ANY\_PATH](#http_listener_any_path) to answer every request no exact route claims. |
 | `handler` | [`HttpListenerHandler`](#httplistenerhandler) | The function that answers requests to that path. |
-| `options` | [`HttpListenerRouteOptions`](#httplistenerrouteoptions) | Optional per-route options. See [HttpListenerRouteOptions](#httplistenerrouteoptions). |
+| `options?` | [`HttpListenerRouteOptions`](#httplistenerrouteoptions) | Optional per-route options. See [HttpListenerRouteOptions](#httplistenerrouteoptions). |
 
 ###### Returns
 

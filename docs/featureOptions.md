@@ -717,7 +717,7 @@ Create a new FeatureOptions instance.
 | ------ | ------ | ------ | ------ |
 | `categories` | [`FeatureCategoryEntry`](#featurecategoryentry)\<`unknown`\>[] | `undefined` | Array of feature option categories. |
 | `options` | `Record`\<`string`, [`FeatureOptionEntry`](#featureoptionentry)[]\> | `undefined` | Dictionary mapping category names to arrays of feature options. |
-| `configuredOptions` | `string`[] | `[]` | Optional. Array of currently configured option strings. |
+| `configuredOptions?` | `string`[] | `[]` | Optional. Array of currently configured option strings. |
 
 ###### Returns
 
@@ -1621,7 +1621,7 @@ Entry describing a feature option category.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TMeta` | `unknown` | The concrete type of the opaque [FeatureCategoryEntry.meta](#meta) annotation. Defaults to `unknown` for the same backward-compatibility reason as [FeatureOptionEntry](#featureoptionentry): a bare `FeatureCategoryEntry` resolves to `FeatureCategoryEntry<unknown>` and stays assignable to the typed form. |
+| <a id="type-parameter-tmeta"></a> `TMeta` | `unknown` | The concrete type of the opaque [FeatureCategoryEntry.meta](#meta) annotation. Defaults to `unknown` for the same backward-compatibility reason as [FeatureOptionEntry](#featureoptionentry): a bare `FeatureCategoryEntry` resolves to `FeatureCategoryEntry<unknown>` and stays assignable to the typed form. |
 
 #### Properties
 
@@ -1656,7 +1656,7 @@ const options: Record<string, FeatureOptionEntry[]> = {
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TMeta` | `unknown` | The concrete type of the opaque [FeatureOptionEntry.meta](#meta-1) annotation. Defaults to `unknown`, so a bare `FeatureOptionEntry` (the form every existing core consumer uses) resolves to `FeatureOptionEntry<unknown>` and stays assignable to the parameterized form, keeping the core non-generic. |
+| <a id="type-parameter-tmeta-1"></a> `TMeta` | `unknown` | The concrete type of the opaque [FeatureOptionEntry.meta](#meta-1) annotation. Defaults to `unknown`, so a bare `FeatureOptionEntry` (the form every existing core consumer uses) resolves to `FeatureOptionEntry<unknown>` and stays assignable to the parameterized form, keeping the core non-generic. |
 
 #### Properties
 

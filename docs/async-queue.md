@@ -59,7 +59,7 @@ for await (const line of lines.drain(this.signal)) {
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | What the producer pushes and the consumer reads back. |
+| <a id="type-parameter-t"></a> `T` | What the producer pushes and the consumer reads back. |
 
 #### Constructors
 
@@ -75,7 +75,7 @@ Build a queue.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`AsyncQueueOptions`](#asyncqueueoptions) | See [AsyncQueueOptions](#asyncqueueoptions). |
+| `options?` | [`AsyncQueueOptions`](#asyncqueueoptions) | See [AsyncQueueOptions](#asyncqueueoptions). |
 
 ###### Returns
 

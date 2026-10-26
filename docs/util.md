@@ -63,7 +63,7 @@ Construct a new `HbpuAbortError`.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `reason` | [`HbpuAbortReason`](#hbpuabortreason) | The abort reason (also assigned to `.name`). |
-| `options` | [`HbpuAbortErrorOptions`](#hbpuaborterroroptions) | Optional `cause` for structured diagnostic context, and an optional human-readable `message`. |
+| `options?` | [`HbpuAbortErrorOptions`](#hbpuaborterroroptions) | Optional `cause` for structured diagnostic context, and an optional human-readable `message`. |
 
 ###### Returns
 
@@ -71,15 +71,13 @@ Construct a new `HbpuAbortError`.
 
 ###### Overrides
 
-```ts
-Error.constructor
-```
+`Error.constructor`
 
 #### Properties
 
 | Property | Modifier | Type | Description | Overrides |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="name"></a> `name` | `readonly` | [`HbpuAbortReason`](#hbpuabortreason) | The tag. Matches one of [HbpuAbortReason](#hbpuabortreason). | `Error.name` |
+| <a id="name"></a> `name` | `public readonly` | [`HbpuAbortReason`](#hbpuabortreason) | The tag. Matches one of [HbpuAbortReason](#hbpuabortreason). | `Error.name` |
 
 ***
 
@@ -154,7 +152,7 @@ armed yet), so the pre-aborted path unwinds harmlessly. A later `arm()` short-ci
 ##### \[dispose\]()
 
 ```ts
-dispose: void;
+[dispose](): void;
 ```
 
 `Disposable` implementation. Clears any pending fire AND permanently disables the watchdog: after this runs, `arm()` is a no-op and no further `onFire` calls can
@@ -167,9 +165,7 @@ disposal is a no-op. Because the class does not own an abort controller, disposa
 
 ###### Implementation of
 
-```ts
-Disposable.[dispose]
-```
+`Disposable.[dispose]`
 
 ##### arm()
 
@@ -304,7 +300,7 @@ interface.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `Reason` *extends* `string` | `string` | The caller's failure-reason tags, as [repeatDemotedLog](#repeatdemotedlog-1) describes them. |
+| <a id="type-parameter-reason"></a> `Reason` *extends* `string` | `string` | The caller's failure-reason tags, as [repeatDemotedLog](#repeatdemotedlog-1) describes them. |
 
 #### Properties
 
@@ -359,7 +355,7 @@ This should only be used on JSON objects. If used on classes, class methods will
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The type to make recursively partial. |
+| <a id="type-parameter-t"></a> `T` | The type to make recursively partial. |
 
 #### Remarks
 
@@ -396,7 +392,7 @@ This should only be used on JSON objects. If used on classes, class methods will
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The type to make recursively readonly. |
+| <a id="type-parameter-t-1"></a> `T` | The type to make recursively readonly. |
 
 #### Remarks
 
@@ -492,7 +488,7 @@ This type is used to explicitly indicate that a variable, property, or return va
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The type to make nullable. |
+| <a id="type-parameter-t-2"></a> `T` | The type to make nullable. |
 
 #### Example
 
@@ -517,8 +513,8 @@ Makes all properties in `T` optional except for those specified by `K`, which re
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The base interface or type. |
-| `K` *extends* keyof `T` | The keys of `T` that should remain required. |
+| <a id="type-parameter-t-3"></a> `T` | The base interface or type. |
+| <a id="type-parameter-k"></a> `K` *extends* keyof `T` | The keys of `T` that should remain required. |
 
 #### Example
 
@@ -570,14 +566,14 @@ answers for attempt 2. The answer is the delay, in milliseconds, to wait before 
 ### RunWithAbortOptions
 
 ```ts
-type RunWithAbortOptions = 
+type RunWithAbortOptions = (
   | {
   signal: AbortSignal;
   timeout?: number;
 }
   | {
   timeout: number;
-} & {
+}) & {
   clock?: Clock;
 };
 ```
@@ -919,7 +915,7 @@ and each caller spreads it the way its own fleet needs.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`ExponentialBackoffOptions`](#exponentialbackoffoptions) | The ladder's seed and ceiling. See [ExponentialBackoffOptions](#exponentialbackoffoptions). |
+| `options?` | [`ExponentialBackoffOptions`](#exponentialbackoffoptions) | The ladder's seed and ceiling. See [ExponentialBackoffOptions](#exponentialbackoffoptions). |
 
 #### Returns
 
@@ -1061,7 +1057,7 @@ The handler's promise is marked observed through [markHandled](mark-handled.md#m
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `C` *extends* [`DispatchCallback`](#dispatchcallback) | The caller's exact callback signature. Constrained to [DispatchCallback](#dispatchcallback) (error-first) so any HomeKit delegate callback fits, while preserving a richer signature - one that also passes a snapshot buffer or stream response - for the handler to answer with. |
+| <a id="type-parameter-c"></a> `C` *extends* [`DispatchCallback`](#dispatchcallback) | The caller's exact callback signature. Constrained to [DispatchCallback](#dispatchcallback) (error-first) so any HomeKit delegate callback fits, while preserving a richer signature - one that also passes a snapshot buffer or stream response - for the handler to answer with. |
 
 ##### Parameters
 
@@ -1145,7 +1141,7 @@ The generic keeps the caller's literal code in the narrowed type, the way [isHbp
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `C` *extends* `string` | The specific code being matched. Defaulted by inference from `code`. |
+| <a id="type-parameter-c-1"></a> `C` *extends* `string` | The specific code being matched. Defaulted by inference from `code`. |
 
 #### Parameters
 
@@ -1221,7 +1217,7 @@ literal narrowed form automatically.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `R` *extends* [`HbpuAbortReason`](#hbpuabortreason) | The specific reason being matched. Defaulted by inference from `reason`. |
+| <a id="type-parameter-r"></a> `R` *extends* [`HbpuAbortReason`](#hbpuabortreason) | The specific reason being matched. Defaulted by inference from `reason`. |
 
 #### Parameters
 
@@ -1343,7 +1339,7 @@ Neither input is mutated, and the returned arrays are freshly built, so a caller
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The id type, commonly a string or a numeric identifier. |
+| <a id="type-parameter-t-4"></a> `T` | The id type, commonly a string or a numeric identifier. |
 
 #### Parameters
 
@@ -1571,7 +1567,7 @@ line and carries the same prefix its full-level report would have carried.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `Reason` *extends* `string` | `string` | The caller's failure-reason tags. A string-literal union gives compile-time checking of every tag `reasonOf` can answer with; the default is `string`, since nothing at runtime carries a reason for one to be inferred from. |
+| <a id="type-parameter-reason-1"></a> `Reason` *extends* `string` | `string` | The caller's failure-reason tags. A string-literal union gives compile-time checking of every tag `reasonOf` can answer with; the default is `string`, since nothing at runtime carries a reason for one to be inferred from. |
 
 #### Parameters
 
@@ -1613,14 +1609,14 @@ controllable clock drives the whole backoff schedule on virtual time.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The successful resolution type of `operation`. |
+| <a id="type-parameter-t-5"></a> `T` | The successful resolution type of `operation`. |
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `operation` | (`signal`) => [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`T`\> | The async work to perform. Receives the composed abort signal; must resolve with a value on success, or throw/reject on failure. |
-| `options` | [`RetryOptions`](#retryoptions) | Retry options. See [RetryOptions](#retryoptions). |
+| `options?` | [`RetryOptions`](#retryoptions) | Retry options. See [RetryOptions](#retryoptions). |
 
 #### Returns
 
@@ -1667,7 +1663,7 @@ whose body is read after the factory hands the response back, for one - finishes
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The type of value the factory's promise resolves with. |
+| <a id="type-parameter-t-6"></a> `T` | The type of value the factory's promise resolves with. |
 
 #### Parameters
 
@@ -1728,14 +1724,15 @@ fields off its arguments: a pair with exactly one undefined side is unequal, a p
 sides are present. A comparator therefore never has to defend against an undefined argument.
 
 Node-side by scope, and deliberately so. It has no runtime dependencies of its own, but util.ts is where the library's Node-side helpers live and every filed
-consumer of this one is Node-side; the browser-safe surface is formatters.ts, which is the SSOT for formatting alone, by name and by scope. Should a browser-side
-consumer ever appear, relocating this is a deliberate, versioned act rather than something to pre-empt here.
+consumer of this one is Node-side; the browser-safe surface is the browser-module list in `build/browser-modules.mjs`, each module on it the SSOT for its own
+concern alone, by name and by scope. Should a browser-side consumer ever appear, relocating this is a deliberate, versioned act rather than something to pre-empt
+here.
 
 #### Type Parameters
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The entry type. |
+| <a id="type-parameter-t-7"></a> `T` | The entry type. |
 
 #### Parameters
 
@@ -1760,45 +1757,6 @@ if(!sameEntries(this.persisted, devices, (x, y) => (x.id === y.id) && (x.name ==
   await this.persist(devices);
 }
 ```
-
-***
-
-### sanitizeName()
-
-```ts
-function sanitizeName(name): string;
-```
-
-Sanitize an accessory name according to HomeKit naming conventions.
-
-#### Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `name` | `string` | The name to validate. |
-
-#### Returns
-
-`string`
-
-Returns the HomeKit-sanitized version of the name, replacing invalid characters with a space and squashing multiple spaces.
-
-#### Remarks
-
-This sanitizes names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names)
-and HAP specification documentation:
-
-- Starts and ends with a letter or number. Exception: may end with a period.
-- May have the following special characters: -"',.#&.
-- Must not include emojis.
-
-#### Example
-
-```ts
-sanitizeName("Test|Switch")
-```
-
-Returns: `Test Switch`, replacing the pipe (an invalid character in HomeKit's naming ruleset) with a space.
 
 ***
 
@@ -1888,7 +1846,7 @@ broadcast primitive would have to decide buffering and slow-consumer policy, whi
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The type of value the source yields. |
+| <a id="type-parameter-t-8"></a> `T` | The type of value the source yields. |
 
 #### Parameters
 
@@ -1947,7 +1905,7 @@ not an unbounded live stream). A non-positive `n` retains nothing and returns an
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The element type of the source. |
+| <a id="type-parameter-t-9"></a> `T` | The element type of the source. |
 
 #### Parameters
 
@@ -2007,46 +1965,6 @@ Returns: `This Is A Test` and `Élan Vital`.
 
 ***
 
-### validateName()
-
-```ts
-function validateName(name): boolean;
-```
-
-Validate an accessory name according to HomeKit naming conventions.
-
-#### Parameters
-
-| Parameter | Type | Description |
-| ------ | ------ | ------ |
-| `name` | `string` | The name to validate. |
-
-#### Returns
-
-`boolean`
-
-Returns `true` if the name passes HomeKit's naming rules, `false` otherwise.
-
-#### Remarks
-
-This validates names using [HomeKit's naming rulesets](https://developer.apple.com/design/human-interface-guidelines/homekit#Help-people-choose-useful-names)
-and HAP specification documentation:
-
-- Starts and ends with a letter or number. Exception: may end with a period.
-- May not have multiple spaces adjacent to each other, nor begin nor end with a space.
-- May have the following special characters: -"',.#&.
-- Must not include emojis.
-
-#### Example
-
-```ts
-validateName("Test|Switch")
-```
-
-Returns: `false`.
-
-***
-
 ### waitWithSignal()
 
 ```ts
@@ -2070,7 +1988,7 @@ marks it as handled for Node's unhandled-rejection tracker. Callers do not need 
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The resolved value type of `promise`. |
+| <a id="type-parameter-t-10"></a> `T` | The resolved value type of `promise`. |
 
 #### Parameters
 
@@ -2139,3 +2057,15 @@ Re-exports [formatSeconds](formatters.md#formatseconds)
 ### markHandled
 
 Re-exports [markHandled](mark-handled.md#markhandled)
+
+***
+
+### sanitizeName
+
+Re-exports [sanitizeName](homekit-name.md#sanitizename)
+
+***
+
+### validateName
+
+Re-exports [validateName](homekit-name.md#validatename)

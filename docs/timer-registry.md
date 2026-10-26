@@ -69,7 +69,7 @@ already-initialized containers and flag; a signal already aborted at that point 
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`TimerRegistryOptions`](#timerregistryoptions) | See [TimerRegistryOptions](#timerregistryoptions). |
+| `options?` | [`TimerRegistryOptions`](#timerregistryoptions) | See [TimerRegistryOptions](#timerregistryoptions). |
 
 ###### Returns
 
@@ -80,7 +80,7 @@ already-initialized containers and flag; a signal already aborted at that point 
 ##### \[dispose\]()
 
 ```ts
-dispose: void;
+[dispose](): void;
 ```
 
 `Disposable` implementation, delegating to [dispose](#dispose-1) so the registry composes with `using` declarations and disposer stacks.
@@ -91,9 +91,7 @@ dispose: void;
 
 ###### Implementation of
 
-```ts
-Disposable.[dispose]
-```
+`Disposable.[dispose]`
 
 ##### clear()
 

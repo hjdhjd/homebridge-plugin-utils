@@ -93,8 +93,8 @@ const ffmpegOpts = new FfmpegOptions(optionsConfig);
 
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="audiodecoder"></a> `audioDecoder` | `readonly` | `string` | `"libfdk_aac"` | The fixed FFmpeg audio decoder used when decoding. |
-| <a id="config"></a> `config` | `readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | `undefined` | The configuration options used to initialize this instance. This is the single stored state on `FfmpegOptions`: every other public field on this class is either a getter that forwards to `this.config`, or a fixed constant independent of it (`audioDecoder`), so external callers have exactly one canonical path to each config-backed value and internal code never has to keep a parallel field in sync with `config` at construction time. |
+| <a id="audiodecoder"></a> `audioDecoder` | `public readonly` | `string` | `"libfdk_aac"` | The fixed FFmpeg audio decoder used when decoding. |
+| <a id="config"></a> `config` | `public readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | `undefined` | The configuration options used to initialize this instance. This is the single stored state on `FfmpegOptions`: every other public field on this class is either a getter that forwards to `this.config`, or a fixed constant independent of it (`audioDecoder`), so external callers have exactly one canonical path to each config-backed value and internal code never has to keep a parallel field in sync with `config` at construction time. |
 
 #### Accessors
 
@@ -186,7 +186,7 @@ Returns the audio encoder arguments to use when transcoding.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`AudioEncoderOptions`](#audioencoderoptions) | Optional. The encoder options to use for generating FFmpeg arguments. |
+| `options?` | [`AudioEncoderOptions`](#audioencoderoptions) | Optional. The encoder options to use for generating FFmpeg arguments. |
 
 ###### Returns
 
@@ -315,7 +315,7 @@ take decodes in software, and the encoder side of the same pipeline uploads the 
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | `Pick`\<[`VideoEncoderOptions`](#videoencoderoptions), \| `"hardwareDecoding"` \| `"hardwareTranscoding"` \| `"inputCodec"` \| `"videoFilters"`\> | Optional. The pipeline's description - typically the `VideoEncoderOptions` the caller hands its encoder. Its source codec, its hardware flags, and its caller-supplied filters decide whether the decoder runs on hardware and where it leaves its frames. Each flag resolves exactly as the encoders resolve it: an omitted flag takes the class config's value, and a flag the class config has turned off stays off. Omitting the object entirely describes an H.264 source in the pipeline the class config describes, with no caller filters. |
+| `options?` | `Pick`\<[`VideoEncoderOptions`](#videoencoderoptions), \| `"hardwareDecoding"` \| `"hardwareTranscoding"` \| `"inputCodec"` \| `"videoFilters"`\> | Optional. The pipeline's description - typically the `VideoEncoderOptions` the caller hands its encoder. Its source codec, its hardware flags, and its caller-supplied filters decide whether the decoder runs on hardware and where it leaves its frames. Each flag resolves exactly as the encoders resolve it: an omitted flag takes the class config's value, and a flag the class config has turned off stays off. Omitting the object entirely describes an H.264 source in the pipeline the class config describes, with no caller filters. |
 
 ###### Returns
 

@@ -127,10 +127,10 @@ The encoder's own `Error`, naming the value, when `serviceType` spells a name th
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="ready"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves once the first socket of any served family is bound and listening, whichever family that is, and rejects with the lifetime's reason when the lifetime ends before that. Marked handled, so a consumer that never awaits it is not reported as an unhandled rejection. |
-| <a id="services"></a> `services` | `readonly` | `ReadonlyMap`\<`string`, [`MdnsService`](#mdnsservice)\> | Every service the cache currently resolves, keyed by the folded instance name. It is the same store the events are derived from, so what a consumer reads here and what it was told cannot disagree. |
-| <a id="settled"></a> `settled` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves `warmupMs` after the first query is sent, whether or not any interface carried it, and rejects with the lifetime's reason when the lifetime ends first. The deadline is defined by time rather than by what answered, which is what a one-shot consumer needs: it waits a stated window and then reads [MdnsBrowser.services](#services). A network where nothing could be asked says so through the warning the interface refresh writes. Marked handled. |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing this browser's lifetime, composed from the caller's and this browser's own. Its reason names why: `"failed"` carrying the socket error as its cause, and `"shutdown"` for a caller's own teardown. |
+| <a id="ready"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves once the first socket of any served family is bound and listening, whichever family that is, and rejects with the lifetime's reason when the lifetime ends before that. Marked handled, so a consumer that never awaits it is not reported as an unhandled rejection. |
+| <a id="services"></a> `services` | `public readonly` | `ReadonlyMap`\<`string`, [`MdnsService`](#mdnsservice)\> | Every service the cache currently resolves, keyed by the folded instance name. It is the same store the events are derived from, so what a consumer reads here and what it was told cannot disagree. |
+| <a id="settled"></a> `settled` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves `warmupMs` after the first query is sent, whether or not any interface carried it, and rejects with the lifetime's reason when the lifetime ends first. The deadline is defined by time rather than by what answered, which is what a one-shot consumer needs: it waits a stated window and then reads [MdnsBrowser.services](#services). A network where nothing could be asked says so through the warning the interface refresh writes. Marked handled. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing this browser's lifetime, composed from the caller's and this browser's own. Its reason names why: `"failed"` carrying the socket error as its cause, and `"shutdown"` for a caller's own teardown. |
 
 #### Accessors
 
@@ -153,7 +153,7 @@ get aborted(): boolean;
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the browser, defaulting to `"shutdown"`, and awaits the socket's own close, so the port is released by the time
@@ -167,9 +167,7 @@ A promise that resolves once the socket has closed.
 
 ###### Implementation of
 
-```ts
-MdnsBrowserLike.[asyncDispose]
-```
+`MdnsBrowserLike.[asyncDispose]`
 
 ##### abort()
 

@@ -11,14 +11,18 @@ Every piece of shipped test-support surface the library offers, reachable at one
 The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
 support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
 finders, the unhandled-rejection assertion, the shared poll-with-deadline and the turn-budgeted poll beside it, the macrotask yield with the `TestClock` walks built on
-it (`advanceThroughSchedule` through a known schedule of waits, `drainClock` until nothing is pending), and the real-socket family that reserves a port and binds and
-stops a loopback server - the runtime-floor guard machinery in `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own
-dependency-inversion boundaries.
+it (`advanceThroughSchedule` through a known schedule of waits, `drainClock` until nothing is pending), the real-socket family that reserves a port and binds and
+stops a loopback server, and the scratch folder an `await using` scope removes - the runtime-floor guard machinery in `runtime-floor.ts` beside this file, and the
+test doubles that stand in for the library's own dependency-inversion boundaries.
 
 The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
 `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its
 subject drift apart the moment they stop sharing a directory. Only their export path lives here. The helpers and the guard machinery are the other case: they have
 no production subject to sit beside, so this directory is where they are defined rather than merely re-exported.
+
+The Homebridge double in `homebridge-double.ts` is defined in this directory for the same reason: its subject, the Homebridge API a plugin is handed, lives
+outside the library. It runs on Homebridge's own `PlatformAccessory`, API and bridge service and the hap-nodejs copy Homebridge loads, and it reaches Homebridge
+and hap-nodejs only inside `loadHomebridge`, resolving them from the caller's tree, so importing this entry point loads neither.
 
 Nothing in production may import from this module, and that is what the dedicated subpath buys over a category tag on the main barrel. The production/test category
 boundary becomes structural: a production module reaching for a double names a specifier that a reader and a grep can both see is wrong, rather than one everybody
@@ -112,7 +116,7 @@ any pending emissions surface before the check.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The resolved value type of `body`. |
+| <a id="type-parameter-t"></a> `T` | The resolved value type of `body`. |
 
 #### Parameters
 
@@ -194,7 +198,7 @@ back.
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `clock` | [`TestClock`](clock-double.md#testclock) | `undefined` | The clock to drain. |
-| `limit` | `number` | `1000` | The maximum number of steps to take. Defaults to 1000. |
+| `limit?` | `number` | `1000` | The maximum number of steps to take. Defaults to 1000. |
 
 #### Returns
 
@@ -241,7 +245,7 @@ own options bag, so the whole chain stays walkable by the library's own cause de
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` \| `number` | The code's own type, carried through to the result so a caller reads back exactly what it named rather than a widened union. |
+| <a id="type-parameter-t-1"></a> `T` *extends* `string` \| `number` | The code's own type, carried through to the result so a caller reads back exactly what it named rather than a widened union. |
 
 #### Parameters
 
@@ -287,7 +291,7 @@ a collection and distinguish specific indices (e.g., "the first emitted record s
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The element type of `items`. Assumes `T` does not include `undefined`; if it does, the assertion cannot distinguish a valid `undefined` element from an out-of-bounds index. |
+| <a id="type-parameter-t-2"></a> `T` | The element type of `items`. Assumes `T` does not include `undefined`; if it does, the assertion cannot distinguish a valid `undefined` element from an out-of-bounds index. |
 
 #### Parameters
 
@@ -295,7 +299,7 @@ a collection and distinguish specific indices (e.g., "the first emitted record s
 | ------ | ------ | ------ | ------ |
 | `items` | readonly `T`[] | `undefined` | The collection to index into. |
 | `index` | `number` | `undefined` | The index to read. Negative indices are not supported (would always fail the assertion). |
-| `description` | `string` | `"an item"` | Optional human-readable descriptor for the failure message. Defaults to `"an item"`. |
+| `description?` | `string` | `"an item"` | Optional human-readable descriptor for the failure message. Defaults to `"an item"`. |
 
 #### Returns
 
@@ -385,6 +389,46 @@ assert.equal(listener.boundPort, port, "the listener must take exactly the port 
 
 ***
 
+### linesAt()
+
+```ts
+function linesAt(entries, level): string[];
+```
+
+Render every entry at `level` through [formatLogEntry](#formatlogentry), in the order the entries were captured.
+
+Where [loggedAt](#loggedat) and [logCount](#logcount) answer whether, and how often, a line was logged, this answers the lines themselves, so one `deepEqual` asserts the
+exact sentences a level carries: an empty array shows nothing was logged at that level, and a list shows what was logged and that nothing else was. It takes the
+entries array, as [loggedAt](#loggedat) does, so a caller can render a slice.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `entries` | readonly [`TestLogEntry`](#testlogentry)[] | The captured entries to render. |
+| `level` | `"debug"` \| `"error"` \| `"warn"` \| `"info"` | The severity whose entries to render. |
+
+#### Returns
+
+`string`[]
+
+The rendered line of every entry at `level`, in capture order.
+
+#### Example
+
+```ts
+import { capturingLog, linesAt } from "homebridge-plugin-utils/testing";
+
+const log = capturingLog();
+
+classUnderTest.reconnect(log);
+
+// The emission was `log.warn("Reconnecting to %s.", "the broker")`, so the value reaches the line only through the render.
+assert.deepEqual(linesAt(log.entries, "warn"), ["Reconnecting to the broker."]);
+```
+
+***
+
 ### listenOnLoopback()
 
 ```ts
@@ -403,7 +447,7 @@ unhandled `"error"` on a server is thrown as an uncaught exception that ends the
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `server` | `Server` | `undefined` | The server to bind. Both a `node:http` server and a plain `net.Server` satisfy the type structurally. |
-| `port` | `number` | `0` | The port to bind. Defaults to `0`, which asks the kernel for a free one - what an arm wants when it needs some port and no collision with a file running beside it. A caller names a port instead when the fixture has to come back on the address a client is already reconnecting to. |
+| `port?` | `number` | `0` | The port to bind. Defaults to `0`, which asks the kernel for a free one - what an arm wants when it needs some port and no collision with a file running beside it. A caller names a port instead when the fixture has to come back on the address a client is already reconnecting to. |
 
 #### Returns
 
@@ -506,6 +550,77 @@ assert.ok(loggedAt(log.entries, "warn", "30"));
 
 ***
 
+### makeScratchRoot()
+
+```ts
+function makeScratchRoot(prefix): Promise<AsyncDisposable & {
+  path: string;
+}>;
+```
+
+Make a temporary folder under the system temp folder, named with `prefix`, and answer an `AsyncDisposable` carrying its path whose disposal removes the folder
+and everything written inside it.
+
+A row holds the folder with `await using`, so the scope owns the removal and a row that throws cleans up as surely as one that returns...a `try`/`finally` around
+`mkdtemp` written out at each site says the same thing every time and only has to be wrong at one of them to leak. The prefix names the suite the folder belongs
+to, so a folder a killed run leaves behind says where it came from. The folder lives exactly as long as its scope, which suits a folder one row writes. A folder
+a whole suite shares outlives every row, so the suite makes it through this helper in its `before` hook and disposes it in its `after` hook, the second example
+below. The removal is forced, so a folder the row removed itself is no failure.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `prefix` | `string` | The start of the folder's name, which `mkdtemp` completes with random characters, such as `"hbpu-clock-"`. |
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose) & \{
+  `path`: `string`;
+\}\>
+
+An `AsyncDisposable` carrying the folder's absolute path, whose disposal removes the folder recursively.
+
+#### Examples
+
+```ts
+import { join } from "node:path";
+import { makeScratchRoot } from "homebridge-plugin-utils/testing";
+import { test } from "node:test";
+import { writeFile } from "node:fs/promises";
+
+test("reads the configuration it is handed", async () => {
+
+  // The folder and the file written inside it are removed when the row's scope ends, whether the row returns or throws.
+  await using scratch = await makeScratchRoot("my-plugin-config-");
+
+  await writeFile(join(scratch.path, "config.json"), "{}");
+});
+```
+
+```ts
+import { after, before, describe } from "node:test";
+import { makeScratchRoot } from "homebridge-plugin-utils/testing";
+
+describe("the cached fixtures", () => {
+
+  // Every row reads the folder, so it outlives each of them: the suite's before hook makes it and its after hook disposes it.
+  let fixtures: AsyncDisposable & { readonly path: string };
+
+  before(async () => {
+
+    fixtures = await makeScratchRoot("my-plugin-fixtures-");
+  });
+
+  after(async () => {
+
+    await fixtures[Symbol.asyncDispose]();
+  });
+});
+```
+
+***
+
 ### present()
 
 ```ts
@@ -523,7 +638,7 @@ narrowing falls out of `assert.ok`'s `asserts` typing applied to the compound co
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The value's type. Assumes a `T` that is meaningfully nullable; a `T` that already excludes `undefined` and `null` leaves the assertion unreachable and the call redundant. |
+| <a id="type-parameter-t-3"></a> `T` | The value's type. Assumes a `T` that is meaningfully nullable; a `T` that already excludes `undefined` and `null` leaves the assertion unreachable and the call redundant. |
 
 #### Parameters
 
@@ -560,16 +675,16 @@ function settle(turns?): Promise<void>;
 
 Yield to the macrotask queue `turns` times, so the continuations a test has already released have run by the time it looks at what they did.
 
-Each turn yields one macrotask, which drains the entire microtask cascade first: a chain of promise continuations - an attempt's rejection, the checks that follow it,
-the clock registration those checks arm - comes to rest before the caller looks. One turn is the default, and it is enough for any cascade that stays in promise-land;
-a caller names more turns only when its subject's cascade crosses more than one macrotask boundary of its own, a handshake whose steps each schedule the next being
-the usual case. A `turns` of zero yields nothing at all.
+Each turn is one [yieldMacrotask](clock.md#yieldmacrotask), which drains the entire microtask cascade first: a chain of promise continuations - an attempt's
+rejection, the checks that follow it, the clock registration those checks arm - comes to rest before the caller looks. One turn is the default, and it is enough for
+any cascade that stays in promise-land; a caller names more turns only when its subject's cascade crosses more than one macrotask boundary of its own, a handshake
+whose steps each schedule the next being the usual case. A `turns` of zero yields nothing at all.
 
 #### Parameters
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `turns` | `number` | `1` | How many macrotask boundaries to cross. Defaults to 1. |
+| `turns?` | `number` | `1` | How many macrotask boundaries to cross. Defaults to 1. |
 
 #### Returns
 
@@ -739,6 +854,12 @@ Re-exports [Assert](testing/type-assertions.md#assert)
 
 ***
 
+### assertNoServerWarnings
+
+Re-exports [assertNoServerWarnings](testing/homebridge-double.md#assertnoserverwarnings)
+
+***
+
 ### assertRuntimeFloorCompat
 
 Re-exports [assertRuntimeFloorCompat](testing/runtime-floor.md#assertruntimefloorcompat)
@@ -763,9 +884,93 @@ Re-exports [Extends](testing/type-assertions.md#extends)
 
 ***
 
+### hapStatus
+
+Re-exports [hapStatus](testing/homebridge-double.md#hapstatus-1)
+
+***
+
+### hasGetHandler
+
+Re-exports [hasGetHandler](testing/homebridge-double.md#hasgethandler)
+
+***
+
+### hasSetHandler
+
+Re-exports [hasSetHandler](testing/homebridge-double.md#hassethandler)
+
+***
+
 ### HDLR\_TYPE\_VIDE
 
 Re-exports [HDLR_TYPE_VIDE](ffmpeg/fmp4-builders.md#hdlr_type_vide)
+
+***
+
+### HomebridgeApiClass
+
+Re-exports [HomebridgeApiClass](testing/homebridge-double.md#homebridgeapiclass)
+
+***
+
+### HomebridgeBridgeService
+
+Re-exports [HomebridgeBridgeService](testing/homebridge-double.md#homebridgebridgeservice)
+
+***
+
+### HomebridgeBridgeServiceClass
+
+Re-exports [HomebridgeBridgeServiceClass](testing/homebridge-double.md#homebridgebridgeserviceclass)
+
+***
+
+### HomebridgeLoggerClass
+
+Re-exports [HomebridgeLoggerClass](testing/homebridge-double.md#homebridgeloggerclass)
+
+***
+
+### HomebridgePluginManager
+
+Re-exports [HomebridgePluginManager](testing/homebridge-double.md#homebridgepluginmanager)
+
+***
+
+### HomebridgeRuntime
+
+Re-exports [HomebridgeRuntime](testing/homebridge-double.md#homebridgeruntime)
+
+***
+
+### HomebridgeServerApi
+
+Re-exports [HomebridgeServerApi](testing/homebridge-double.md#homebridgeserverapi)
+
+***
+
+### HomebridgeServerLogLine
+
+Re-exports [HomebridgeServerLogLine](testing/homebridge-double.md#homebridgeserverlogline)
+
+***
+
+### HomebridgeServerWarning
+
+Re-exports [HomebridgeServerWarning](testing/homebridge-double.md#homebridgeserverwarning)
+
+***
+
+### HomeKitRequestError
+
+Re-exports [HomeKitRequestError](testing/homebridge-double.md#homekitrequesterror)
+
+***
+
+### loadHomebridge
+
+Re-exports [loadHomebridge](testing/homebridge-double.md#loadhomebridge)
 
 ***
 
@@ -937,6 +1142,24 @@ Re-exports [TestClock](clock-double.md#testclock)
 
 ***
 
+### TestHomebridgeApi
+
+Re-exports [TestHomebridgeApi](testing/homebridge-double.md#testhomebridgeapi)
+
+***
+
+### TestHomebridgeApiCall
+
+Re-exports [TestHomebridgeApiCall](testing/homebridge-double.md#testhomebridgeapicall)
+
+***
+
+### TestHomebridgeRestoreOptions
+
+Re-exports [TestHomebridgeRestoreOptions](testing/homebridge-double.md#testhomebridgerestoreoptions)
+
+***
+
 ### TestHttpListener
 
 Re-exports [TestHttpListener](http-listener-double.md#testhttplistener)
@@ -1009,6 +1232,18 @@ Re-exports [TestMqttSubscription](mqtt-client-double.md#testmqttsubscription)
 
 ***
 
+### TestPlatformAccessory
+
+Re-exports [TestPlatformAccessory](testing/homebridge-double.md#testplatformaccessory)
+
+***
+
+### TestPlatformAccessoryConstructor
+
+Re-exports [TestPlatformAccessoryConstructor](testing/homebridge-double.md#testplatformaccessoryconstructor)
+
+***
+
 ### TestRecordingProcess
 
 Re-exports [TestRecordingProcess](ffmpeg/recording-process-double.md#testrecordingprocess)
@@ -1036,3 +1271,21 @@ Re-exports [TestWebSocket](logclient/socket-double.md#testwebsocket)
 ### TestWebSocketFactory
 
 Re-exports [TestWebSocketFactory](logclient/socket-double.md#testwebsocketfactory)
+
+***
+
+### triggerGet
+
+Re-exports [triggerGet](testing/homebridge-double.md#triggerget)
+
+***
+
+### triggerSet
+
+Re-exports [triggerSet](testing/homebridge-double.md#triggerset)
+
+***
+
+### watchServerWarnings
+
+Re-exports [watchServerWarnings](testing/homebridge-double.md#watchserverwarnings)

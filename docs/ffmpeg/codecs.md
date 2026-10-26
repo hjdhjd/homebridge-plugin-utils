@@ -186,8 +186,8 @@ but minor-greater means "newer", etc.) lives in one place and stays consistent.
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `major` | `number` | `undefined` | The minimum major version to accept. |
-| `minor` | `number` | `0` | The minimum minor version, when major is equal. Defaults to `0`. |
-| `patch` | `number` | `0` | The minimum patch version, when major and minor are equal. Defaults to `0`. |
+| `minor?` | `number` | `0` | The minimum minor version, when major is equal. Defaults to `0`. |
+| `patch?` | `number` | `0` | The minimum patch version, when major and minor are equal. Defaults to `0`. |
 
 ###### Returns
 
@@ -353,7 +353,7 @@ probing from outside (for example, during plugin shutdown).
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `options` | [`FOptions`](#foptions) | Options used to configure the probe (FFmpeg executable, logger, verbose flag, and the clock the per-command deadlines are armed on). |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional probe options. `signal` cancels in-flight probes; the per-call watchdog still applies. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional probe options. `signal` cancels in-flight probes; the per-call watchdog still applies. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -447,8 +447,8 @@ test-side fixtures delegate here so the boundary logic lives in one implementati
 | ------ | ------ | ------ | ------ |
 | `parts` | [`FfmpegVersionParts`](#ffmpegversionparts-1) | `undefined` | A parsed version triple as produced by [parseFfmpegVersionParts](#parseffmpegversionparts). |
 | `major` | `number` | `undefined` | The minimum major version to accept. |
-| `minor` | `number` | `0` | The minimum minor version, when major is equal. Defaults to `0`. |
-| `patch` | `number` | `0` | The minimum patch version, when major and minor are equal. Defaults to `0`. |
+| `minor?` | `number` | `0` | The minimum minor version, when major is equal. Defaults to `0`. |
+| `patch?` | `number` | `0` | The minimum patch version, when major and minor are equal. Defaults to `0`. |
 
 #### Returns
 

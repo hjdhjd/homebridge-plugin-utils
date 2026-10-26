@@ -53,7 +53,7 @@ its `listening` or `connect` listener before calling, which is the platform's ow
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `ipFamily` | [`IpFamily`](#ipfamily) | The IP family for the new socket. |
-| `options` | \{ `reuseAddr?`: `boolean`; \} | Optional socket options. |
+| `options?` | \{ `reuseAddr?`: `boolean`; \} | Optional socket options. |
 | `options.reuseAddr?` | `boolean` | Whether the socket shares its port with every other reuse-bound socket on the host. That is what lets a multicast listener sit beside the operating system's own responder on a well-known port, each receiving every datagram the group delivers. Defaults to `false`. |
 
 #### Returns
@@ -95,7 +95,7 @@ already marked its answer handled.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `host` | `string` | The peer's address or hostname. |
-| `options` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional inputs. |
+| `options?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional inputs. |
 | `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The caller's lifetime. Aborting it rejects with the signal's reason, whether it had already fired or fires while the lookup is pending. |
 
 #### Returns

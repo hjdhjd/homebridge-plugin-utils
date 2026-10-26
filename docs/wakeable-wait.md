@@ -73,7 +73,7 @@ if(outcome.kind === "woken") {
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `R` | `string` | The consumer's vocabulary for why it woke a wait, delivered verbatim on the `woken` outcome. Defaults to `string`, which is what a consumer wanting a plain label builds without naming the parameter. |
+| <a id="type-parameter-r"></a> `R` | `string` | The consumer's vocabulary for why it woke a wait, delivered verbatim on the `woken` outcome. Defaults to `string`, which is what a consumer wanting a plain label builds without naming the parameter. |
 
 #### Constructors
 
@@ -89,7 +89,7 @@ Build a wakeable wait. Construction registers nothing and starts nothing; the fi
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`WakeableWaitOptions`](#wakeablewaitoptions) | See [WakeableWaitOptions](#wakeablewaitoptions). |
+| `options?` | [`WakeableWaitOptions`](#wakeablewaitoptions) | See [WakeableWaitOptions](#wakeablewaitoptions). |
 
 ###### Returns
 
@@ -180,4 +180,4 @@ readable only on the arm that has one, which is what keeps a consumer from readi
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `R` | The consumer's own vocabulary for why a wait was woken, carried through untouched. |
+| <a id="type-parameter-r-1"></a> `R` | The consumer's own vocabulary for why a wait was woken, carried through untouched. |

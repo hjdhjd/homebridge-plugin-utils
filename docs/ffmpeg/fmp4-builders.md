@@ -53,7 +53,7 @@ between the parser and assembler test suites.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `type` | `string` | The 4-character ASCII box type (`"ftyp"`, `"moov"`, `"moof"`, `"mdat"`, ...). Any other length fails the check. |
-| `payload` | `Buffer` | Optional opaque payload bytes. Defaults to an empty buffer. |
+| `payload?` | `Buffer` | Optional opaque payload bytes. Defaults to an empty buffer. |
 
 #### Returns
 
@@ -112,7 +112,7 @@ with the handler_type selecting the track media type under test.
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
 | `handlerType` | `number` | `undefined` | The 32-bit big-endian handler type code. Use `HDLR_TYPE_SOUN` for audio, [HDLR\_TYPE\_VIDE](#hdlr_type_vide) for video, or any other value to exercise the "unknown handler" negative path. |
-| `truncate` | `boolean` | `false` | Optional. When `true`, emits an hdlr whose payload is smaller than the minimum `hasAudioTrack` reads (stops before the handler_type field). Used by the "undersized hdlr" negative test; defaults to `false`. |
+| `truncate?` | `boolean` | `false` | Optional. When `true`, emits an hdlr whose payload is smaller than the minimum `hasAudioTrack` reads (stops before the handler_type field). Used by the "undersized hdlr" negative test; defaults to `false`. |
 
 #### Returns
 

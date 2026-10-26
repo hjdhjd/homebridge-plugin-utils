@@ -33,7 +33,7 @@ claim holds and fails with TS2344 when it does not, so a type-level expectation 
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `X` *extends* `true` | The claim to hold. Constrained to `true`, which is what makes a `false` claim a compile error rather than a silently different type. |
+| <a id="type-parameter-x"></a> `X` *extends* `true` | The claim to hold. Constrained to `true`, which is what makes a `false` claim a compile error rather than a silently different type. |
 
 ***
 
@@ -61,8 +61,8 @@ a: 1 }>` and `Equal<"a" | "b", "b" | "a">` both answer `true`, and a claim built
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `A` | The first type to compare. |
-| `B` | The second type to compare. |
+| <a id="type-parameter-a"></a> `A` | The first type to compare. |
+| <a id="type-parameter-b"></a> `B` | The second type to compare. |
 
 ***
 
@@ -88,8 +88,8 @@ every arm - keeps passing while testing nothing. When that matters, state the cl
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `A` | The type that must be assignable. |
-| `B` | The type it must be assignable to. |
+| <a id="type-parameter-a-1"></a> `A` | The type that must be assignable. |
+| <a id="type-parameter-b-1"></a> `B` | The type it must be assignable to. |
 
 ***
 
@@ -116,5 +116,5 @@ does NOT inherit the vacuous pass `Extends` has on a `never` left side.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `A` | The first type. |
-| `B` | The second type. |
+| <a id="type-parameter-a-2"></a> `A` | The first type. |
+| <a id="type-parameter-b-2"></a> `B` | The second type. |

@@ -48,7 +48,7 @@ repeated allocation or case folding. An all-omitted (or all-empty) criteria obje
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `criteria` | [`LogFilterCriteria`](#logfiltercriteria) | The filter criteria. See [LogFilterCriteria](#logfiltercriteria). |
+| `criteria?` | [`LogFilterCriteria`](#logfiltercriteria) | The filter criteria. See [LogFilterCriteria](#logfiltercriteria). |
 
 #### Returns
 

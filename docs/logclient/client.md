@@ -14,8 +14,8 @@ AsyncDisposable client for the Homebridge UI log stream.
 
 - [HomebridgeLogClient.history](#history) - a one-shot REST whole-file download parsed into records, optionally trimmed to the most recent N lines.
 - [HomebridgeLogClient.follow](#follow) - a live socket tail: the server's ~500-line seed followed by genuinely new lines, streamed indefinitely.
-- [HomebridgeLogClient.tail](#tail) - a [TailRequest](types.md#tailrequest)-driven dispatcher that selects `history`, `follow`, the socket-first `follow-history` join, or the
-  hedged-seed time-bounded `window` channel.
+- [HomebridgeLogClient.tail](#tail) - a [TailRequest](types.md#tailrequest)-driven dispatcher over the channels above and the hedged-seed ones: the most recent lines (`history` and
+  `follow-history`, served from the socket's seed whenever it holds them) and the time-bounded `window`.
 
 The following design points matter:
 
@@ -82,7 +82,7 @@ shares one authentication path.
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this client's lifetime. Aborts exactly once - when the client is disposed (`[Symbol.asyncDispose]`) or the parent signal fires - and `signal.reason` names the cause. Every channel composes its per-call signal under this one, so disposing the client tears down all in-flight channels. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this client's lifetime. Aborts exactly once - when the client is disposed (`[Symbol.asyncDispose]`) or the parent signal fires - and `signal.reason` names the cause. Every channel composes its per-call signal under this one, so disposing the client tears down all in-flight channels. |
 
 #### Accessors
 
@@ -105,7 +105,7 @@ get aborted(): boolean;
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the client (defaulting to `"shutdown"`), which aborts every in-flight channel's per-call signal, so callers using
@@ -119,9 +119,7 @@ A resolved promise once the abort has been issued.
 
 ###### Implementation of
 
-```ts
-AsyncDisposable.[asyncDispose]
-```
+`AsyncDisposable.[asyncDispose]`
 
 ##### follow()
 
@@ -139,7 +137,7 @@ per-call signal aborts, or the client is disposed.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional per-call options. |
+| `options?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional per-call options. |
 | `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional per-call abort signal composed with the client's lifetime; aborting it terminates only this stream. |
 
 ###### Returns
@@ -158,13 +156,14 @@ Retrieve historical log lines over the REST whole-file download channel.
 
 Streams `GET .../log/download` through the parser and yields each parsed [LogRecord](types.md#logrecord). When `quantity` is a number, only the most recent N records are retained
 (via [takeLast](../util.md#takelast), a bounded ring so a multi-MB log is never fully materialized); when it is `"all"` (the default), every record passes through. This is the
-deep-history channel paid only when the caller explicitly wants history beyond the socket's ~500-line seed.
+deep-history channel paid only when the caller explicitly wants history beyond the socket's ~500-line seed. A caller after the most recent lines asks
+[HomebridgeLogClient.tail](#tail) for a `history` count instead, which serves them from the socket's seed whenever the seed holds them.
 
 ###### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | \{ `quantity?`: [`LogQuantity`](types.md#logquantity); `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional per-call options. |
+| `options?` | \{ `quantity?`: [`LogQuantity`](types.md#logquantity); `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional per-call options. |
 | `options.quantity?` | [`LogQuantity`](types.md#logquantity) | How many of the most recent records to retain. Defaults to `"all"`. |
 | `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional per-call abort signal composed with the client's lifetime; aborting it terminates only this stream. |
 
@@ -182,12 +181,15 @@ tail(request, options?): LogStream;
 
 Deliver log content over the channel selected by the [TailRequest](types.md#tailrequest) discriminated union.
 
-- `history` - delegates to [HomebridgeLogClient.history](#history) with the request's quantity.
+- `history` - the most recent `quantity` lines, one-shot. A count is served by the hedged seed: the socket connects and buffers its stream while a parallel
+  abortable whole-file download runs, and once the stream holds the count the download is aborted and the last `quantity` lines of the opening burst are served;
+  a count the stream falls short of is served by the download, trimmed to the quantity. `"all"` delegates to [HomebridgeLogClient.history](#history).
 - `follow` - delegates to [HomebridgeLogClient.follow](#follow).
-- `follow-history` - the socket-first join: the socket connects and buffers its seed plus any live lines that arrive during the REST download into an ordered list,
-  then the REST history is downloaded and trimmed to the request's quantity, then the two are joined by [stitchLive](stitch.md#stitchlive) so the boundary overlap is removed without
-  dropping a distinct live line, and finally the live stream continues. Connecting the socket first is what guarantees no live line produced during the download is
-  lost.
+- `follow-history` - the most recent `quantity` lines, then the live stream. A count the socket's stream holds is served from it exactly as for `history`, and
+  the live stream continues from the same iterator. Otherwise it is the socket-first join: the socket buffers its seed plus any live lines that arrive during the
+  REST download into an ordered list, the download is trimmed to the request's quantity, the two are joined by [stitchLive](stitch.md#stitchlive) so the boundary overlap is
+  removed without dropping a distinct live line, and the live stream continues. Connecting the socket first is what guarantees no live line produced during the
+  download is lost.
 - `window` - the hedged-seed time-bounded channel: the socket connects and buffers its seed while a parallel abortable whole-file download runs, a strict-coverage
   gate decides whether the seed covers `[since, until]` (serve from the seed and abort the download) or not (fall back to the download, stitched with the seed),
   and the merged output is time-window-filtered. A one-shot window terminates when its content has been served; a `follow` window continues live.
@@ -197,7 +199,7 @@ Deliver log content over the channel selected by the [TailRequest](types.md#tail
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `request` | [`TailRequest`](types.md#tailrequest) | The request describing which content to deliver and over which channel. See [TailRequest](types.md#tailrequest). |
-| `options` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional per-call options. |
+| `options?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional per-call options. |
 | `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional per-call abort signal composed with the client's lifetime; aborting it terminates only this stream. |
 
 ###### Returns
@@ -216,7 +218,7 @@ Construction-time options for [HomebridgeLogClient](#homebridgelogclient).
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="clock"></a> `clock?` | `readonly` | [`Clock`](../clock.md#clock) | Optional time source for the window channel's deadlines and for every socket this client creates. Defaults to [systemClock](../clock.md#systemclock), whose members ARE the platform primitives, so the default path is behavior-neutral. A test injects a `TestClock` seeded at the horizon it wants and drives the whole channel - the settle floor, the quiescence terminator, the hard cap, and the gate deadline - by advancing it. |
+| <a id="clock"></a> `clock?` | `readonly` | [`Clock`](../clock.md#clock) | Optional time source for the seed-served channels' deadlines, the download's stall bound, and every socket this client creates. Defaults to [systemClock](../clock.md#systemclock), whose members ARE the platform primitives, so the default path is behavior-neutral. A test injects a `TestClock` seeded at the horizon it wants and drives the whole channel - the settle floor, the quiescence terminator, the hard cap, and the gate deadline - by advancing it. |
 | <a id="credentials"></a> `credentials` | `readonly` | [`LogClientCredentials`](types.md#logclientcredentials) | The credentials used to authenticate. See [LogClientCredentials](types.md#logclientcredentials). |
 | <a id="fetch"></a> `fetch?` | `readonly` | \{ (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; (`input`, `init?`): [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Response`\>; \} | Optional `fetch` implementation for the auth and REST transports. Defaults to the global `fetch`. Injected so the client is testable without a live server. |
 | <a id="host"></a> `host?` | `readonly` | `string` | The hostname or IP of the homebridge-config-ui-x server. Defaults to `localhost`. |
@@ -239,4 +241,5 @@ delegates to the generator's `return()`, running the `finally` that disposes the
 
 #### Extends
 
-- `AsyncIterable`\<[`LogRecord`](types.md#logrecord)\>.[`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose)
+- `AsyncIterable`\<[`LogRecord`](types.md#logrecord)\>
+- [`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose)

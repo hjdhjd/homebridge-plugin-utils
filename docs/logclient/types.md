@@ -116,8 +116,9 @@ type TailRequest =
 
 A request describing which log content to deliver and over which channel, modeled as a discriminated union on `mode`.
 
-The modes map to the cost model: `follow` is a pure live tail over the socket (cheap, incremental); `history` is a one-shot retrieval of `quantity` past lines
-(paid via the REST whole-file download when the quantity is deep); `follow-history` seeds `quantity` past lines and then continues live, stitching the two so the
+The modes map to the cost model: `follow` is a pure live tail over the socket (cheap, incremental); `history` is a one-shot retrieval of the most recent `quantity`
+lines, served from the socket seed when the seed holds that many and from the REST whole-file download when the quantity is deep, the two hedged against each other
+(`"all"` is always the download); `follow-history` serves the same lines and then continues live, stitching a download-served history to the live stream so the
 boundary neither drops nor (beyond a bounded overlap) duplicates lines; and `window` is a time-bounded `[since, until]` query that the engine serves from the socket
 seed when the seed strictly covers the window, hedged against a parallel abortable whole-file download that wins when it cannot. Carrying `quantity` only on
 the arms that need it keeps a bare `follow` from having to invent a meaningless count.

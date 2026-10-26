@@ -76,7 +76,7 @@ ready to emit boxes. There is no separate `start()` step.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `source` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Any [Readable](https://nodejs.org/api/stream.html#class-streamreadable) producing fMP4 byte chunks. Typically an FFmpeg process's stdout; any Readable works, which keeps the class testable in isolation with in-memory fixture streams. |
-| `init` | [`Mp4SegmentAssemblerInit`](#mp4segmentassemblerinit) | Optional init options. See [Mp4SegmentAssemblerInit](#mp4segmentassemblerinit). |
+| `init?` | [`Mp4SegmentAssemblerInit`](#mp4segmentassemblerinit) | Optional init options. See [Mp4SegmentAssemblerInit](#mp4segmentassemblerinit). |
 
 ###### Returns
 
@@ -86,8 +86,8 @@ ready to emit boxes. There is no separate `start()` step.
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="initsegment"></a> `initSegment` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Buffer`\<`ArrayBufferLike`\>\> | Promise that resolves with the concatenated initialization-segment bytes (typically `ftyp` + `moov`) once the first `moof` box arrives on the source. Rejects with `this.signal.reason` if the assembler is aborted before the initialization segment completes. |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this assembler's lifetime. Aborts exactly once when the source ends, the source errors, the parent signal fires, the watchdog timeout expires, or [Mp4SegmentAssembler.abort](#abort) is called; the reason encoded on `signal.reason` names the cause. |
+| <a id="initsegment"></a> `initSegment` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`Buffer`\<`ArrayBufferLike`\>\> | Promise that resolves with the concatenated initialization-segment bytes (typically `ftyp` + `moov`) once the first `moof` box arrives on the source. Rejects with `this.signal.reason` if the assembler is aborted before the initialization segment completes. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this assembler's lifetime. Aborts exactly once when the source ends, the source errors, the parent signal fires, the watchdog timeout expires, or [Mp4SegmentAssembler.abort](#abort) is called; the reason encoded on `signal.reason` names the cause. |
 
 #### Accessors
 
@@ -142,7 +142,7 @@ resource class in the library shares one definition of "timeout."
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the assembler (defaulting to `"shutdown"`) and awaits actual drain-loop completion before returning, so callers using
@@ -156,9 +156,7 @@ A promise that resolves once the drain loop has fully exited.
 
 ###### Implementation of
 
-```ts
-AsyncDisposable.[asyncDispose]
-```
+`AsyncDisposable.[asyncDispose]`
 
 ##### abort()
 
@@ -204,7 +202,7 @@ to the assembler.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -236,7 +234,7 @@ settled even under a signal that has already aborted.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the assembler's own signal - aborting it terminates only this generator call, not the assembler. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns

@@ -67,7 +67,7 @@ window.slots.get("primary")?.settle("confirmed");
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `T` | `void` | The outcome a settled slot carries, in the consumer's own vocabulary. Defaults to `void` for a consumer that has no outcome to give, whose slots are then settled with a bare `slot.settle()`. |
+| <a id="type-parameter-t"></a> `T` | `void` | The outcome a settled slot carries, in the consumer's own vocabulary. Defaults to `void` for a consumer that has no outcome to give, whose slots are then settled with a bare `slot.settle()`. |
 
 #### Implements
 
@@ -98,7 +98,7 @@ Construct a supervisor. Construction opens no windows and arms no timers.
 ##### \[dispose\]()
 
 ```ts
-dispose: void;
+[dispose](): void;
 ```
 
 End the supervisor without ending its lifetime signal: every pending slot of every standing window is yielded `"invalidated"`, the registry is retired so no
@@ -111,9 +111,7 @@ retired, and a listener already detached, so it does nothing.
 
 ###### Implementation of
 
-```ts
-Disposable.[dispose]
-```
+`Disposable.[dispose]`
 
 ##### get()
 
@@ -230,7 +228,7 @@ One thing a window is waiting to learn, and the handle a consumer answers it thr
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The consumer's outcome type. |
+| <a id="type-parameter-t-1"></a> `T` | The consumer's outcome type. |
 
 #### Properties
 
@@ -256,7 +254,7 @@ answers on the whole of `T` instead of distributing across a union and handing a
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| ...`outcome` | \[`Exclude`\<`T`, `void`\>\] *extends* \[`never`\] ? \[\] : \[`T`\] | The outcome this slot is settled with, for every `T` other than `void`. |
+| ...`outcome` | \[`Exclude`\<`T`, `void`\>\] *extends* \[`never`\] ? \[\] : \[`outcome`: `T`\] | The outcome this slot is settled with, for every `T` other than `void`. |
 
 ###### Returns
 
@@ -275,7 +273,7 @@ Construction options for [DeliverySupervisor](#deliverysupervisor).
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `T` | `void` | The consumer's outcome type, the same one the supervisor these options build carries. Defaults to `void`, so a consumer whose slots have no outcome to give names the type without a parameter. |
+| <a id="type-parameter-t-2"></a> `T` | `void` | The consumer's outcome type, the same one the supervisor these options build carries. Defaults to `void`, so a consumer whose slots have no outcome to give names the type without a parameter. |
 
 #### Properties
 
@@ -295,7 +293,7 @@ One open window: the slots it is waiting on, and the deadline it is waiting unde
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The consumer's outcome type. |
+| <a id="type-parameter-t-3"></a> `T` | The consumer's outcome type. |
 
 #### Properties
 
@@ -337,7 +335,7 @@ What opening a window takes.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The consumer's outcome type. |
+| <a id="type-parameter-t-4"></a> `T` | The consumer's outcome type. |
 
 #### Properties
 
@@ -370,7 +368,7 @@ What a slot's settlement callback receives, exactly once: either the consumer's 
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` | The consumer's outcome type, whatever a settled slot means in its domain. |
+| <a id="type-parameter-t-5"></a> `T` | The consumer's outcome type, whatever a settled slot means in its domain. |
 
 ***
 

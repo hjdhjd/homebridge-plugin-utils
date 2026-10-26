@@ -59,7 +59,7 @@ tests, which run it against a plain object to observe exactly what a runtime mis
 
 | Parameter | Type | Default value | Description |
 | ------ | ------ | ------ | ------ |
-| `target` | [`ErmInstallTarget`](#erminstalltarget) | `globalThis` | The object to install onto. Defaults to `globalThis`. |
+| `target?` | [`ErmInstallTarget`](#erminstalltarget) | `globalThis` | The object to install onto. Defaults to `globalThis`. |
 
 #### Returns
 

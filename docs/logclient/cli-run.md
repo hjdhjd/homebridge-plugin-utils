@@ -132,8 +132,10 @@ Parses [RunHblogOptions.argv](#argv), handles `--help`/`--version` immediately, 
 `HBLOG_CONFIG`), maps the result into a [LogClientCredentials](types.md#logclientcredentials) and a [TailRequest](types.md#tailrequest), builds a [HomebridgeLogClient](client.md#homebridgelogclient), runs the selected channel,
 applies the [createLogFilter](filter.md#createlogfilter) criteria, and writes log data to stdout (NDJSON for `--json`, raw/stripped lines otherwise) while routing diagnostics and warnings
 to stderr. A SIGINT/SIGTERM aborts the run cleanly (exit 0); a broken pipe (`EPIPE`) on stdout also ends cleanly (exit 0); a usage error returns 2; a connection or
-authentication failure returns 1. Token redaction is applied at the hard-error stderr writes (the setup failure, a captured stdout write error on either the
-normal-completion or the catch path, and the streaming catch's generic error); the usage and advisory writes never carry a token.
+authentication failure returns 1. A failure after records have arrived is followed by a notice that the output is incomplete, naming the latest timestamp received,
+so a capture that ends on a whole record is never mistaken for a finished one. Token redaction is applied at the hard-error stderr writes (the setup failure, a
+captured stdout write error whether the run completed or unwound into the catch, and the streaming catch's generic error); the usage, advisory and incomplete-output
+writes never carry a token.
 
 #### Parameters
 

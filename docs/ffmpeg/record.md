@@ -76,12 +76,12 @@ Subclasses must call `super(options, init, segmentTimeout?)` from their construc
 
 | Property | Modifier | Type | Description | Overrides | Inherited from |
 | ------ | ------ | ------ | ------ | ------ | ------ |
-| <a id="exited"></a> `exited` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`FfmpegProcessExitInfo`](process.md#ffmpegprocessexitinfo)\> | Resolves with the child's exit code and signal once the process terminates. Rejects with `this.signal.reason` only when the child never started (e.g., the FFmpeg binary could not be located); in every other case it resolves with the actual exit information, even when the abort reason is `"failed"`. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`exited`](process.md#exited) |
-| <a id="ready"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves when FFmpeg has produced its first stderr byte - the earliest point at which we can reliably say the child is running. Rejects with `this.signal.reason` when the process aborts before becoming ready (external abort, spawn failure, startup timeout, early natural exit). | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`ready`](process.md#ready) |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this process's lifetime. Aborts exactly once when the child exits, the parent signal fires, or `abort()` is called; the reason encoded on `signal.reason` names the cause (see [HbpuAbortReason](../util.md#hbpuabortreason)). Subclasses and external callers attach `"abort"` listeners to this signal when they need scope-bound teardown hooks of their own. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`signal`](process.md#signal) |
-| <a id="stderr"></a> `stderr` | `readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`stderr`](process.md#stderr) |
-| <a id="stdin"></a> `stdin` | `readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdin`](process.md#stdin) |
-| <a id="stdout"></a> `stdout` | `readonly` | `never` | stdout is consumed internally by the assembler. The public type is narrowed to `never` so TypeScript callers cannot accidentally attach a concurrent reader. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdout`](process.md#stdout) | - |
+| <a id="exited"></a> `exited` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`FfmpegProcessExitInfo`](process.md#ffmpegprocessexitinfo)\> | Resolves with the child's exit code and signal once the process terminates. Rejects with `this.signal.reason` only when the child never started (e.g., the FFmpeg binary could not be located); in every other case it resolves with the actual exit information, even when the abort reason is `"failed"`. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`exited`](process.md#exited) |
+| <a id="ready"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves when FFmpeg has produced its first stderr byte - the earliest point at which we can reliably say the child is running. Rejects with `this.signal.reason` when the process aborts before becoming ready (external abort, spawn failure, startup timeout, early natural exit). | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`ready`](process.md#ready) |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this process's lifetime. Aborts exactly once when the child exits, the parent signal fires, or `abort()` is called; the reason encoded on `signal.reason` names the cause (see [HbpuAbortReason](../util.md#hbpuabortreason)). Subclasses and external callers attach `"abort"` listeners to this signal when they need scope-bound teardown hooks of their own. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`signal`](process.md#signal) |
+| <a id="stderr"></a> `stderr` | `public readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`stderr`](process.md#stderr) |
+| <a id="stdin"></a> `stdin` | `public readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | - | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdin`](process.md#stdin) |
+| <a id="stdout"></a> `stdout` | `public readonly` | `never` | stdout is consumed internally by the assembler. The public type is narrowed to `never` so TypeScript callers cannot accidentally attach a concurrent reader. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdout`](process.md#stdout) | - |
 
 #### Accessors
 
@@ -202,7 +202,7 @@ readonly `string`[]
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the process (defaulting to `"shutdown"`) and awaits actual exit before returning, so callers using `await using` are
@@ -271,7 +271,7 @@ signal aborts, or when the underlying stdout ends.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -294,7 +294,7 @@ kind `"media"` per completed media fragment. Delegates to [Mp4SegmentAssembler.s
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -370,20 +370,18 @@ Construct and spawn a new fMP4 livestream process.
 
 ###### Overrides
 
-```ts
-FfmpegFMp4Process.constructor
-```
+`FfmpegFMp4Process.constructor`
 
 #### Properties
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="exited-1"></a> `exited` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`FfmpegProcessExitInfo`](process.md#ffmpegprocessexitinfo)\> | Resolves with the child's exit code and signal once the process terminates. Rejects with `this.signal.reason` only when the child never started (e.g., the FFmpeg binary could not be located); in every other case it resolves with the actual exit information, even when the abort reason is `"failed"`. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`exited`](#exited) |
-| <a id="ready-1"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves when FFmpeg has produced its first stderr byte - the earliest point at which we can reliably say the child is running. Rejects with `this.signal.reason` when the process aborts before becoming ready (external abort, spawn failure, startup timeout, early natural exit). | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`ready`](#ready) |
-| <a id="signal-1"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this process's lifetime. Aborts exactly once when the child exits, the parent signal fires, or `abort()` is called; the reason encoded on `signal.reason` names the cause (see [HbpuAbortReason](../util.md#hbpuabortreason)). Subclasses and external callers attach `"abort"` listeners to this signal when they need scope-bound teardown hooks of their own. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`signal`](#signal) |
-| <a id="stderr-1"></a> `stderr` | `readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stderr`](#stderr) |
-| <a id="stdin-1"></a> `stdin` | `readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stdin`](#stdin) |
-| <a id="stdout-1"></a> `stdout` | `readonly` | `never` | stdout is consumed internally by the assembler. The public type is narrowed to `never` so TypeScript callers cannot accidentally attach a concurrent reader. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stdout`](#stdout) |
+| <a id="exited-1"></a> `exited` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`FfmpegProcessExitInfo`](process.md#ffmpegprocessexitinfo)\> | Resolves with the child's exit code and signal once the process terminates. Rejects with `this.signal.reason` only when the child never started (e.g., the FFmpeg binary could not be located); in every other case it resolves with the actual exit information, even when the abort reason is `"failed"`. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`exited`](#exited) |
+| <a id="ready-1"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves when FFmpeg has produced its first stderr byte - the earliest point at which we can reliably say the child is running. Rejects with `this.signal.reason` when the process aborts before becoming ready (external abort, spawn failure, startup timeout, early natural exit). | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`ready`](#ready) |
+| <a id="signal-1"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this process's lifetime. Aborts exactly once when the child exits, the parent signal fires, or `abort()` is called; the reason encoded on `signal.reason` names the cause (see [HbpuAbortReason](../util.md#hbpuabortreason)). Subclasses and external callers attach `"abort"` listeners to this signal when they need scope-bound teardown hooks of their own. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`signal`](#signal) |
+| <a id="stderr-1"></a> `stderr` | `public readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stderr`](#stderr) |
+| <a id="stdin-1"></a> `stdin` | `public readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stdin`](#stdin) |
+| <a id="stdout-1"></a> `stdout` | `public readonly` | `never` | stdout is consumed internally by the assembler. The public type is narrowed to `never` so TypeScript callers cannot accidentally attach a concurrent reader. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stdout`](#stdout) |
 
 #### Accessors
 
@@ -508,7 +506,7 @@ readonly `string`[]
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the process (defaulting to `"shutdown"`) and awaits actual exit before returning, so callers using `await using` are
@@ -522,9 +520,7 @@ A promise that resolves once the child has fully exited.
 
 ###### Implementation of
 
-```ts
-LivestreamProcess.[asyncDispose]
-```
+`LivestreamProcess.[asyncDispose]`
 
 ###### Inherited from
 
@@ -591,7 +587,7 @@ signal aborts, or when the underlying stdout ends.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -622,7 +618,7 @@ kind `"media"` per completed media fragment. Delegates to [Mp4SegmentAssembler.s
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -703,20 +699,18 @@ Construct and spawn a new HKSV recording process.
 
 ###### Overrides
 
-```ts
-FfmpegFMp4Process.constructor
-```
+`FfmpegFMp4Process.constructor`
 
 #### Properties
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="exited-2"></a> `exited` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`FfmpegProcessExitInfo`](process.md#ffmpegprocessexitinfo)\> | Resolves with the child's exit code and signal once the process terminates. Rejects with `this.signal.reason` only when the child never started (e.g., the FFmpeg binary could not be located); in every other case it resolves with the actual exit information, even when the abort reason is `"failed"`. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`exited`](#exited) |
-| <a id="ready-2"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves when FFmpeg has produced its first stderr byte - the earliest point at which we can reliably say the child is running. Rejects with `this.signal.reason` when the process aborts before becoming ready (external abort, spawn failure, startup timeout, early natural exit). | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`ready`](#ready) |
-| <a id="signal-2"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this process's lifetime. Aborts exactly once when the child exits, the parent signal fires, or `abort()` is called; the reason encoded on `signal.reason` names the cause (see [HbpuAbortReason](../util.md#hbpuabortreason)). Subclasses and external callers attach `"abort"` listeners to this signal when they need scope-bound teardown hooks of their own. | [`RecordingProcess`](#recordingprocess).[`signal`](#signal-5) [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`signal`](#signal) |
-| <a id="stderr-2"></a> `stderr` | `readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stderr`](#stderr) |
-| <a id="stdin-2"></a> `stdin` | `readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | [`RecordingProcess`](#recordingprocess).[`stdin`](#stdin-3) [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stdin`](#stdin) |
-| <a id="stdout-2"></a> `stdout` | `readonly` | `never` | stdout is consumed internally by the assembler. The public type is narrowed to `never` so TypeScript callers cannot accidentally attach a concurrent reader. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stdout`](#stdout) |
+| <a id="exited-2"></a> `exited` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`FfmpegProcessExitInfo`](process.md#ffmpegprocessexitinfo)\> | Resolves with the child's exit code and signal once the process terminates. Rejects with `this.signal.reason` only when the child never started (e.g., the FFmpeg binary could not be located); in every other case it resolves with the actual exit information, even when the abort reason is `"failed"`. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`exited`](#exited) |
+| <a id="ready-2"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves when FFmpeg has produced its first stderr byte - the earliest point at which we can reliably say the child is running. Rejects with `this.signal.reason` when the process aborts before becoming ready (external abort, spawn failure, startup timeout, early natural exit). | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`ready`](#ready) |
+| <a id="signal-2"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this process's lifetime. Aborts exactly once when the child exits, the parent signal fires, or `abort()` is called; the reason encoded on `signal.reason` names the cause (see [HbpuAbortReason](../util.md#hbpuabortreason)). Subclasses and external callers attach `"abort"` listeners to this signal when they need scope-bound teardown hooks of their own. | [`RecordingProcess`](#recordingprocess).[`signal`](#signal-5) [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`signal`](#signal) |
+| <a id="stderr-2"></a> `stderr` | `public readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stderr`](#stderr) |
+| <a id="stdin-2"></a> `stdin` | `public readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | [`RecordingProcess`](#recordingprocess).[`stdin`](#stdin-3) [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stdin`](#stdin) |
+| <a id="stdout-2"></a> `stdout` | `public readonly` | `never` | stdout is consumed internally by the assembler. The public type is narrowed to `never` so TypeScript callers cannot accidentally attach a concurrent reader. | [`FfmpegFMp4Process`](#abstract-ffmpegfmp4process).[`stdout`](#stdout) |
 
 #### Accessors
 
@@ -860,7 +854,7 @@ The accumulated stderr lines the process produced, preserved across teardown for
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the process (defaulting to `"shutdown"`) and awaits actual exit before returning, so callers using `await using` are
@@ -941,7 +935,7 @@ signal aborts, or when the underlying stdout ends.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns
@@ -972,7 +966,7 @@ kind `"media"` per completed media fragment. Delegates to [Mp4SegmentAssembler.s
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
+| `init?` | \{ `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional init options. `signal` composes with the process's own signal; aborting it terminates only this generator call, not the process. |
 | `init.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | - |
 
 ###### Returns

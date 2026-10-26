@@ -46,7 +46,7 @@ written ahead of the composer, and the page reconciled to what was written.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TPlatform` *extends* `object` | `object` | The platform configuration object the composer receives. A plugin names its own configuration type here so its composer reads the entry as that type; it is `object` for a caller that names none. |
+| <a id="type-parameter-tplatform"></a> `TPlatform` *extends* `object` | `object` | The platform configuration object the composer receives. A plugin names its own configuration type here so its composer reads the entry as that type; it is `object` for a caller that names none. |
 
 #### Parameters
 

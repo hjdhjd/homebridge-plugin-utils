@@ -64,16 +64,14 @@ Whether this stack has been disposed.
 
 ###### Implementation of
 
-```ts
-InstanceType.disposed
-```
+`InstanceType.disposed`
 
 #### Methods
 
 ##### \[dispose\]()
 
 ```ts
-dispose: void;
+[dispose](): void;
 ```
 
 Dispose this stack. Enables `using` semantics by delegating to [dispose](#dispose-1).
@@ -84,9 +82,7 @@ Dispose this stack. Enables `using` semantics by delegating to [dispose](#dispos
 
 ###### Implementation of
 
-```ts
-InstanceType.[dispose]
-```
+`InstanceType.[dispose]`
 
 ##### adopt()
 
@@ -101,7 +97,7 @@ this stack is disposed.
 
 | Type Parameter |
 | ------ |
-| `T` |
+| <a id="type-parameter-t"></a> `T` |
 
 ###### Parameters
 
@@ -118,9 +114,7 @@ The provided `value`.
 
 ###### Implementation of
 
-```ts
-InstanceType.adopt
-```
+`InstanceType.adopt`
 
 ##### defer()
 
@@ -142,9 +136,7 @@ Register a callback to run when this stack is disposed.
 
 ###### Implementation of
 
-```ts
-InstanceType.defer
-```
+`InstanceType.defer`
 
 ##### dispose()
 
@@ -161,9 +153,7 @@ failure is rethrown after the sweep completes, and multiple failures chain throu
 
 ###### Implementation of
 
-```ts
-InstanceType.dispose
-```
+`InstanceType.dispose`
 
 ##### move()
 
@@ -183,9 +173,7 @@ A new stack owning the transferred disposers.
 
 ###### Implementation of
 
-```ts
-InstanceType.move
-```
+`InstanceType.move`
 
 ##### use()
 
@@ -202,7 +190,7 @@ a later mutation of `value[Symbol.dispose]` cannot change what runs.
 
 | Type Parameter |
 | ------ |
-| `T` *extends* \| [`Disposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/dispose) \| `null` \| `undefined` |
+| <a id="type-parameter-t-1"></a> `T` *extends* \| [`Disposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/dispose) \| `null` \| `undefined` |
 
 ###### Parameters
 
@@ -218,9 +206,7 @@ The provided `value`.
 
 ###### Implementation of
 
-```ts
-InstanceType.use
-```
+`InstanceType.use`
 
 ***
 

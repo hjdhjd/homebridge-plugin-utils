@@ -36,7 +36,7 @@ The table [renderMarkdownTable](#rendermarkdowntable) lays out.
 | ------ | ------ | ------ | ------ |
 | <a id="dividerwidth"></a> `dividerWidth` | `readonly` | `number` | The width, in dashes, of the divider segment under the last column. That column is never padded, so it has no measured width for its divider to track and the caller states the one its document reads well at. |
 | <a id="headings"></a> `headings` | `readonly` | readonly `string`[] | The column headings, in column order. Their count is what every row's cell count must match. |
-| <a id="rows"></a> `rows` | `readonly` | readonly readonly `string`[][] | The rows, each one a list of rendered cells in column order. |
+| <a id="rows"></a> `rows` | `readonly` | readonly (readonly `string`[])[] | The rows, each one a list of rendered cells in column order. |
 
 ***
 

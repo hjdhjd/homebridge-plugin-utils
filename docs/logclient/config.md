@@ -145,7 +145,7 @@ through the `warn` function, because the file may store a password or a long-liv
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `path` | `string` | The absolute path of the config file to load (the CLI resolves `~/.hblog.json`, or honors `HBLOG_CONFIG`). |
-| `options` | [`LoadConfigFileOptions`](#loadconfigfileoptions) | The injectable filesystem and warning functions. See [LoadConfigFileOptions](#loadconfigfileoptions). |
+| `options?` | [`LoadConfigFileOptions`](#loadconfigfileoptions) | The injectable filesystem and warning functions. See [LoadConfigFileOptions](#loadconfigfileoptions). |
 
 #### Returns
 

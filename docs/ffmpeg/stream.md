@@ -76,7 +76,7 @@ socket closes and the watchdog clears as part of the inherited teardown when the
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | Shared [FfmpegOptions](options.md#ffmpegoptions) configuration (codec support, logger, debug flag, name). |
-| `init` | [`FfmpegStreamingInit`](#ffmpegstreaminginit) | Optional init options. See [FfmpegStreamingInit](#ffmpegstreaminginit). |
+| `init?` | [`FfmpegStreamingInit`](#ffmpegstreaminginit) | Optional init options. See [FfmpegStreamingInit](#ffmpegstreaminginit). |
 
 ###### Returns
 
@@ -90,12 +90,12 @@ socket closes and the watchdog clears as part of the inherited teardown when the
 
 | Property | Modifier | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="exited"></a> `exited` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`FfmpegProcessExitInfo`](process.md#ffmpegprocessexitinfo)\> | Resolves with the child's exit code and signal once the process terminates. Rejects with `this.signal.reason` only when the child never started (e.g., the FFmpeg binary could not be located); in every other case it resolves with the actual exit information, even when the abort reason is `"failed"`. | [`FfmpegProcess`](process.md#ffmpegprocess).[`exited`](process.md#exited) |
-| <a id="ready"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves when FFmpeg has produced its first stderr byte - the earliest point at which we can reliably say the child is running. Rejects with `this.signal.reason` when the process aborts before becoming ready (external abort, spawn failure, startup timeout, early natural exit). | [`FfmpegProcess`](process.md#ffmpegprocess).[`ready`](process.md#ready) |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this process's lifetime. Aborts exactly once when the child exits, the parent signal fires, or `abort()` is called; the reason encoded on `signal.reason` names the cause (see [HbpuAbortReason](../util.md#hbpuabortreason)). Subclasses and external callers attach `"abort"` listeners to this signal when they need scope-bound teardown hooks of their own. | [`FfmpegProcess`](process.md#ffmpegprocess).[`signal`](process.md#signal) |
-| <a id="stderr"></a> `stderr` | `readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stderr`](process.md#stderr) |
-| <a id="stdin"></a> `stdin` | `readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdin`](process.md#stdin) |
-| <a id="stdout"></a> `stdout` | `readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard output stream. Subclasses that consume this stream internally narrow the public type to `never` via `declare`. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdout`](process.md#stdout) |
+| <a id="exited"></a> `exited` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<[`FfmpegProcessExitInfo`](process.md#ffmpegprocessexitinfo)\> | Resolves with the child's exit code and signal once the process terminates. Rejects with `this.signal.reason` only when the child never started (e.g., the FFmpeg binary could not be located); in every other case it resolves with the actual exit information, even when the abort reason is `"failed"`. | [`FfmpegProcess`](process.md#ffmpegprocess).[`exited`](process.md#exited) |
+| <a id="ready"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves when FFmpeg has produced its first stderr byte - the earliest point at which we can reliably say the child is running. Rejects with `this.signal.reason` when the process aborts before becoming ready (external abort, spawn failure, startup timeout, early natural exit). | [`FfmpegProcess`](process.md#ffmpegprocess).[`ready`](process.md#ready) |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this process's lifetime. Aborts exactly once when the child exits, the parent signal fires, or `abort()` is called; the reason encoded on `signal.reason` names the cause (see [HbpuAbortReason](../util.md#hbpuabortreason)). Subclasses and external callers attach `"abort"` listeners to this signal when they need scope-bound teardown hooks of their own. | [`FfmpegProcess`](process.md#ffmpegprocess).[`signal`](process.md#signal) |
+| <a id="stderr"></a> `stderr` | `public readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard error stream. Primarily useful to callers who want to observe stderr in addition to the accumulated [FfmpegProcess.stderrLog](process.md#stderrlog); most callers should prefer `stderrLog` since the class already buffers lines for them. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stderr`](process.md#stderr) |
+| <a id="stdin"></a> `stdin` | `public readonly` | [`Writable`](https://nodejs.org/api/stream.html#class-streamwritable) | Writable standard input stream for the FFmpeg process. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdin`](process.md#stdin) |
+| <a id="stdout"></a> `stdout` | `public readonly` | [`Readable`](https://nodejs.org/api/stream.html#class-streamreadable) | Readable standard output stream. Subclasses that consume this stream internally narrow the public type to `never` via `declare`. | [`FfmpegProcess`](process.md#ffmpegprocess).[`stdout`](process.md#stdout) |
 
 #### Accessors
 
@@ -222,7 +222,7 @@ readonly `string`[]
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the process (defaulting to `"shutdown"`) and awaits actual exit before returning, so callers using `await using` are

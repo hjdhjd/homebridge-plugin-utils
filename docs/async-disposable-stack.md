@@ -81,16 +81,14 @@ Whether this stack has been disposed.
 
 ###### Implementation of
 
-```ts
-InstanceType.disposed
-```
+`InstanceType.disposed`
 
 #### Methods
 
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 Dispose this stack. Enables `await using` semantics by delegating to [disposeAsync](#disposeasync).
@@ -101,9 +99,7 @@ Dispose this stack. Enables `await using` semantics by delegating to [disposeAsy
 
 ###### Implementation of
 
-```ts
-InstanceType.[asyncDispose]
-```
+`InstanceType.[asyncDispose]`
 
 ##### adopt()
 
@@ -118,7 +114,7 @@ this stack is disposed, and is awaited if it returns a promise.
 
 | Type Parameter |
 | ------ |
-| `T` |
+| <a id="type-parameter-t"></a> `T` |
 
 ###### Parameters
 
@@ -135,9 +131,7 @@ The provided `value`.
 
 ###### Implementation of
 
-```ts
-InstanceType.adopt
-```
+`InstanceType.adopt`
 
 ##### defer()
 
@@ -159,9 +153,7 @@ Register a callback to run when this stack is disposed. It is awaited if it retu
 
 ###### Implementation of
 
-```ts
-InstanceType.defer
-```
+`InstanceType.defer`
 
 ##### disposeAsync()
 
@@ -179,9 +171,7 @@ wrapping the accumulated one).
 
 ###### Implementation of
 
-```ts
-InstanceType.disposeAsync
-```
+`InstanceType.disposeAsync`
 
 ##### move()
 
@@ -201,9 +191,7 @@ A new stack owning the transferred disposers.
 
 ###### Implementation of
 
-```ts
-InstanceType.move
-```
+`InstanceType.move`
 
 ##### use()
 
@@ -221,7 +209,7 @@ either member cannot change what runs.
 
 | Type Parameter |
 | ------ |
-| `T` *extends* \| [`Disposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/dispose) \| [`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose) \| `null` \| `undefined` |
+| <a id="type-parameter-t-1"></a> `T` *extends* \| [`Disposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/dispose) \| [`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose) \| `null` \| `undefined` |
 
 ###### Parameters
 
@@ -237,6 +225,4 @@ The provided `value`.
 
 ###### Implementation of
 
-```ts
-InstanceType.use
-```
+`InstanceType.use`

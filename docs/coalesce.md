@@ -61,7 +61,7 @@ const found = await refresh.request();
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `T` | `void` | The verdict each pass answers, in the consumer's own vocabulary, and what [CoalescingTask.request](#request) settles with. Defaults to `void` for a task whose passes have nothing to answer, which is what every fire-and-forget consumer builds without naming the parameter. |
+| <a id="type-parameter-t"></a> `T` | `void` | The verdict each pass answers, in the consumer's own vocabulary, and what [CoalescingTask.request](#request) settles with. Defaults to `void` for a task whose passes have nothing to answer, which is what every fire-and-forget consumer builds without naming the parameter. |
 
 #### Constructors
 
@@ -129,7 +129,7 @@ Construction options for [CoalescingTask](#coalescingtask).
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `T` | `void` | The verdict a pass answers and a requester reads back. Defaults to `void` for the fire-and-forget form, whose passes have nothing to answer. |
+| <a id="type-parameter-t-1"></a> `T` | `void` | The verdict a pass answers and a requester reads back. Defaults to `void` for the fire-and-forget form, whose passes have nothing to answer. |
 
 #### Properties
 

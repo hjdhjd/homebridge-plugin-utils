@@ -56,8 +56,8 @@ them into the two exports it publishes, rather than assembling the pair itself.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TOptionMeta` | `unknown` | The concrete type of an option entry's opaque `meta` annotation. |
-| `TCategoryMeta` | `unknown` | The concrete type of a category entry's opaque `meta` annotation. |
+| <a id="type-parameter-toptionmeta"></a> `TOptionMeta` | `unknown` | The concrete type of an option entry's opaque `meta` annotation. |
+| <a id="type-parameter-tcategorymeta"></a> `TCategoryMeta` | `unknown` | The concrete type of a category entry's opaque `meta` annotation. |
 
 #### Properties
 
@@ -110,8 +110,8 @@ grammar. The formatter is built once per builder call and reused across every op
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TOptionMeta` | `unknown` | The concrete type of an option entry's opaque `meta` annotation. |
-| `TCategoryMeta` | `unknown` | The concrete type of a category entry's opaque `meta` annotation. |
+| <a id="type-parameter-toptionmeta-1"></a> `TOptionMeta` | `unknown` | The concrete type of an option entry's opaque `meta` annotation. |
+| <a id="type-parameter-tcategorymeta-1"></a> `TCategoryMeta` | `unknown` | The concrete type of a category entry's opaque `meta` annotation. |
 
 #### Parameters
 
@@ -154,8 +154,8 @@ that lands there wants [buildComposedScopeDescribers](#buildcomposedscopedescrib
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TOptionMeta` | `unknown` | The concrete type of an option entry's opaque `meta` annotation. |
-| `TCategoryMeta` | `unknown` | The concrete type of a category entry's opaque `meta` annotation. |
+| <a id="type-parameter-toptionmeta-2"></a> `TOptionMeta` | `unknown` | The concrete type of an option entry's opaque `meta` annotation. |
+| <a id="type-parameter-tcategorymeta-2"></a> `TCategoryMeta` | `unknown` | The concrete type of a category entry's opaque `meta` annotation. |
 
 #### Returns
 
@@ -194,8 +194,8 @@ The catalog index is built once via [buildCatalogIndex](featureOptions.md#buildc
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TOptionMeta` | `unknown` | The concrete type of an option entry's opaque `meta` annotation, reconstituted at this boundary so `describeOptionScope` sees it typed. |
-| `TCategoryMeta` | `unknown` | The concrete type of a category entry's opaque `meta` annotation, reconstituted so `describeCategoryScope` sees it typed. |
+| <a id="type-parameter-toptionmeta-3"></a> `TOptionMeta` | `unknown` | The concrete type of an option entry's opaque `meta` annotation, reconstituted at this boundary so `describeOptionScope` sees it typed. |
+| <a id="type-parameter-tcategorymeta-3"></a> `TCategoryMeta` | `unknown` | The concrete type of a category entry's opaque `meta` annotation, reconstituted so `describeCategoryScope` sees it typed. |
 
 #### Parameters
 

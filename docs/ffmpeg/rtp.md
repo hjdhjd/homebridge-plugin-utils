@@ -117,9 +117,9 @@ sequence work against bind completion `await demuxer.ready`.
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="mediaready"></a> `mediaReady` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Promise that resolves once the demuxer has forwarded its first RTP-classified packet - the application-level readiness milestone meaning "media is now flowing through the relay to the downstream consumer." Rejects with `this.signal.reason` if the demuxer aborts before any RTP packet arrives. Pairs with [RtpDemuxer.ready](#ready) as a two-tier readiness model: `ready` resolves when the inbound socket has bound (network-level readiness); `mediaReady` resolves when classified RTP traffic has begun flowing (application-level readiness). The canonical gating pattern for two-way audio is "stand up the return-audio path, wait for inbound media before launching the consuming FFmpeg process": `try { await demuxer.mediaReady; } catch { // Demuxer aborted before any RTP arrived; abandon the return-audio setup. return; } // Safe to launch the consuming FFmpeg process now that media is flowing.` The unhandled-rejection tracker is suppressed via [markHandled](../mark-handled.md#markhandled) so consumers that never observe this promise produce no warnings. |
-| <a id="ready"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Promise that resolves once the underlying UDP socket has finished binding and entered its `"listening"` state. Rejects with `this.signal.reason` when the bind fails, the parent signal propagates, or any other abort path fires before the socket becomes ready. The unhandled-rejection tracker is suppressed via [markHandled](../mark-handled.md#markhandled) so consumers that never observe readiness (fire-and-forget demuxers) do not produce warnings; consumers that do observe rejection receive the same structured abort reason they would from `signal.reason`. |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this demuxer's lifetime. Aborts exactly once when the socket errors, the inactivity watchdog fires, the parent signal propagates, or [RtpDemuxer.abort](#abort) is called; the reason encoded on `signal.reason` names the cause. |
+| <a id="mediaready"></a> `mediaReady` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Promise that resolves once the demuxer has forwarded its first RTP-classified packet - the application-level readiness milestone meaning "media is now flowing through the relay to the downstream consumer." Rejects with `this.signal.reason` if the demuxer aborts before any RTP packet arrives. Pairs with [RtpDemuxer.ready](#ready) as a two-tier readiness model: `ready` resolves when the inbound socket has bound (network-level readiness); `mediaReady` resolves when classified RTP traffic has begun flowing (application-level readiness). The canonical gating pattern for two-way audio is "stand up the return-audio path, wait for inbound media before launching the consuming FFmpeg process": `try { await demuxer.mediaReady; } catch { // Demuxer aborted before any RTP arrived; abandon the return-audio setup. return; } // Safe to launch the consuming FFmpeg process now that media is flowing.` The unhandled-rejection tracker is suppressed via [markHandled](../mark-handled.md#markhandled) so consumers that never observe this promise produce no warnings. |
+| <a id="ready"></a> `ready` | `public readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Promise that resolves once the underlying UDP socket has finished binding and entered its `"listening"` state. Rejects with `this.signal.reason` when the bind fails, the parent signal propagates, or any other abort path fires before the socket becomes ready. The unhandled-rejection tracker is suppressed via [markHandled](../mark-handled.md#markhandled) so consumers that never observe readiness (fire-and-forget demuxers) do not produce warnings; consumers that do observe rejection receive the same structured abort reason they would from `signal.reason`. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this demuxer's lifetime. Aborts exactly once when the socket errors, the inactivity watchdog fires, the parent signal propagates, or [RtpDemuxer.abort](#abort) is called; the reason encoded on `signal.reason` names the cause. |
 
 #### Accessors
 
@@ -177,7 +177,7 @@ logic lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stay
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the demuxer (defaulting to `"shutdown"`) and awaits the socket's `"close"` event so the bound port is releasable by the
@@ -191,9 +191,7 @@ A promise that resolves once the kernel has released the bound port.
 
 ###### Implementation of
 
-```ts
-AsyncDisposable.[asyncDispose]
-```
+`AsyncDisposable.[asyncDispose]`
 
 ##### abort()
 
@@ -260,7 +258,7 @@ Create an allocator with an empty pool.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | [`RtpPortAllocatorInit`](#rtpportallocatorinit) | Optional init options. See [RtpPortAllocatorInit](#rtpportallocatorinit). |
+| `init?` | [`RtpPortAllocatorInit`](#rtpportallocatorinit) | Optional init options. See [RtpPortAllocatorInit](#rtpportallocatorinit). |
 
 ###### Returns
 
@@ -303,7 +301,7 @@ the in-use set or rejected by the OS), the first port is released and the alloca
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `init` | [`PortReservationInit`](#portreservationinit) | Optional init options. See [PortReservationInit](#portreservationinit). |
+| `init?` | [`PortReservationInit`](#portreservationinit) | Optional init options. See [PortReservationInit](#portreservationinit). |
 
 ###### Returns
 
@@ -352,7 +350,7 @@ explicit dispose (for example, on an error path that releases early and then fal
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 ###### Returns
@@ -361,9 +359,7 @@ asyncDispose: Promise<void>;
 
 ###### Overrides
 
-```ts
-AsyncDisposable.[asyncDispose]
-```
+`AsyncDisposable.[asyncDispose]`
 
 ***
 
@@ -375,7 +371,7 @@ Construction-time options for [RtpPortAllocator.reserve](#reserve).
 
 | Property | Type | Description |
 | ------ | ------ | ------ |
-| <a id="count-1"></a> `count?` | `1` \| `2` | Optional. The number of consecutive UDP ports to reserve. `1` yields a single port, `2` yields the reserved port plus the next port so FFmpeg's "RTP port N implies RTCP port N+1" convention is satisfied. Defaults to `1`. |
+| <a id="count-1"></a> `count?` | `2` \| `1` | Optional. The number of consecutive UDP ports to reserve. `1` yields a single port, `2` yields the reserved port plus the next port so FFmpeg's "RTP port N implies RTCP port N+1" convention is satisfied. Defaults to `1`. |
 | <a id="ipfamily-1"></a> `ipFamily?` | [`IpFamily`](../dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |
 | <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional caller [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). Cancels in-flight bind-retry attempts. If the signal aborts while `reserve()` is still looking for consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`. |
 

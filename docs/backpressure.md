@@ -36,7 +36,7 @@ new BackpressureClosedStreamError(message?): BackpressureClosedStreamError;
 
 | Parameter | Type | Default value |
 | ------ | ------ | ------ |
-| `message` | `string` | `"BackpressureWriter: underlying stream is not writable."` |
+| `message?` | `string` | `"BackpressureWriter: underlying stream is not writable."` |
 
 ###### Returns
 
@@ -44,15 +44,13 @@ new BackpressureClosedStreamError(message?): BackpressureClosedStreamError;
 
 ###### Overrides
 
-```ts
-Error.constructor
-```
+`Error.constructor`
 
 #### Properties
 
 | Property | Modifier | Type | Overrides |
 | ------ | ------ | ------ | ------ |
-| <a id="name"></a> `name` | `readonly` | `"BackpressureClosedStreamError"` | `Error.name` |
+| <a id="name"></a> `name` | `public readonly` | `"BackpressureClosedStreamError"` | `Error.name` |
 
 ***
 
@@ -80,7 +78,7 @@ new BackpressureOverflowError(message?): BackpressureOverflowError;
 
 | Parameter | Type | Default value |
 | ------ | ------ | ------ |
-| `message` | `string` | `"BackpressureWriter: queue depth exceeds configured highWaterMark."` |
+| `message?` | `string` | `"BackpressureWriter: queue depth exceeds configured highWaterMark."` |
 
 ###### Returns
 
@@ -88,15 +86,13 @@ new BackpressureOverflowError(message?): BackpressureOverflowError;
 
 ###### Overrides
 
-```ts
-Error.constructor
-```
+`Error.constructor`
 
 #### Properties
 
 | Property | Modifier | Type | Overrides |
 | ------ | ------ | ------ | ------ |
-| <a id="name-1"></a> `name` | `readonly` | `"BackpressureOverflowError"` | `Error.name` |
+| <a id="name-1"></a> `name` | `public readonly` | `"BackpressureOverflowError"` | `Error.name` |
 
 ***
 
@@ -140,7 +136,7 @@ Construct a new backpressure-aware writer.
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
 | `streamProvider` | () => [`Nullable`](util.md#nullable)\<[`Writable`](https://nodejs.org/api/stream.html#class-streamwritable)\> | A function that returns the current writable stream, or `null` to drop incoming chunks. Evaluated lazily on each drain-loop iteration. |
-| `init` | [`BackpressureWriterInit`](#backpressurewriterinit) | Optional init options. See [BackpressureWriterInit](#backpressurewriterinit). |
+| `init?` | [`BackpressureWriterInit`](#backpressurewriterinit) | Optional init options. See [BackpressureWriterInit](#backpressurewriterinit). |
 
 ###### Returns
 
@@ -156,7 +152,7 @@ await using writer = new BackpressureWriter(() => this.ffmpegProcess?.stdin ?? n
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="signal"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this writer's lifetime. Aborts exactly once when [BackpressureWriter.abort](#abort) is called, when the parent signal fires, or when the underlying stream surfaces an error that invalidates the writer; `signal.reason` names the cause. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The composed abort signal representing this writer's lifetime. Aborts exactly once when [BackpressureWriter.abort](#abort) is called, when the parent signal fires, or when the underlying stream surfaces an error that invalidates the writer; `signal.reason` names the cause. |
 
 #### Accessors
 
@@ -195,7 +191,7 @@ internally.
 ##### \[asyncDispose\]()
 
 ```ts
-asyncDispose: Promise<void>;
+[asyncDispose](): Promise<void>;
 ```
 
 `AsyncDisposable` implementation. Aborts the writer (defaulting to `"shutdown"`) and awaits actual drain-loop completion before returning, so callers using
@@ -209,9 +205,7 @@ A promise that resolves once the drain loop has fully exited.
 
 ###### Implementation of
 
-```ts
-AsyncDisposable.[asyncDispose]
-```
+`AsyncDisposable.[asyncDispose]`
 
 ##### abort()
 

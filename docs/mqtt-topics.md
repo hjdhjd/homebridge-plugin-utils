@@ -33,7 +33,7 @@ the order every cell reads in.
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `V` *extends* `Readonly`\<`Record`\<`string`, `string`\>\> | `Readonly`\<`Record`\<`string`, `string`\>\> | The vocabulary's own shape, inferred from the declaration so an entry naming an undeclared kind is a compile error. |
+| <a id="type-parameter-v"></a> `V` *extends* `Readonly`\<`Record`\<`string`, `string`\>\> | `Readonly`\<`Record`\<`string`, `string`\>\> | The vocabulary's own shape, inferred from the declaration so an entry naming an undeclared kind is a compile error. |
 
 #### Properties
 
@@ -58,7 +58,7 @@ kind. Like `devices`, a narrowing is documentation the renderer projects and the
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TDevice` *extends* `string` | `string` | The device-kind keys this entry may name, fixed by the catalog's column vocabulary. |
+| <a id="type-parameter-tdevice"></a> `TDevice` *extends* `string` | `string` | The device-kind keys this entry may name, fixed by the catalog's column vocabulary. |
 
 #### Properties
 
@@ -68,12 +68,12 @@ kind. Like `devices`, a narrowing is documentation the renderer projects and the
 | <a id="get"></a> `get?` | `readonly` | `string` | Optional. The message text the document prints for the topic's get child. Its presence declares that the plugin subscribes to that child. |
 | <a id="getdevices"></a> `getDevices?` | `readonly` | readonly \[`TDevice`, `TDevice`\] | Optional. The listed kinds that answer the get child, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the same keys. Documentation only. |
 | <a id="group"></a> `group?` | `readonly` | `string` | Optional. The heading the entry's rows render under. A catalog groups all of its entries or none of them. |
-| <a id="label"></a> `label` | `readonly` | `string` | The name the get and set verbs log under, handed to `subscribeGet` and `subscribeSet` as their `type` argument. |
-| <a id="publish"></a> `publish?` | `readonly` | `string` | Optional. The message text the document prints for the published topic. Its presence declares that the plugin publishes it. |
+| <a id="label-1"></a> `label` | `readonly` | `string` | The name the get and set verbs log under, handed to `subscribeGet` and `subscribeSet` as their `type` argument. |
+| <a id="publish-1"></a> `publish?` | `readonly` | `string` | Optional. The message text the document prints for the published topic. Its presence declares that the plugin publishes it. |
 | <a id="publishdevices"></a> `publishDevices?` | `readonly` | readonly \[`TDevice`, `TDevice`\] | Optional. The listed kinds that publish the topic, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the same keys. Documentation only. |
 | <a id="set"></a> `set?` | `readonly` | `string` | Optional. The message text the document prints for the topic's set child. Its presence declares that the plugin subscribes to that child. |
 | <a id="setdevices"></a> `setDevices?` | `readonly` | readonly \[`TDevice`, `TDevice`\] | Optional. The listed kinds that answer the set child, when fewer than all of them do: a non-empty tuple drawn from `devices`, named by the same keys. Documentation only. |
-| <a id="topic"></a> `topic` | `readonly` | `string` | The tail relative to the identity the caller composes with, or the whole topic after the prefix for a plugin that composes no identity. A template when it carries placeholders. |
+| <a id="topic-1"></a> `topic` | `readonly` | `string` | The tail relative to the identity the caller composes with, or the whole topic after the prefix for a plugin that composes no identity. A template when it carries placeholders. |
 
 ***
 
@@ -103,18 +103,18 @@ type MqttTopicCatalog<TDevice, V> = MqttTopicEntries<TDevice> & {
 What [mqttTopicCatalog](#mqtttopiccatalog-1) returns and the renderer reads: the entries, with the device column attached under [MQTT\_DEVICE\_COLUMN](#mqtt_device_column) when one was
 declared. The symbol key is invisible to every iteration over the entries, so a plugin's call sites and the renderer both walk the entries alone.
 
+#### Type Parameters
+
+| Type Parameter | Default type | Description |
+| ------ | ------ | ------ |
+| <a id="type-parameter-tdevice-1"></a> `TDevice` *extends* `string` | `string` | The device-kind keys the entries name. |
+| <a id="type-parameter-v-1"></a> `V` *extends* `Readonly`\<`Record`\<`string`, `string`\>\> | `Readonly`\<`Record`\<`string`, `string`\>\> | The column vocabulary's own shape. |
+
 #### Type Declaration
 
 | Name | Type |
 | ------ | ------ |
 | `[MQTT_DEVICE_COLUMN]?` | [`MqttTopicDeviceColumn`](#mqtttopicdevicecolumn)\<`V`\> |
-
-#### Type Parameters
-
-| Type Parameter | Default type | Description |
-| ------ | ------ | ------ |
-| `TDevice` *extends* `string` | `string` | The device-kind keys the entries name. |
-| `V` *extends* `Readonly`\<`Record`\<`string`, `string`\>\> | `Readonly`\<`Record`\<`string`, `string`\>\> | The column vocabulary's own shape. |
 
 ***
 
@@ -133,18 +133,18 @@ The shape is a named export so that a consumer can spell it. A plugin that expor
 its declaration file, and a type keyed by a unique symbol can be written there only through an alias the library exports: the emitter names the alias from a
 module that imports the builder alone, where it has no way to reference the key as a value.
 
+#### Type Parameters
+
+| Type Parameter | Description |
+| ------ | ------ |
+| <a id="type-parameter-t"></a> `T` | The entries as declared, whose literal type carries through so per-key access and the placeholder guard read the same as at the call site. |
+| <a id="type-parameter-v-2"></a> `V` *extends* `Readonly`\<`Record`\<`string`, `string`\>\> | The column vocabulary's own shape. |
+
 #### Type Declaration
 
 | Name | Type |
 | ------ | ------ |
 | `[MQTT_DEVICE_COLUMN]` | [`MqttTopicDeviceColumn`](#mqtttopicdevicecolumn)\<`V`\> |
-
-#### Type Parameters
-
-| Type Parameter | Description |
-| ------ | ------ |
-| `T` | The entries as declared, whose literal type carries through so per-key access and the placeholder guard read the same as at the call site. |
-| `V` *extends* `Readonly`\<`Record`\<`string`, `string`\>\> | The column vocabulary's own shape. |
 
 ***
 
@@ -160,7 +160,7 @@ The keyed record a plugin hands [mqttTopicCatalog](#mqtttopiccatalog-1). The key
 
 | Type Parameter | Default type | Description |
 | ------ | ------ | ------ |
-| `TDevice` *extends* `string` | `string` | The device-kind keys the entries may name. |
+| <a id="type-parameter-tdevice-2"></a> `TDevice` *extends* `string` | `string` | The device-kind keys the entries may name. |
 
 ***
 
@@ -181,7 +181,7 @@ fails to compile rather than reaching the renderer as a documentation defect.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `TDevice` *extends* `string` | The device-kind keys the entries may name, taken from the column's vocabulary. |
+| <a id="type-parameter-tdevice-3"></a> `TDevice` *extends* `string` | The device-kind keys the entries may name, taken from the column's vocabulary. |
 
 ***
 
@@ -201,7 +201,7 @@ the authoring rule [mqttTopicCatalog](#mqtttopiccatalog-1) states, and it is why
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | The topic template whose parameter names are being read. |
+| <a id="type-parameter-t-1"></a> `T` *extends* `string` | The topic template whose parameter names are being read. |
 
 ***
 
@@ -221,7 +221,7 @@ unaffected.
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | The topic being composed. |
+| <a id="type-parameter-t-2"></a> `T` *extends* `string` | The topic being composed. |
 
 ***
 
@@ -240,7 +240,7 @@ that at the call site where the literal survives, and the resolver's residual ch
 
 | Type Parameter | Description |
 | ------ | ------ |
-| `T` *extends* `string` | The topic being resolved. |
+| <a id="type-parameter-t-3"></a> `T` *extends* `string` | The topic being resolved. |
 
 ***
 
@@ -325,11 +325,7 @@ apply.
 ### mqttAvailabilityEntry
 
 ```ts
-const mqttAvailabilityEntry: {
-  label: "availability";
-  publish: string;
-  topic: "availability";
-};
+const mqttAvailabilityEntry: MqttAvailabilityEntry;
 ```
 
 The per-device availability entry a plugin spreads into its own catalog, so every plugin in the family states a device's reachability on the same tail, in the
@@ -347,14 +343,6 @@ as well; the entry ships group-less because the library cannot know a consumer's
 renderer refuse the mismatch. The entry declares no `publishDevices` narrowing: every device that carries the topic publishes it, and a narrowing that credits
 fewer than the listed kinds makes the renderer refuse the entry outright.
 
-#### Type Declaration
-
-| Name | Type | Default value |
-| ------ | ------ | ------ |
-| <a id="property-label"></a> `label` | `"availability"` | `"availability"` |
-| <a id="property-publish"></a> `publish` | `string` | - |
-| <a id="property-topic"></a> `topic` | `"availability"` | `MQTT_AVAILABILITY_TOPIC` |
-
 #### Example
 
 ```ts
@@ -368,6 +356,9 @@ export const mqttTopics = mqttTopicCatalog({
 
 export const flatTopics = mqttTopicCatalog({ availability: mqttAvailabilityEntry, lock: { label: "lock", publish: "`true` when locked.", topic: "lock" } });
 ```
+
+A plugin whose availability is about something other than a device, a price feed or a hub, composes the same entry with its own nouns through
+[mqttAvailabilityEntryFor](#mqttavailabilityentryfor), so its document states availability in the family's words without copying the sentence.
 
 ***
 
@@ -401,6 +392,45 @@ unconditional rather than conditional on how a plugin declared its catalog.
 
 ***
 
+### mqttAvailabilityEntryFor()
+
+```ts
+function mqttAvailabilityEntryFor(options?): MqttAvailabilityEntry;
+```
+
+Compose the per-device availability entry for a consumer's own subject.
+
+The family states availability in one sentence, and the library owns that sentence: what changes between plugins is only what the plugin reaches and what it
+declares available. A device plugin spreads [mqttAvailabilityEntry](#mqttavailabilityentry-1), which is this factory at its defaults. A plugin whose availability is about a feed or
+a hub names its nouns here and gets the same sentence with them in place, so a rewording of the sentence reaches every plugin's document at its next build
+rather than leaving a copied sentence behind.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options?` | [`MqttAvailabilityEntryOptions`](#mqttavailabilityentryoptions) | The consumer's nouns, each defaulting to the device plugin's. |
+
+#### Returns
+
+[`MqttAvailabilityEntry`](#mqttavailabilityentry)
+
+The availability entry, ready to spread into a catalog.
+
+#### Example
+
+```ts
+import { mqttAvailabilityEntryFor, mqttTopicCatalog } from "homebridge-plugin-utils";
+
+export const mqttTopics = mqttTopicCatalog({
+
+  availability: mqttAvailabilityEntryFor({ reaches: "the ComEd price feed", subject: "The price" }),
+  price: { label: "Hourly price", publish: "The status JSON, published on every poll.", topic: "price" }
+});
+```
+
+***
+
 ### mqttGetTopic()
 
 ```ts
@@ -420,7 +450,7 @@ plain `string` passes through unchanged.
 
 | Type Parameter |
 | ------ |
-| `T` *extends* `string` |
+| <a id="type-parameter-t-4"></a> `T` *extends* `string` |
 
 #### Parameters
 
@@ -454,7 +484,7 @@ plain `string` passes through unchanged.
 
 | Type Parameter |
 | ------ |
-| `T` *extends* `string` |
+| <a id="type-parameter-t-5"></a> `T` *extends* `string` |
 
 #### Parameters
 
@@ -494,7 +524,7 @@ literal type survives; a plain `string` passes through unchanged, so every calle
 
 | Type Parameter |
 | ------ |
-| `T` *extends* `string` |
+| <a id="type-parameter-t-6"></a> `T` *extends* `string` |
 
 #### Parameters
 
@@ -552,7 +582,7 @@ wire verbs is what makes the contract unconditional.
 
 | Type Parameter |
 | ------ |
-| `T` *extends* `Readonly`\<`Record`\<`string`, [`MqttTopicEntry`](#mqtttopicentry)\<`never`\>\>\> |
+| <a id="type-parameter-t-7"></a> `T` *extends* `Readonly`\<`Record`\<`string`, [`MqttTopicEntry`](#mqtttopicentry)\<`never`\>\>\> |
 
 ##### Parameters
 
@@ -617,8 +647,8 @@ compile wherever the entries' literal type survives.
 
 | Type Parameter |
 | ------ |
-| `V` *extends* `Readonly`\<`Record`\<`string`, `string`\>\> |
-| `T` *extends* `Readonly`\<`Record`\<`string`, [`MqttTopicEntry`](#mqtttopicentry)\<keyof `V` & `string`\> & \{ `devices`: readonly \[keyof `V` & `string`, keyof `V` & `string`\]; \}\>\> |
+| <a id="type-parameter-v-3"></a> `V` *extends* `Readonly`\<`Record`\<`string`, `string`\>\> |
+| <a id="type-parameter-t-8"></a> `T` *extends* `Readonly`\<`Record`\<`string`, [`MqttTopicEntry`](#mqtttopicentry)\<keyof `V` & `string`\> & \{ `devices`: readonly \[keyof `V` & `string`, keyof `V` & `string`\]; \}\>\> |
 
 ##### Parameters
 
@@ -679,7 +709,7 @@ to prevent, since the value is the caller's own wire data.
 
 | Type Parameter |
 | ------ |
-| `T` *extends* `string` |
+| <a id="type-parameter-t-9"></a> `T` *extends* `string` |
 
 #### Parameters
 
@@ -703,3 +733,31 @@ The resolved topic.
 ```ts
 await mqtt.publish(mqttTopic(device.mac, resolveMqttTopic(mqttTopics.smartMotion.topic, { object: event.type })), "true");
 ```
+
+## Other
+
+### MqttAvailabilityEntry
+
+The shape [mqttAvailabilityEntryFor](#mqttavailabilityentryfor) returns and [mqttAvailabilityEntry](#mqttavailabilityentry-1) carries: the family's availability tail and label as literals, so a catalog
+assembled from either keeps the tail's literal type, with the message text composed for the consumer's subject.
+
+#### Properties
+
+| Property | Modifier | Type |
+| ------ | ------ | ------ |
+| <a id="label"></a> `label` | `readonly` | `"availability"` |
+| <a id="publish"></a> `publish` | `readonly` | `string` |
+| <a id="topic"></a> `topic` | `readonly` | `"availability"` |
+
+***
+
+### MqttAvailabilityEntryOptions
+
+The nouns [mqttAvailabilityEntryFor](#mqttavailabilityentryfor) composes the availability sentence from.
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="reaches"></a> `reaches?` | `readonly` | `string` | What the plugin reaches, as the noun phrase that completes "when the plugin can reach ...": the shipped entry's is "the device". |
+| <a id="subject"></a> `subject?` | `readonly` | `string` | What the sentence declares available, with its article, as the subject that opens "... is available only when": the shipped entry's is "A device". |

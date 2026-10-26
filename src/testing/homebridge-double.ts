@@ -57,9 +57,9 @@
  */
 import type { API, AccessoryCharacteristicChange, AccessoryEventTypes, BridgeConfiguration, Categories, Characteristic, CharacteristicEventTypes,
   CharacteristicValue, DynamicPlatformPlugin, HAP, HomebridgeOptions, LogLevel, Logger, PlatformAccessory, PlatformName, PluginIdentifier, Service,
-  ServiceCharacteristicChange, ServiceEventTypes, UnknownContext, WithUUID } from "homebridge";
+  ServiceCharacteristicChange, UnknownContext, WithUUID } from "homebridge";
 import type { CharacteristicWarning, HAPConnection } from "@homebridge/hap-nodejs";
-import { CharacteristicWarningType, HAPStatus, Perms } from "../homebridge-enums.ts";
+import { CharacteristicWarningType, HAPStatus, Perms, ServiceEventTypes } from "../homebridge-enums.ts";
 import { dirname, join } from "node:path";
 import { format, stripVTControlCharacters } from "node:util";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -70,9 +70,9 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
-// HAP's event names, each checked against the member of HAP's own const enum that names it, the form the `APIEvent` mirror in `homebridge-enums.ts` documents, so a
-// value that drifts from upstream fails the build here. The constants stay plain strings, because HAP's listener signatures take the string itself.
-const CHARACTERISTIC_CHANGE = "characteristic-change" satisfies `${ServiceEventTypes.CHARACTERISTIC_CHANGE}`;
+// The names of the characteristic and accessory events the double listens for, which `homebridge-enums.ts` mirrors none of, each checked against the member of
+// HAP's own const enum that names it, the form the `APIEvent` mirror there documents, so a value that drifts from upstream fails the build here. A service's events
+// are named through that module's `ServiceEventTypes` mirror.
 const CHARACTERISTIC_GET = "get" satisfies `${CharacteristicEventTypes.GET}`;
 const CHARACTERISTIC_SET = "set" satisfies `${CharacteristicEventTypes.SET}`;
 const CHARACTERISTIC_WARNING = "characteristic-warning" satisfies `${AccessoryEventTypes.CHARACTERISTIC_WARNING}`;
@@ -593,9 +593,9 @@ function observedAccessoryClass(runtime: HomebridgeRuntime, accessories: TestPla
         this.#changeListeners.set(service, listener);
       }
 
-      if(!service.listeners(CHARACTERISTIC_CHANGE).includes(listener)) {
+      if(!service.listeners(ServiceEventTypes.CHARACTERISTIC_CHANGE).includes(listener)) {
 
-        service.on(CHARACTERISTIC_CHANGE, listener);
+        service.on(ServiceEventTypes.CHARACTERISTIC_CHANGE, listener);
       }
     }
 

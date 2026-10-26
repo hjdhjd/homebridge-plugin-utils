@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * homekit-name.ts: HomeKit's naming rule - the validator and the sanitizer built from one statement of it - and the custom-name rule built on the sanitizer, shared
- * between the server-side `util.ts` surface and a plugin's settings page.
+ * homekit-name.ts: HomeKit's naming rule - the validator and the sanitizer built from one statement of it - and the custom-name rule built on the sanitizer, with the
+ * family rule for who owns a name built on that, shared between the server-side `util.ts` surface and a plugin's settings page.
  */
 
 /**
@@ -166,4 +166,39 @@ export function displayedName({ fallback, override }: { fallback: string; overri
   const sanitized = sanitizeName(chosen);
 
   return sanitized.length ? sanitized : chosen;
+}
+
+/**
+ * Answer the name a plugin owns for an accessory's service under the family naming rule, or `null` when the user owns it.
+ *
+ * @param options          - The accessory's names and its Sync Name setting.
+ * @param options.fallback - The device's name, which owns the HomeKit name when the user set no custom name HomeKit can carry and Sync Name is on.
+ * @param options.override - Optional. The raw value of the accessory's name option, resolved through {@link resolveNameOverride}.
+ * @param options.sync     - Optional. Whether Sync Name is on for the accessory, so the device's name owns the HomeKit name wherever no custom name does. Defaults to
+ *                           `false`, the side that never overrides a rename in the Home app, so a plugin that offers no Sync Name option omits it.
+ *
+ * @returns Returns the custom name where one resolves, the fallback where none does and Sync Name is on, and `null` otherwise.
+ *
+ * @remarks The rule reads in order of precedence. A name the user typed in the plugin's settings owns the HomeKit name, whatever Sync Name says; otherwise, with
+ * Sync Name on, the device's name owns it; otherwise the user owns it. An answer of `null` means the user owns the name and the plugin leaves it alone, so a rename
+ * in the Home app stands and nothing the plugin does afterward touches it. Owning a name is the user's explicit opt-in, through a custom name or Sync Name, which
+ * is why an owned name overrides a rename in the Home app rather than yielding to it.
+ *
+ * The rule governs a service that is already named. A new service is named through {@link displayedName} whoever owns the name, because a service HomeKit has never
+ * seen carries no name of the user's to leave alone. The answer is the trimmed custom name or the fallback as given, never sanitized, because each setter sanitizes
+ * the name it applies, as `setServiceName` does.
+ *
+ * @example
+ * ```ts
+ * ownedName({ fallback: "Zone 1", override: "  Patio  " })
+ * ```
+ *
+ * Returns: `Patio`, the custom name trimmed. With no custom name the same call returns `null`, Sync Name being off and the user owning the name, and with
+ * `sync: true` as well it returns `Zone 1`.
+ *
+ * @category Utilities
+ */
+export function ownedName({ fallback, override, sync = false }: { fallback: string; override?: string | null; sync?: boolean }): string | null {
+
+  return resolveNameOverride(override) ?? (sync ? fallback : null);
 }

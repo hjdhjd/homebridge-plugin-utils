@@ -5,13 +5,14 @@
 
 /**
  * Mirrors the const enum values every Homebridge plugin needs at value-side runtime, sourced from the "homebridge" module surface: `APIEvent` from homebridge-core's
- * `api.d.ts`, and `Categories` from hap-nodejs's `Accessory.d.ts`, `HAPStatus` from its `HAPServer.d.ts` and `Perms` from its `Characteristic.d.ts` as "homebridge"
- * re-exports them. `CharacteristicWarningType`, from hap-nodejs's `Accessory.d.ts`, is the one "homebridge" does not re-export, so it is sourced from hap-nodejs
- * directly. `verbatimModuleSyntax` disallows value imports of ambient const enums, so those contracts are re-declared here at value-side. This is the plugin-facing
- * counterpart of the camera-protocol mirrors in `ffmpeg/hap-enums.ts`: every plugin registers for the `api` lifecycle events, any plugin that registers an accessory
- * names its category, any plugin that reports a device fault to HomeKit names a status code, any plugin that selects an accessory's characteristics by permission
- * names the flag it selects on, and a plugin's suite that reads the warnings HAP raises names the kind it reads, so centralizing the mirrors gives every consumer a
- * single import path and a single update point.
+ * `api.d.ts`, and `Categories` from hap-nodejs's `Accessory.d.ts`, `HAPStatus` from its `HAPServer.d.ts`, `ChangeReason` and `Perms` from its `Characteristic.d.ts`
+ * and `ServiceEventTypes` from its `Service.d.ts` as "homebridge" re-exports them. `CharacteristicWarningType`, from hap-nodejs's `Accessory.d.ts`, is the one
+ * "homebridge" does not re-export, so it is sourced from hap-nodejs directly. `verbatimModuleSyntax` disallows value imports of ambient const enums, so those
+ * contracts are re-declared here at value-side. This is the plugin-facing counterpart of the camera-protocol mirrors in `ffmpeg/hap-enums.ts`: every plugin
+ * registers for the `api` lifecycle events, any plugin that registers an accessory names its category, any plugin that reports a device fault to HomeKit names a
+ * status code, any plugin that selects an accessory's characteristics by permission names the flag it selects on, any code that listens on a service names the
+ * event it listens for and the reason a characteristic changed, and a plugin's suite that reads the warnings HAP raises names the kind it reads, so centralizing
+ * the mirrors gives every consumer a single import path and a single update point.
  *
  * Each mirror is annotated with a type derived from the upstream declaration itself, so the compiler enforces lockstep: a member added or removed upstream fails the
  * build here until the mirror is updated. A member revalued upstream fails it as well, a numeric mirror's through that derived type and a string mirror's through the
@@ -20,7 +21,8 @@
  *
  * @module
  */
-import type { APIEvent as APIEventEnum, Categories as CategoriesEnum, HAPStatus as HAPStatusEnum, Perms as PermsEnum } from "homebridge";
+import type { APIEvent as APIEventEnum, Categories as CategoriesEnum, ChangeReason as ChangeReasonEnum, HAPStatus as HAPStatusEnum, Perms as PermsEnum,
+  ServiceEventTypes as ServiceEventTypesEnum } from "homebridge";
 import type { CharacteristicWarningType as CharacteristicWarningTypeEnum } from "@homebridge/hap-nodejs";
 
 /**
@@ -70,6 +72,32 @@ export const Categories: Readonly<typeof CategoriesEnum> = {
  * @category Homebridge
  */
 export type Categories = CategoriesEnum;
+
+/**
+ * String mirror of HAP's `ChangeReason` const enum: why a characteristic's value changed, which HAP carries on every change it raises. A controller's write and a
+ * plugin's `setValue` each raise `WRITE`, the controller's carrying the connection it arrived on as the change's originator and the plugin's none, and a plugin's
+ * `updateValue` raises `UPDATE`, so code reacting to a write reads a change's `reason` against `ChangeReason.WRITE` rather than a bare `"write"` literal.
+ *
+ * @category Homebridge
+ */
+// The `Readonly<typeof ChangeReasonEnum>` annotation derives the required shape from hap-nodejs's own declaration, so a missing member or an extra member is a
+// compile error here. Each value passes a `satisfies` check against its upstream member's string before it is branded, the form `APIEvent` documents, which makes a
+// value that drifts from upstream a compile error too.
+export const ChangeReason: Readonly<typeof ChangeReasonEnum> = {
+
+  EVENT: ("event" satisfies `${ChangeReasonEnum.EVENT}`) as ChangeReasonEnum.EVENT,
+  READ: ("read" satisfies `${ChangeReasonEnum.READ}`) as ChangeReasonEnum.READ,
+  UPDATE: ("update" satisfies `${ChangeReasonEnum.UPDATE}`) as ChangeReasonEnum.UPDATE,
+  WRITE: ("write" satisfies `${ChangeReasonEnum.WRITE}`) as ChangeReasonEnum.WRITE
+};
+
+/**
+ * Type alias re-exposing the HAP enum under its canonical name so a `reason: ChangeReason` annotation resolves through the shared module rather than a local
+ * redeclaration in each consumer.
+ *
+ * @category Homebridge
+ */
+export type ChangeReason = ChangeReasonEnum;
 
 /**
  * String mirror of HAP's `CharacteristicWarningType` const enum: the kind HAP attaches to a characteristic warning, which a suite filters the testing entry's
@@ -152,3 +180,29 @@ export const Perms: Readonly<typeof PermsEnum> = {
  * @category Homebridge
  */
 export type Perms = PermsEnum;
+
+/**
+ * String mirror of HAP's `ServiceEventTypes` const enum: the events a service raises, a change to the value of any characteristic it carries among them. Code that
+ * listens on a service names the event it listens for through this mirror, `ServiceEventTypes.CHARACTERISTIC_CHANGE` rather than a bare `"characteristic-change"`
+ * literal, and HAP's listener signatures accept each member as the string it mirrors.
+ *
+ * @category Homebridge
+ */
+// The `Readonly<typeof ServiceEventTypesEnum>` annotation derives the required shape from hap-nodejs's own declaration, so a missing member or an extra member is a
+// compile error here. Each value passes a `satisfies` check against its upstream member's string before it is branded, the form `APIEvent` documents, which makes a
+// value that drifts from upstream a compile error too.
+export const ServiceEventTypes: Readonly<typeof ServiceEventTypesEnum> = {
+
+  CHARACTERISTIC_CHANGE: ("characteristic-change" satisfies `${ServiceEventTypesEnum.CHARACTERISTIC_CHANGE}`) as ServiceEventTypesEnum.CHARACTERISTIC_CHANGE,
+  CHARACTERISTIC_WARNING: ("characteristic-warning" satisfies `${ServiceEventTypesEnum.CHARACTERISTIC_WARNING}`) as ServiceEventTypesEnum.CHARACTERISTIC_WARNING,
+  SERVICE_CONFIGURATION_CHANGE: ("service-configurationChange" satisfies `${ServiceEventTypesEnum.SERVICE_CONFIGURATION_CHANGE}`) as
+    ServiceEventTypesEnum.SERVICE_CONFIGURATION_CHANGE
+};
+
+/**
+ * Type alias re-exposing the HAP enum under its canonical name so an `event: ServiceEventTypes` annotation resolves through the shared module rather than a local
+ * redeclaration in each consumer.
+ *
+ * @category Homebridge
+ */
+export type ServiceEventTypes = ServiceEventTypesEnum;

@@ -1,11 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * homekit-name.test.ts: Unit tests for HomeKit's naming rule (validateName and sanitizeName) and the custom-name rule (resolveNameOverride and displayedName), and
- * for the package root resolving each to this module's own function.
+ * homekit-name.test.ts: Unit tests for HomeKit's naming rule (validateName and sanitizeName), the custom-name rule (resolveNameOverride and displayedName) and the
+ * rule for who owns a name (ownedName), and for the package root resolving each to this module's own function.
  */
 import * as root from "./index.ts";
 import { describe, test } from "node:test";
-import { displayedName, resolveNameOverride, sanitizeName, validateName } from "./homekit-name.ts";
+import { displayedName, ownedName, resolveNameOverride, sanitizeName, validateName } from "./homekit-name.ts";
 import assert from "node:assert/strict";
 
 describe("validateName", () => {
@@ -272,6 +272,37 @@ describe("displayedName", () => {
   });
 });
 
+describe("ownedName", () => {
+
+  test("answers a custom name HomeKit can carry, trimmed, whatever Sync Name says", () => {
+
+    assert.equal(ownedName({ fallback: "Zone 1", override: "  Patio  ", sync: false }), "Patio", "a custom name owns the HomeKit name with Sync Name off");
+    assert.equal(ownedName({ fallback: "Zone 1", override: "Patio", sync: true }), "Patio", "and wins over the device's name with Sync Name on");
+  });
+
+  test("answers the device's name with Sync Name on where no custom name HomeKit can carry is set", () => {
+
+    // An override HomeKit's naming rule leaves nothing of counts as none, so it falls through to Sync Name exactly as a null or an absent override does.
+    assert.equal(ownedName({ fallback: "Zone 1", override: "\u{1F3E0}", sync: true }), "Zone 1", "an override the rule empties is no custom name");
+    assert.equal(ownedName({ fallback: "Zone 1", override: null, sync: true }), "Zone 1", "and neither is a null one");
+    assert.equal(ownedName({ fallback: "Zone 1", sync: true }), "Zone 1", "nor an absent one");
+  });
+
+  test("answers null, the user owning the name, with Sync Name off and no custom name HomeKit can carry", () => {
+
+    assert.equal(ownedName({ fallback: "Zone 1", override: "\u{1F3E0}", sync: false }), null, "an override the rule empties leaves the name to the user");
+    assert.equal(ownedName({ fallback: "Zone 1", override: null, sync: false }), null, "and so does a null one");
+    assert.equal(ownedName({ fallback: "Zone 1", sync: false }), null, "and an absent one");
+  });
+
+  test("reads Sync Name as off where the caller omits it", () => {
+
+    // A plugin that offers no Sync Name option calls the rule without one, and lands on the side that leaves a rename in the Home app standing.
+    assert.equal(ownedName({ fallback: "Zone 1", override: "Patio" }), "Patio", "a custom name owns the HomeKit name with Sync Name omitted");
+    assert.equal(ownedName({ fallback: "Zone 1" }), null, "and with no custom name the user owns it");
+  });
+});
+
 describe("homekit-name - the package root", () => {
 
   test("resolves each of the module's functions from the package root to this module's own", () => {
@@ -282,5 +313,6 @@ describe("homekit-name - the package root", () => {
     assert.equal(root.validateName, validateName, "and so must its validateName");
     assert.equal(root.resolveNameOverride, resolveNameOverride, "and its resolveNameOverride");
     assert.equal(root.displayedName, displayedName, "and its displayedName");
+    assert.equal(root.ownedName, ownedName, "and its ownedName");
   });
 });

@@ -8,7 +8,7 @@
  * Homebridge nor HAP and registers no exit listener, the first API double a process builds, whose construction warning throws with nothing printed, and a process
  * that exits on its own, leaving no temporary cache folder.
  */
-import { CharacteristicWarningType, HAPStatus } from "../homebridge-enums.ts";
+import { ChangeReason, CharacteristicWarningType, HAPStatus } from "../homebridge-enums.ts";
 import type { Controller, DynamicPlatformPlugin, PlatformAccessory } from "homebridge";
 import { HomeKitRequestError, HomebridgeServerWarning, TestHomebridgeApi, assertNoServerWarnings, hapStatus, hasGetHandler, hasSetHandler, loadHomebridge,
   triggerGet, triggerSet, watchServerWarnings } from "./homebridge-double.ts";
@@ -641,7 +641,8 @@ describe("TestHomebridgeApi - accessory calls", () => {
     assert.equal(firmware.value, "4.1.0", "a revision the platform writes there survives the restore");
     assert.equal(restored._associatedHAPAccessory.bridged, true, "and the accessory is bridged once configureAccessory returns");
     assert.deepEqual(restored.changesTo(hap.Characteristic.FirmwareRevision).map(({ newValue, reason }) => ({ newValue, reason })),
-      [ { newValue: "0", reason: "write" }, { newValue: "4.1.0", reason: "update" } ], "the placeholder is a write HAP raises a change for, ahead of the platform's");
+      [ { newValue: "0", reason: ChangeReason.WRITE }, { newValue: "4.1.0", reason: ChangeReason.UPDATE } ],
+      "the placeholder is a write HAP raises a change for, ahead of the platform's");
   });
 
   test("restore stamps and caches its whole batch before any configureAccessory, so a registration there of a later accessory's UUID is skipped as a " +
@@ -1458,10 +1459,10 @@ describe("TestPlatformAccessory - changes", () => {
 
     assert.deepEqual(accessory.changes.map(({ newValue, oldValue, reason, service }) => ({ newValue, oldValue, reason, service })), [
 
-      { newValue: true, oldValue: false, reason: "update", service: bulb },
-      { newValue: false, oldValue: true, reason: "write", service: bulb },
-      { newValue: true, oldValue: false, reason: "read", service: bulb },
-      { newValue: false, oldValue: true, reason: "event", service: bulb }
+      { newValue: true, oldValue: false, reason: ChangeReason.UPDATE, service: bulb },
+      { newValue: false, oldValue: true, reason: ChangeReason.WRITE, service: bulb },
+      { newValue: true, oldValue: false, reason: ChangeReason.READ, service: bulb },
+      { newValue: false, oldValue: true, reason: ChangeReason.EVENT, service: bulb }
     ]);
 
     assert.ok(accessory.changes.every((change) => change.characteristic === on), "each entry carries the characteristic HAP raised it on");
@@ -1477,7 +1478,7 @@ describe("TestPlatformAccessory - changes", () => {
     on.updateValue(true);
     await triggerSet(on, false);
 
-    assert.deepEqual(accessory.changes.map((change) => change.reason), [ "update", "write" ]);
+    assert.deepEqual(accessory.changes.map((change) => change.reason), [ ChangeReason.UPDATE, ChangeReason.WRITE ]);
   });
 
   test("records changes on the information service HAP adds while it builds the accessory", () => {
@@ -1501,7 +1502,7 @@ describe("TestPlatformAccessory - changes", () => {
     api.unregisterPlatformAccessories(PLUGIN, PLATFORM, [accessory]);
     on.updateValue(true);
 
-    assert.deepEqual(accessory.changes.map((change) => change.reason), ["update"]);
+    assert.deepEqual(accessory.changes.map((change) => change.reason), [ChangeReason.UPDATE]);
   });
 
   test("records the services added after construction, through Homebridge's forwarder and through a controller's configuration", () => {
@@ -1869,7 +1870,7 @@ describe("triggerGet and triggerSet", () => {
     const write = expectAt(accessory.changes, 0);
     const update = expectAt(accessory.changes, 1);
 
-    assert.equal(write.reason, "write");
+    assert.equal(write.reason, ChangeReason.WRITE);
     assert.notEqual(write.originator, undefined, "a triggered write carries the trigger's connection as its originator");
     assert.equal(update.originator, undefined, "while a plugin's own update carries none");
   });

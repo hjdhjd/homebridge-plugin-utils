@@ -6,20 +6,22 @@
  * from this repository's tree, made through a TestHomebridgeApi, so the suite runs on the very objects a plugin's accessories are at runtime. Using the real runtime
  * objects keeps the tests honest against `service.ts`'s reflection-driven characteristic lookup; a hand-rolled mock would force us to replicate the HAP
  * characteristic-constructor map, which is precisely the thing we want to exercise. The double captures the characteristic warnings HAP raises on its accessories,
- * so a row that reaches for a characteristic outside a service's catalog stays quiet, and its triggers drive a characteristic through HomeKit's read path. The
- * check after each row fails a row that leaves a warning HAP raised for a defect untaken, so a row that draws one on purpose takes it from the accessory.
+ * so a row that reaches for a characteristic outside a service's catalog stays quiet, and its triggers drive a characteristic through HomeKit's read and write paths.
+ * The check after each row fails a row that leaves a warning HAP raised for a defect untaken, so a row that draws one on purpose takes it from the accessory.
  */
-import type { Assert, Equal, TestPlatformAccessory } from "./testing/index.ts";
+import type { Assert, CapturingLog, Equal, TestPlatformAccessory } from "./testing/index.ts";
+import { ChangeReason, CharacteristicWarningType, HAPStatus, ServiceEventTypes } from "./homebridge-enums.ts";
 import type { Characteristic, CharacteristicValue, PlatformAccessory, Service, WithUUID } from "homebridge";
-import { CharacteristicWarningType, HAPStatus } from "./homebridge-enums.ts";
-import { HomeKitRequestError, hapStatus, loadHomebridge, triggerGet, watchServerWarnings } from "./testing/index.ts";
+import { HomeKitRequestError, assertNoUnhandledRejections, capturingLog, hapStatus, loadHomebridge, settle, triggerGet, triggerSet,
+  watchServerWarnings } from "./testing/index.ts";
 import type { PresenceReading, PresenceTransition, ValidCharacteristicOptions, ValidServiceOptions } from "./service.ts";
 import { acquireService, capabilityGate, findService, getServiceName, notResponding, presenceChanged, setAccessoryName, setServiceName,
-  updatePresenceCharacteristic, updateServices, validCharacteristic, validService } from "./service.ts";
+  updatePresenceCharacteristic, updateServices, validCharacteristic, validService, watchServiceName } from "./service.ts";
 import { describe, test } from "node:test";
 import type { Nullable } from "./util.ts";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { getEventListeners } from "node:events";
 
 // The runtime the suite runs on, the hap-nodejs copy and the PlatformAccessory class Homebridge loads from this repository's tree, and the API double whose
 // platformAccessory makes every accessory a row reads. Every row shares the one double, which the builder checks for untaken warnings after each row.
@@ -77,12 +79,12 @@ function presenceFixture(): { changes: () => number; configurations: () => numbe
   let changes = 0;
   let configurations = 0;
 
-  service.on("characteristic-change", () => {
+  service.on(ServiceEventTypes.CHARACTERISTIC_CHANGE, () => {
 
     changes++;
   });
 
-  service.on("service-configurationChange", () => {
+  service.on(ServiceEventTypes.SERVICE_CONFIGURATION_CHANGE, () => {
 
     configurations++;
   });
@@ -111,7 +113,7 @@ function gateFixture(): { configurations: () => number; gate: (validate: boolean
   const service = createAccessory().addService(hap.Service.MotionSensor, "Motion");
   let configurations = 0;
 
-  service.on("service-configurationChange", () => {
+  service.on(ServiceEventTypes.SERVICE_CONFIGURATION_CHANGE, () => {
 
     configurations++;
   });
@@ -125,6 +127,64 @@ function gateFixture(): { configurations: () => number; gate: (validate: boolean
     },
     service
   };
+}
+
+// A Switch named "Patio" through setServiceName, which gives it the ConfiguredName a controller writes, on an accessory of its own whose record of changes starts
+// empty.
+function namedSwitch(): { accessory: TestPlatformAccessory; service: Service } {
+
+  const accessory = createAccessory();
+  const service = accessory.addService(hap.Service.Switch, "Patio");
+
+  setServiceName(service, "Patio");
+  accessory.clearObservations();
+
+  return { accessory, service };
+}
+
+/* The watch fixture: a watch of the service for the owner a holder carries, with a capturing log, a count of the watch's reads of the owner and the handle that
+ * ends the watch. The count is the observer for which changes the watch takes for a rename, because a live watch reads the owner once for each rename, on the
+ * turn after HAP's write, and on nothing else.
+ */
+function watch({ controller = new AbortController(), log = capturingLog(), owner = "Patio", service }: { controller?: AbortController; log?: CapturingLog;
+  owner?: Nullable<string>; service: Service; }): { controller: AbortController; handle: Disposable; log: CapturingLog; own: (next: Nullable<string>) => void;
+  reads: () => number; } {
+
+  const holder: { owner: Nullable<string> } = { owner };
+  let reads = 0;
+
+  const handle = watchServiceName({
+
+    log,
+    name: (): Nullable<string> => {
+
+      reads++;
+
+      return holder.owner;
+    },
+    service,
+    signal: controller.signal
+  });
+
+  return {
+
+    controller,
+    handle,
+    log,
+    own: (next: Nullable<string>): void => {
+
+      holder.owner = next;
+    },
+    reads: (): number => reads
+  };
+}
+
+// Rename a service the way the Home app does, through the testing entry's triggerSet, which hands HAP a connection as the write's originator, then let a restore
+// the watch arranged run, since a restore waits for the turn after HAP's write.
+async function renameInHomeApp(service: Service, name: string): Promise<void> {
+
+  await triggerSet(service.getCharacteristic(hap.Characteristic.ConfiguredName), name);
+  await settle();
 }
 
 // Single source of truth for HAP's reflection-based characteristic discovery. Every HAP `Service` instance carries a `characteristics` array whose elements share a
@@ -1829,6 +1889,343 @@ describe("setAccessoryName", () => {
     assert.equal(setAccessoryName(accessory, "\u{1F680}"), false);
     assert.equal(update.mock.callCount(), 0);
     assert.deepEqual(accessory.changes, []);
+  });
+});
+
+describe("watchServiceName", () => {
+
+  test("puts an owned name back once HAP has finished the Home app's rename of a Switch", async () => {
+
+    const { service } = namedSwitch();
+
+    watch({ service });
+
+    await triggerSet(service.getCharacteristic(hap.Characteristic.ConfiguredName), "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Deck", "HAP stores the Home app's name first, the restore waiting for its write to finish");
+
+    await settle();
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Patio", "and the restore then puts the owned name back");
+    assert.equal(service.displayName, "Patio", "with the display name still the owned one");
+  });
+
+  test("leaves a rename in the Home app standing when the user owns the name", async () => {
+
+    const { accessory, service } = namedSwitch();
+    const { reads } = watch({ owner: null, service });
+
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Deck");
+    assert.equal(reads(), 1, "the watch read the owner for the rename");
+    assert.deepEqual(accessory.changesOn(service).map(({ newValue, reason }) => [ reason, newValue ]), [[ ChangeReason.WRITE, "Deck" ]],
+      "and wrote nothing after it");
+  });
+
+  test("never reads the owner for the plugin's own writes, through setServiceName, updateValue or setValue", async () => {
+
+    const { service } = namedSwitch();
+    const { reads } = watch({ service });
+    const configuredName = service.getCharacteristic(hap.Characteristic.ConfiguredName);
+
+    setServiceName(service, "Lanai");
+    configuredName.updateValue("Deck");
+    configuredName.setValue("Porch");
+    await settle();
+
+    assert.equal(reads(), 0, "no write the plugin makes reads as a rename");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Porch", "so the plugin's last write stands");
+  });
+
+  test("never reads the owner for a controller's request that is no rename, a write to another characteristic or a read that changes ConfiguredName", async () => {
+
+    // A read carries the controller's connection as its originator too, and a get handler answering another value raises a change, so the change's reason is
+    // what keeps the read from reading as a rename.
+    const { accessory, service } = namedSwitch();
+    const { reads } = watch({ service });
+    const configuredName = service.getCharacteristic(hap.Characteristic.ConfiguredName);
+
+    await triggerSet(service.getCharacteristic(hap.Characteristic.On), true);
+    configuredName.onGet(() => "Deck");
+    await triggerGet(configuredName);
+    await settle();
+
+    assert.deepEqual(accessory.changesOn(service, hap.Characteristic.ConfiguredName).map(({ originator, reason }) => [ reason, originator !== undefined ]),
+      [[ ChangeReason.READ, true ]], "precondition: the read raised a change carrying the controller's connection");
+    assert.equal(reads(), 0, "neither turning the Switch on nor reading its name in the Home app is a rename");
+  });
+
+  test("reads the owner afresh on each rename, so a change of owner applies to the next one", async () => {
+
+    const { service } = namedSwitch();
+    const { own, reads } = watch({ service });
+
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Patio", "the first owner's name is put back");
+
+    own("Lanai");
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Lanai", "a new owned name is put back on the next rename");
+
+    own(null);
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Deck", "and once the user owns the name, the next rename stands");
+    assert.equal(reads(), 3, "the owner was read once for each rename");
+  });
+
+  test("attaches to a LockMechanism, whose Name alone gives the Home app nothing to write, without error", async () => {
+
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.LockMechanism, "Front Door");
+    const characteristics = service.characteristics.length;
+    const { reads } = watch({ owner: "Front Door", service });
+
+    assert.equal(service.characteristics.length, characteristics, "the watch attached no characteristic");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), undefined, "and the LockMechanism still carries no ConfiguredName");
+
+    await assert.rejects(triggerSet(service.getCharacteristic(hap.Characteristic.Name), "Back Door"), hapStatus(HAPStatus.READ_ONLY_CHARACTERISTIC),
+      "the Name a LockMechanism carries is read-only to a controller");
+    await settle();
+
+    assert.equal(reads(), 0, "so no rename reaches the watch");
+    assert.deepEqual(accessory.warnings, [], "and HAP warned of nothing");
+  });
+
+  test("watches a ConfiguredName added after the watch begins", async () => {
+
+    const accessory = createAccessory();
+    const service = accessory.addService(hap.Service.Switch, "Patio");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), undefined, "precondition: a new Switch lacks ConfiguredName");
+
+    watch({ service });
+    setServiceName(service, "Patio");
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Patio");
+  });
+
+  test("leaves a rename standing once the signal aborts, whether before the watch begins, after it begins or while a restore waits", async () => {
+
+    const { service } = namedSwitch();
+    const listeners = service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE);
+    const aborted = new AbortController();
+
+    aborted.abort();
+
+    const early = watch({ controller: aborted, service });
+
+    assert.equal(service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE), listeners, "a signal already aborted attaches nothing");
+
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Deck", "so a rename stands");
+    assert.equal(early.reads(), 0);
+
+    const later = watch({ service });
+
+    later.controller.abort();
+
+    assert.equal(service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE), listeners, "an abort after the watch begins detaches it");
+
+    await renameInHomeApp(service, "Lanai");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Lanai", "so a rename after the abort stands");
+    assert.equal(later.reads(), 0);
+
+    const pending = watch({ service });
+
+    await triggerSet(service.getCharacteristic(hap.Characteristic.ConfiguredName), "Deck");
+    pending.controller.abort();
+    await settle();
+
+    assert.equal(pending.reads(), 0, "the restore the rename arranged finds the watch ended, and reads no owner");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Deck", "so it yields to the abort");
+  });
+
+  test("puts the information service's owned name back", async () => {
+
+    const accessory = createAccessory();
+    const information = informationServiceOf(accessory);
+
+    setAccessoryName(accessory, "Porch");
+    watch({ owner: "Porch", service: information });
+    await renameInHomeApp(information, "Hallway");
+
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Porch");
+  });
+
+  test("answers one rename with exactly one restore, which never answers itself", async () => {
+
+    const { accessory, service } = namedSwitch();
+    const { reads } = watch({ service });
+
+    await renameInHomeApp(service, "Deck");
+    await settle(3);
+
+    assert.deepEqual(accessory.changesOn(service).map(({ newValue, originator, reason }) => [ reason, newValue, originator !== undefined ]),
+      [ [ ChangeReason.WRITE, "Deck", true ], [ ChangeReason.UPDATE, "Patio", false ] ], "the Home app's write and the one restore are the only changes");
+    assert.equal(reads(), 1, "and the restore raised no rename of its own");
+  });
+
+  test("logs each restore that wrote at info, and nothing for a rename it leaves standing or one to the owned name itself", async () => {
+
+    const owned = namedSwitch();
+    const { log } = watch({ service: owned.service });
+
+    await renameInHomeApp(owned.service, "Deck");
+
+    assert.deepEqual(log.entries, [{ level: "info", message: "Restored the name the plugin owns for a service after the Home app renamed it.",
+      params: [{ name: "Patio", rename: "Deck" }] }], "a restore is logged at info, with the owned name and the rename as context");
+
+    await renameInHomeApp(owned.service, "Patio");
+
+    assert.equal(log.entries.length, 1, "a rename to the owned name itself leaves the restore nothing to write, and nothing to log");
+
+    const unowned = namedSwitch();
+    const quiet = watch({ owner: null, service: unowned.service });
+
+    await renameInHomeApp(unowned.service, "Deck");
+
+    assert.deepEqual(quiet.log.entries, [], "a rename the user owns logs nothing");
+  });
+
+  test("keeps a throw from the owner out of the Home app's write, answered as a success, and reports it at error without an unhandled rejection", async () => {
+
+    const { service } = namedSwitch();
+    const log = capturingLog();
+
+    watchServiceName({
+
+      log,
+      name: (): Nullable<string> => {
+
+        throw new Error("The owner could not be read.");
+      },
+      service,
+      signal: new AbortController().signal
+    });
+
+    await assertNoUnhandledRejections(async () => {
+
+      await assert.doesNotReject(triggerSet(service.getCharacteristic(hap.Characteristic.ConfiguredName), "Deck"), "the Home app's write is answered as a success");
+      await settle();
+    });
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Deck", "the rename stands, since no owned name was read");
+    assert.deepEqual(log.entries, [{ level: "error", message: "Unable to restore the name the plugin owns for a service after the Home app renamed it.",
+      params: [{ error: "The owner could not be read" }] }], "and the failure is reported once, at error");
+  });
+
+  test("lets no failure of the log become an unhandled rejection, reporting a failed info line at error", async () => {
+
+    const thrower = (): void => {
+
+      throw new Error("The log could not write.");
+    };
+
+    const reporting = namedSwitch();
+    const capture = capturingLog();
+
+    watch({ log: { ...capture, info: thrower }, service: reporting.service });
+
+    await assertNoUnhandledRejections(async () => {
+
+      await renameInHomeApp(reporting.service, "Deck");
+    });
+
+    assert.equal(readNamedCharacteristic(reporting.service, "ConfiguredName"), "Patio", "the restore wrote before its info line failed");
+    assert.deepEqual(capture.entries, [{ level: "error", message: "Unable to restore the name the plugin owns for a service after the Home app renamed it.",
+      params: [{ error: "The log could not write" }] }], "and the failed info line is reported at error");
+
+    const silent = namedSwitch();
+
+    watch({ log: { ...capturingLog(), error: thrower, info: thrower }, service: silent.service });
+
+    await assertNoUnhandledRejections(async () => {
+
+      await renameInHomeApp(silent.service, "Deck");
+    });
+
+    assert.equal(readNamedCharacteristic(silent.service, "ConfiguredName"), "Patio", "a log that fails at error too leaves the restore written and nothing unhandled");
+  });
+
+  test("ends the watch when its handle is disposed, taking its listeners off the service and the signal, whether or not a restore waits", async () => {
+
+    const { service } = namedSwitch();
+    const listeners = service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE);
+    const idle = watch({ service });
+
+    assert.equal(getEventListeners(idle.controller.signal, "abort").length, 1, "precondition: the watch holds a registration on its signal");
+
+    idle.handle[Symbol.dispose]();
+
+    assert.equal(service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE), listeners, "the disposal takes the watch's listener off the service");
+    assert.equal(getEventListeners(idle.controller.signal, "abort").length, 0, "and its registration off the signal");
+
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Deck", "so a later rename stands");
+    assert.equal(idle.reads(), 0);
+
+    const pending = watch({ service });
+
+    await triggerSet(service.getCharacteristic(hap.Characteristic.ConfiguredName), "Lanai");
+    pending.handle[Symbol.dispose]();
+    await settle();
+
+    assert.equal(pending.reads(), 0, "a restore waiting when the watch is disposed finds it ended, and reads no owner");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Lanai", "so the rename stands");
+  });
+
+  test("does nothing on a second disposal, or on a disposal after the signal ended the watch, leaving another watch on the service standing", async () => {
+
+    const { service } = namedSwitch();
+    const other = watch({ service });
+    const listeners = service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE);
+    const twice = watch({ service });
+    const aborted = watch({ service });
+
+    twice.handle[Symbol.dispose]();
+    twice.handle[Symbol.dispose]();
+    aborted.controller.abort();
+    aborted.handle[Symbol.dispose]();
+
+    assert.equal(service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE), listeners, "only the ended watches' listeners came off the service");
+    assert.equal(getEventListeners(twice.controller.signal, "abort").length, 0);
+    assert.equal(getEventListeners(aborted.controller.signal, "abort").length, 0);
+
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Patio", "the other watch still restores the owned name");
+    assert.deepEqual([ other.reads(), twice.reads(), aborted.reads() ], [ 1, 0, 0 ], "and only it read the owner");
+  });
+
+  test("answers a handle that disposes without effect when the signal has already aborted", async () => {
+
+    const { service } = namedSwitch();
+    const other = watch({ service });
+    const listeners = service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE);
+    const controller = new AbortController();
+
+    controller.abort();
+
+    const early = watch({ controller, service });
+
+    early.handle[Symbol.dispose]();
+    early.handle[Symbol.dispose]();
+
+    assert.equal(service.listenerCount(ServiceEventTypes.CHARACTERISTIC_CHANGE), listeners, "the disposal took no listener off the service");
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0, "and the signal holds none");
+
+    await renameInHomeApp(service, "Deck");
+
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Patio", "so the other watch still restores the owned name");
+    assert.deepEqual([ other.reads(), early.reads() ], [ 1, 0 ]);
   });
 });
 

@@ -960,7 +960,7 @@ export { markHandled } from "./mark-handled.ts";
 // settings page imports the module itself (so a page can load it without dragging in any of util.ts's Node-only imports); util.ts surfaces the module's functions
 // here so server-side consumers and the package root reach them alongside the rest of the utilities. The single SSOT is `homekit-name.ts`; this file is just a
 // forwarding re-export.
-export { displayedName, resolveNameOverride, sanitizeName, validateName } from "./homekit-name.ts";
+export { displayedName, ownedName, resolveNameOverride, sanitizeName, validateName } from "./homekit-name.ts";
 
 /* How far down a `cause` chain any reader descends. Real chains are short - a client wraps a transport error, a transport wraps a socket error - and the depth is
  * what makes the descent terminate at all: a chain that refers back to itself simply exhausts the cap, so no separate cycle bookkeeping has to exist. Counted in

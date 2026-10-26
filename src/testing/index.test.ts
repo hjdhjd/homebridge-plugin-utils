@@ -751,8 +751,9 @@ describe("freePort", () => {
     const listening = once(server, "listening");
 
     // The single attempt is the assertion. A probe that retried would let a late release pass as an on-time one, and a bind that found the port still held would
-    // reject this wait rather than resolving it.
-    server.listen(port);
+    // reject this wait rather than resolving it. The bind takes loopback, where the helper reserves, because macOS lets a bind on every address stand beside a handle
+    // the helper kept on loopback, and the row would then pass a helper that never released its own.
+    server.listen(port, "127.0.0.1");
 
     await listening;
 
@@ -781,7 +782,8 @@ describe("freePort", () => {
     const holder = createServer();
     const listening = once(holder, "listening");
 
-    holder.listen(first);
+    // The hold takes loopback, where the helper reserves, so the first port is held on the address the second call asks the kernel on.
+    holder.listen(first, "127.0.0.1");
 
     await listening;
 
@@ -830,7 +832,7 @@ describe("listenOnLoopback and stopListening", () => {
       const address = server.address();
 
       assert.ok((address !== null) && (typeof address === "object"), "the bound server must report an address object");
-      assert.equal(address.address, "127.0.0.1", "the bind must name the loopback interface rather than the wildcard address a port reservation takes");
+      assert.equal(address.address, "127.0.0.1", "the bind must name the loopback interface rather than the wildcard address");
     } finally {
 
       await stopListening(server);

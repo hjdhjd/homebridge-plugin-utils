@@ -8,43 +8,44 @@
  * the handlers directly. The retry arms are the exception in one respect only: their waits run on a TestClock, so a schedule is asserted rather than waited out.
  */
 import { HTTP_LISTENER_ANY_PATH, HttpListener } from "./http-listener.ts";
-import { assertNoUnhandledRejections, capturingLog, expectAt, logCount, loggedAt, settle, stopListening, waitUntil } from "./testing/index.ts";
+import { HbpuAbortError, formatMs } from "./util.ts";
+import { assertNoUnhandledRejections, capturingLog, expectAt, linesAt, listenOnLoopback, logCount, loggedAt, settle, stopListening, waitUntil } from "./testing/index.ts";
 import { createServer, request as httpRequest } from "node:http";
-import { HbpuAbortError } from "./util.ts";
 import type { IncomingHttpHeaders } from "node:http";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { once } from "node:events";
 import test from "node:test";
 
 // The label every arm constructs its listener with, so an assertion that a line names the listener has one string to look for.
 const LABEL = "test listener";
 
+/* The address every arm binds its listener to and sends its requests at, unless the address is the arm's subject. A listener on every address shares its port with any
+ * process that binds the same port on loopback explicitly, and that process then answers the arm's requests in the listener's place. Held to loopback, the listener
+ * has the port there to itself: the kernel hands it no port another process holds on loopback, and a process asking for its port there afterwards is refused.
+ */
+const LOOPBACK = "127.0.0.1";
+
 // The retry interval the clock-driven arms use. Distinct from the module's own default so an assertion that the wait the listener asked for is this one cannot pass
 // by coincidence.
 const RETRY_MS = 250;
 
-/* Hold a TCP port so a listener asked for it finds it taken. An arm that only needs the port held for its whole body writes `await using blocker = await
- * holdTcpPort()`; one that needs it freed mid-body disposes it by hand and lets the scope's own disposal find nothing left to close, which is a safe no-op.
+/* Hold a TCP port on loopback so a listener asked for it there finds it taken. The hold is on loopback because that is where the arms' listeners bind, and a hold on
+ * every address does not stop a bind to one address: macOS lets the two stand side by side. An arm that only needs the port held for its whole body writes
+ * `await using blocker = await holdTcpPort()`; one that needs it freed mid-body disposes it by hand and lets the scope's own disposal find nothing left to close,
+ * which is a safe no-op.
  *
  * @returns The held port and the disposal that releases it.
  */
 async function holdTcpPort(): Promise<AsyncDisposable & { port: number }> {
 
   const blocker = createServer();
-  const listening = once(blocker, "listening");
-
-  blocker.listen(0);
-
-  await listening;
-
-  const address = blocker.address();
+  const port = await listenOnLoopback(blocker);
 
   return {
 
-    port: ((address === null) || (typeof address === "string")) ? 0 : address.port,
+    port,
 
     async [Symbol.asyncDispose](): Promise<void> {
 
@@ -54,35 +55,38 @@ async function holdTcpPort(): Promise<AsyncDisposable & { port: number }> {
 }
 
 /* Whether `port` can be bound, in a SINGLE attempt with no retry window. The single attempt is the assertion: a correct disposal has released the port before it
- * resolves, so a probe that polled for a couple of seconds would let a release that arrives late pass as one that arrived on time.
+ * resolves, so a probe that polled for a couple of seconds would let a release that arrives late pass as one that arrived on time. The probe binds the address the
+ * listener held, because a probe on every address can bind beside a listener still holding the port on loopback, as macOS lets it, and would read a leaked port as a
+ * released one.
  *
  * @param port - The port to try.
+ * @param host - The address to try it on. Defaults to loopback, where the arms' listeners bind.
  *
  * @returns Whether the attempt bound it.
  */
-async function bindable(port: number): Promise<boolean> {
+async function bindable(port: number, host = LOOPBACK): Promise<boolean> {
 
   return new Promise<boolean>((resolve) => {
 
     const probe = createServer();
 
     probe.once("error", () => resolve(false));
-    probe.listen(port, () => void probe.close(() => resolve(true)));
+    probe.listen(port, host, () => void probe.close(() => resolve(true)));
   });
 }
 
 /* One HTTP request against a listener under test.
  *
- * @param options - The request to make. The method defaults to POST, which is what most arms send.
+ * @param options - The request to make. The host defaults to loopback, where the arms' listeners bind, and the method to POST, which is what most arms send.
  *
  * @returns The status, headers, and body the listener answered with.
  */
-async function request(options: { body?: Buffer | string; headers?: Record<string, string | string[]>; method?: string; path: string;
+async function request(options: { body?: Buffer | string; headers?: Record<string, string | string[]>; host?: string; method?: string; path: string;
   port: number; }): Promise<{ body: string; headers: IncomingHttpHeaders; status: number }> {
 
   return new Promise((resolve, reject) => {
 
-    const call = httpRequest({ headers: options.headers, host: "127.0.0.1", method: options.method ?? "POST", path: options.path, port: options.port },
+    const call = httpRequest({ headers: options.headers, host: options.host ?? LOOPBACK, method: options.method ?? "POST", path: options.path, port: options.port },
       (response) => {
 
         const chunks: Buffer[] = [];
@@ -109,7 +113,7 @@ async function request(options: { body?: Buffer | string; headers?: Record<strin
  */
 async function rawStatus(options: { body: Buffer; method: string; path: string; port: number }): Promise<number> {
 
-  const socket = createConnection({ host: "127.0.0.1", port: options.port });
+  const socket = createConnection({ host: LOOPBACK, port: options.port });
 
   try {
 
@@ -139,7 +143,7 @@ async function rawStatus(options: { body: Buffer; method: string; path: string; 
  */
 async function openStalledUpload(options: { path: string; pingPath: string; port: number }): Promise<ReturnType<typeof httpRequest>> {
 
-  const call = httpRequest({ headers: { "content-length": "4096" }, host: "127.0.0.1", method: "POST", path: options.path, port: options.port });
+  const call = httpRequest({ headers: { "content-length": "4096" }, host: LOOPBACK, method: "POST", path: options.path, port: options.port });
 
   call.on("error", () => { /* The arm ends this request by resetting it or by tearing the server down, and both surface here. */ });
 
@@ -150,11 +154,15 @@ async function openStalledUpload(options: { path: string; pingPath: string; port
   return call;
 }
 
+// Whether this machine has an IPv6 loopback to bind, asked once at load. The arms that need a second loopback address read it, and one that cannot run without it
+// skips with its reason rather than asserting something the machine cannot show.
+const ipv6LoopbackAvailable = await bindable(0, "::1");
+
 test("the listener announces the port it bound and says nothing else", async () => {
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -165,11 +173,111 @@ test("the listener announces the port it bound and says nothing else", async () 
   assert.ok(loggedAt(log.entries, "info", listener.boundPort.toString()), "the line must name the port the kernel gave, not the one that was asked for");
 });
 
-test("the listener answers each kind of request with the status that describes it", async () => {
+test("a listener held to loopback answers there, and each line that names its port names the address too", async () => {
+
+  await using blocker = await holdTcpPort();
+
+  const clock = new TestClock();
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ clock, host: LOOPBACK, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
+
+  // The port starts out held, so the conflict line is written before the listening one, and the assertions below read each.
+  await waitUntil(() => clock.pending === 1, { description: "the retry wait to be armed" });
+  await blocker[Symbol.asyncDispose]();
+  clock.advance(RETRY_MS);
+
+  await listener.ready;
+
+  using route = listener.route("/ping", () => ({ status: 200 }));
+
+  assert.equal((await request({ body: "{}", path: "/ping", port: listener.boundPort })).status, 200, "a listener held to loopback must answer there");
+  assert.deepEqual(linesAt(log.entries, "error"), ["The port the " + LABEL + " needs at " + LOOPBACK + " is in use by another process. Retrying in " +
+    formatMs(RETRY_MS) + "."], "the conflict line must say which address the port is held on");
+  assert.deepEqual(linesAt(log.entries, "info"), ["The " + LABEL + " is listening on port " + blocker.port.toString() + " at " + LOOPBACK + "."],
+    "the listening line must say which address the port was taken on");
+});
+
+test("a listener given no host takes every address and answers on loopback, and its line names the port alone", async () => {
 
   const log = capturingLog();
 
   await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+
+  await listener.ready;
+
+  const port = listener.boundPort;
+
+  using route = listener.route("/ping", () => ({ status: 200 }));
+
+  assert.equal((await request({ body: "{}", path: "/ping", port })).status, 200, "a listener on every address must answer on IPv4 loopback");
+
+  // Every address includes IPv6 loopback where the machine has one, so this is the request a default narrowed to a single address would leave unanswered.
+  if(ipv6LoopbackAvailable) {
+
+    assert.equal((await request({ body: "{}", host: "::1", path: "/ping", port })).status, 200, "a listener on every address must answer on IPv6 loopback");
+  }
+
+  assert.deepEqual(linesAt(log.entries, "info"), ["The " + LABEL + " is listening on port " + port.toString() + "."],
+    "a listener on every address has no address to name");
+});
+
+test("a listener given an empty host reads it as no host, and its line names the port alone", async () => {
+
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ host: "", label: LABEL, log, port: 0 });
+
+  await listener.ready;
+
+  assert.deepEqual(linesAt(log.entries, "info"), ["The " + LABEL + " is listening on port " + listener.boundPort.toString() + "."],
+    "an empty host binds every address, as no host does, so the line names no address");
+});
+
+test("a listener held to IPv6 loopback shares its port with a server on IPv4 loopback, and each answers only its own address", async (t) => {
+
+  if(!ipv6LoopbackAvailable) {
+
+    t.skip("this machine has no IPv6 loopback, so there is no second address to share the port across");
+
+    return;
+  }
+
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ host: "::1", label: LABEL, log, port: 0 });
+
+  await listener.ready;
+
+  const port = listener.boundPort;
+
+  using route = listener.route(HTTP_LISTENER_ANY_PATH, () => ({ body: "listener", status: 200 }));
+
+  /* Nothing answers IPv4 loopback on this port yet, and this is the assertion that tells a listener held to its address from one that bound every address in its
+   * place: the second would answer here. The assertions after the server below binds cannot tell them apart on a platform that lets a bind to one address stand
+   * beside a bind to every address, as macOS does, because each address's requests reach the same place whichever bind the listener made.
+   */
+  await assert.rejects(request({ body: "{}", path: "/", port }), { code: "ECONNREFUSED" }, "a listener held to IPv6 loopback must not answer IPv4 loopback");
+
+  const other = createServer((_request, response) => void response.end("other"));
+
+  await listenOnLoopback(other, port);
+
+  try {
+
+    assert.equal((await request({ body: "{}", path: "/", port })).body, "other", "IPv4 loopback's requests reach the server holding it");
+    assert.equal((await request({ body: "{}", host: "::1", path: "/", port })).body, "listener", "IPv6 loopback's requests reach the listener holding it");
+  } finally {
+
+    await stopListening(other);
+  }
+});
+
+test("the listener answers each kind of request with the status that describes it", async () => {
+
+  const log = capturingLog();
+
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -217,7 +325,7 @@ test("a body past the limit is refused and never reaches the handler, and a body
   const limit = 1024;
   const log = capturingLog();
 
-  await using listener = new HttpListener({ bodyLimit: limit, label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ bodyLimit: limit, host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -243,7 +351,7 @@ test("the body reaches the handler exactly as it arrived", async () => {
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -269,7 +377,7 @@ test("headers reach the handler as Node parsed them", async () => {
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -303,7 +411,7 @@ test("disposal completes under an in-flight request and releases the port at onc
   await assertNoUnhandledRejections(async () => {
 
     const log = capturingLog();
-    const listener = new HttpListener({ label: LABEL, log, port: 0 });
+    const listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
     await listener.ready;
 
@@ -329,7 +437,7 @@ test("disposal completes under an in-flight request and releases the port at onc
 test("a teardown under an in-flight upload says nothing beyond the listening line", async () => {
 
   const log = capturingLog();
-  const listener = new HttpListener({ label: LABEL, log, port: 0 });
+  const listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -354,7 +462,7 @@ test("a route is refused on a path already taken, and the refusal names the coll
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -379,7 +487,7 @@ test("a route is refused on a path already taken, and the refusal names the coll
 test("a listener whose lifetime has ended accepts no route", async () => {
 
   const log = capturingLog();
-  const listener = new HttpListener({ label: LABEL, log, port: 0 });
+  const listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
   await listener[Symbol.asyncDispose]();
@@ -400,7 +508,7 @@ test("a bind failure that is not a port conflict ends the listener and reports i
    * fatal arm rather than the retry arm. A platform that lets an ordinary user bind one has nothing here to observe, so this arm skips with its reason recorded
    * rather than asserting something untrue.
    */
-  const listener = new HttpListener({ label: LABEL, log, port: 1 });
+  const listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 1 });
 
   t.after(() => listener.abort());
 
@@ -419,6 +527,24 @@ test("a bind failure that is not a port conflict ends the listener and reports i
   assert.ok(loggedAt(log.entries, "error", LABEL));
 });
 
+test("a host the machine does not have ends the listener with one report and no retry", async () => {
+
+  const clock = new TestClock();
+  const log = capturingLog();
+
+  // An address from TEST-NET-1, the documentation block of RFC 5737, which no interface carries. The kernel refuses to bind it, which is a bind failure other than a
+  // held port, so there is nothing for a retry to wait out.
+  await using listener = new HttpListener({ clock, host: "192.0.2.1", label: LABEL, log, port: 0, retryMs: RETRY_MS });
+
+  await assert.rejects(listener.ready, { constructor: HbpuAbortError, name: "failed" });
+
+  assert.equal(listener.aborted, true);
+  assert.equal(log.entries.length, 1, "the failure is the one thing the listener has to say");
+  assert.equal(logCount(log.entries, "error", "could not start"), 1, "the failure must be reported exactly once");
+  assert.ok(loggedAt(log.entries, "error", LABEL));
+  assert.deepEqual(clock.requested, [], "a failure that is not a held port must arm no retry wait");
+});
+
 test("a lifetime that ends before the retry fires cancels it, and the port is never bound", async () => {
 
   await assertNoUnhandledRejections(async () => {
@@ -427,7 +553,7 @@ test("a lifetime that ends before the retry fires cancels it, and the port is ne
 
     const clock = new TestClock();
     const log = capturingLog();
-    const listener = new HttpListener({ clock, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
+    const listener = new HttpListener({ clock, host: LOOPBACK, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
 
     await waitUntil(() => clock.pending === 1, { description: "the retry wait to be armed" });
 
@@ -458,7 +584,7 @@ test("an abort landing in the same turn the retry wait ends still binds nothing"
 
     const clock = new TestClock();
     const log = capturingLog();
-    const listener = new HttpListener({ clock, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
+    const listener = new HttpListener({ clock, host: LOOPBACK, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
 
     await waitUntil(() => clock.pending === 1, { description: "the retry wait to be armed" });
 
@@ -480,11 +606,12 @@ test("an abort landing in the same turn the retry wait ends still binds nothing"
 
 test("a port that frees up is bound on the retry, and the wait was the configured one", async () => {
 
-  const blocker = await holdTcpPort();
+  await using blocker = await holdTcpPort();
+
   const clock = new TestClock();
   const log = capturingLog();
 
-  await using listener = new HttpListener({ clock, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
+  await using listener = new HttpListener({ clock, host: LOOPBACK, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
 
   await waitUntil(() => clock.pending === 1, { description: "the retry wait to be armed" });
 
@@ -501,11 +628,12 @@ test("a port that frees up is bound on the retry, and the wait was the configure
 
 test("a port held through several intervals is waited out rather than given up on", async () => {
 
-  const blocker = await holdTcpPort();
+  await using blocker = await holdTcpPort();
+
   const clock = new TestClock();
   const log = capturingLog();
 
-  await using listener = new HttpListener({ clock, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
+  await using listener = new HttpListener({ clock, host: LOOPBACK, label: LABEL, log, port: blocker.port, retryMs: RETRY_MS });
 
   // Every failed attempt reports and arms the next. A listener that armed one retry and then gave up would report the conflict once and never come up at all.
   await waitUntil(() => clock.pending === 1, { description: "the first retry wait to be armed" });
@@ -533,7 +661,7 @@ test("a listener constructed over a lifetime that has already ended never binds"
 
     controller.abort(new HbpuAbortError("shutdown"));
 
-    const listener = new HttpListener({ label: LABEL, log, port: 0, signal: controller.signal });
+    const listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0, signal: controller.signal });
 
     assert.equal(listener.aborted, true);
     assert.equal(listener.boundPort, 0, "a listener that never called listen has no port to report");
@@ -551,7 +679,7 @@ test("the method filter answers before the body is read", async () => {
   const limit = 1024;
   const log = capturingLog();
 
-  await using listener = new HttpListener({ bodyLimit: limit, label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ bodyLimit: limit, host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -577,7 +705,7 @@ test("the handler's status, headers, and body are what the client reads", async 
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -601,7 +729,7 @@ test("an await using scope has released the port by its next statement", async (
 
     {
 
-      await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+      await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
       await listener.ready;
       port = listener.boundPort;
@@ -616,7 +744,7 @@ test("a client that resets mid-body produces no response and no log line", async
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -640,7 +768,7 @@ test("a route handle disposed after its path was claimed again removes nothing",
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -662,7 +790,7 @@ test("a catch-all route answers every path no exact route claims", async () => {
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -701,7 +829,7 @@ test("a route that keeps failing is reported once, replayed at debug, and report
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -732,7 +860,7 @@ test("two routes failing with the same message each report their first failure i
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -762,7 +890,7 @@ test("a repeat on one route is demoted to debug even when another route fails th
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -793,7 +921,7 @@ test("interleaved failures across two routes still demote each route's own repea
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 
@@ -826,7 +954,7 @@ test("a path released and claimed again reports its new route's first failure in
 
   const log = capturingLog();
 
-  await using listener = new HttpListener({ label: LABEL, log, port: 0 });
+  await using listener = new HttpListener({ host: LOOPBACK, label: LABEL, log, port: 0 });
 
   await listener.ready;
 

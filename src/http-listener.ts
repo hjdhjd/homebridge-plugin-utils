@@ -9,8 +9,8 @@
  * A plugin that has to answer HTTP - an inbound delivery a controller posts, a document a media player fetches, a redirect an authorization flow lands on - needs
  * the same machinery every time: a server whose lifetime is an {@link AbortSignal}, a port that is retried while something else holds it, a way to say which paths it
  * answers and with which methods, a body read that refuses to buffer without bound, and a teardown that releases the port rather than leaking it across a plugin
- * reload. That machinery is what this module owns, and it is all it owns: which port, which paths, what a request means, and what the answer is are the consumer's,
- * handed in as options and as a handler.
+ * reload. That machinery is what this module owns, and it is all it owns: which address and port, which paths, what a request means, and what the answer is are the
+ * consumer's, handed in as options and as a handler.
  *
  * The pieces:
  *
@@ -82,6 +82,14 @@ export interface HttpListenerOptions {
    * Optional time source for the bind retry's waits, handed through to `retry()`. Defaults to `systemClock`; a `TestClock` puts the retry schedule on virtual time.
    */
   clock?: Clock;
+
+  /**
+   * The address to listen on. Loopback (`"127.0.0.1"` or `"::1"`) holds the listener to this machine, for something only a local process should reach, and one
+   * interface's own address holds it to that interface on a multi-homed host. A hostname binds the one address it resolves to, so `"localhost"` holds a single
+   * loopback address even where it names more than one. Defaults to every address, which an empty string selects too. An address the machine does not have fails the
+   * bind the way any cause other than a held port does: the listener reports it once and ends rather than retrying.
+   */
+  host?: string;
 
   /**
    * The noun phrase every one of this listener's log lines names it by - "event receiver", "document server". Required, because the library owns the wording of
@@ -202,6 +210,13 @@ function describePath(path: HttpListenerPath): string {
   return (typeof path === "string") ? path : "every path";
 }
 
+// Render the address a lifecycle line names beside the port. A listener held to one address names it, so the line says where the port is held or taken; a listener
+// on every address has nothing to add, and its lines name the port alone.
+function describeHost(host: string | undefined): string {
+
+  return (host === undefined) ? "" : " at " + host;
+}
+
 /**
  * A signal-scoped HTTP listener: one `http.Server` whose lifetime is an {@link AbortSignal}, with routes registered by handle, a bounded raw-body read, a bind retry
  * that composes over the library's own `retry()` on an injected {@link Clock}, and a disposal that has released the port by the time it resolves.
@@ -252,6 +267,9 @@ export class HttpListener implements AsyncDisposable {
   // handler without handing a caller the raw controller.
   readonly #controller: AbortController;
 
+  // The address the caller asked for, which every bind attempt passes beside the port. Undefined is every address.
+  readonly #host: string | undefined;
+
   // The noun phrase every log line names this listener by.
   readonly #label: string;
 
@@ -281,7 +299,7 @@ export class HttpListener implements AsyncDisposable {
    */
   public constructor(options: HttpListenerOptions) {
 
-    const { bodyLimit = HTTP_LISTENER_BODY_LIMIT, clock, label, log, port, retryMs = HTTP_LISTENER_RETRY_MS, signal } = options;
+    const { bodyLimit = HTTP_LISTENER_BODY_LIMIT, clock, host, label, log, port, retryMs = HTTP_LISTENER_RETRY_MS, signal } = options;
 
     if(label.length === 0) {
 
@@ -302,6 +320,9 @@ export class HttpListener implements AsyncDisposable {
 
     this.#bodyLimit = bodyLimit;
     this.#clock = clock;
+
+    // Node binds every address for an empty host just as for none, so an empty one is held as none, and the lines that name the address agree with the bind.
+    this.#host = (host === "") ? undefined : host;
     this.#label = label;
     this.#log = log;
     this.#port = port;
@@ -569,7 +590,7 @@ export class HttpListener implements AsyncDisposable {
           shouldRetry: (error: unknown): boolean => hasErrorCode(error, "EADDRINUSE"), signal });
 
         // The kernel's port rather than the configured one, so a listener that asked for an ephemeral port reports what it was given.
-        this.#log.info("The %s is listening on port %d.", this.#label, this.boundPort);
+        this.#log.info("The %s is listening on port %d%s.", this.#label, this.boundPort, describeHost(this.#host));
         this.#readyResolvers.resolve();
       },
       onError: (error: unknown): void => {
@@ -593,7 +614,7 @@ export class HttpListener implements AsyncDisposable {
     // settles on the server's own `error` event too, which is how a failed bind arrives here as a rejection carrying the kernel's error.
     const listening = once(this.#server, "listening", { signal });
 
-    this.#server.listen(this.#port);
+    this.#server.listen({ host: this.#host, port: this.#port });
 
     try {
 
@@ -604,7 +625,7 @@ export class HttpListener implements AsyncDisposable {
       // reported once by `onError`, so it is not named twice here.
       if(hasErrorCode(error, "EADDRINUSE")) {
 
-        this.#log.error("The port the %s needs is in use by another process. Retrying in %s.", this.#label, formatMs(this.#retryMs));
+        this.#log.error("The port the %s needs%s is in use by another process. Retrying in %s.", this.#label, describeHost(this.#host), formatMs(this.#retryMs));
       }
 
       throw error;

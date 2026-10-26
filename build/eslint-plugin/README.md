@@ -20,7 +20,8 @@ export default hbPluginUtils({
 ```
 
 That single call returns a complete flat-config array: TypeScript rules scoped to `.ts` files, JavaScript rules scoped to `.mjs` files, the common
-`@hjdhjd/*` and `@stylistic/*` rule set applied everywhere, webUI globals scoped to UI files, and Node globals scoped to the files that run under Node.
+`@hjdhjd/*` and `@stylistic/*` rule set applied everywhere, webUI globals scoped to UI files, Node globals scoped to the files that run under Node, and the
+browser-safety guard scoped to the settings-page folder.
 
 The Node globals are read from the Node runtime that runs the linter, so they track that runtime's version with no hand-kept list. Like the `ui` globs, the
 `node` globs join the linted set, and the globals apply only to the files `node` names, never to every JavaScript file, so `no-undef` still catches a Node name
@@ -34,6 +35,18 @@ Fixture files also get the `fixtureRules` relaxation, which switches `sort-keys`
 and `.mjs`. A fixture embeds output captured from a device or controller, and its key order is the order the wire delivered, which a test may assert on, while
 test and helper files build their own objects and keep the rule. Pass `fixtures` to name a different set, or `fixtures: []` to opt out. Its block pairs with the
 linted globs the same way, and it sits after the test-file block and ahead of `extraConfigs`.
+
+Browser-shipped TypeScript gets the `webuiRules` guard, which holds it browser-safe: a plugin's settings-page modules live in `src/webui/`, its ordinary build
+compiles them to `dist/webui/`, and `homebridge-plugin-utils copy-webui` copies them to the page. A module in the folder may import a value only from its own
+folder, through a `./` path with no `..` segment and no backslash, which a browser reads as a path separator, and may import a type from anywhere, since the
+compiler erases a type-only import. An inline `type` qualifier is an error, because an import whose every name carries one passes the import check as type-only
+while the compiler keeps it as a bare import of its module. A dynamic `import()` is an error, because its specifier can be computed past that check, and so is a
+reference to a Node global the browser lacks, such as `process`, `Buffer` or `require`, whether named bare or read through `globalThis`. With no value import
+leaving the folder and no module in it reaching Node, every module the page loads runs in the browser, and a breach fails the lint rather than the page. The rules
+sit at error severity, and the block's `no-restricted-syntax` carries the common block's template-literal ban beside its own entry, so a template literal in the
+folder is an error rather than a warning. The `webui` option names the folder, `src/webui/**/*.ts` by default, less the files the `tests` globs name, which run
+under Node; pass `webui: []` to opt out. The block pairs with the linted globs as the test-file block does, and it sits after the common block and ahead of
+`extraConfigs`.
 
 ## File layout
 
@@ -82,6 +95,7 @@ reaching into rule internals.
 | `jsRules` | `config.mjs` | JavaScript-specific rule preset. |
 | `testRules` | `config.mjs` | Rule preset for test, fixture, and helper files. |
 | `fixtureRules` | `config.mjs` | Rule preset for fixture files, switching `sort-keys` off so captured output keeps its order. |
+| `webuiRules` | `config.mjs` | Rule preset for browser-shipped TypeScript, holding a plugin's settings-page modules browser-safe. |
 | `globalsUi` | `config.mjs` | Browser-environment globals dictionary for webUI files. |
 | `globalsNode` | `config.mjs` | Node-environment globals dictionary, read from the running Node runtime, for files that run under Node. |
 

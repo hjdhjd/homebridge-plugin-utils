@@ -14,7 +14,7 @@ import { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_B
 import { USAGE, prepareChrome, prepareDocs, prepareMqttDocs, prepareUi, runCli } from "./index.ts";
 import { cp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { describe, test } from "node:test";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -1277,6 +1277,155 @@ describe("runCli", () => {
     assert.equal(code, 0);
     assert.match(await readFile(join(cwd, "docs", "MQTT.md"), "utf8"), /\| Topic\s+\| Device Type\s+\| Message Published/,
       "the column travels inside the catalog under its symbol and needs no second export");
+  });
+});
+
+/**
+ * Populate a tmpdir as a synthetic plugin root whose build has emitted the named files under `dist/webui`. Each file's content is its own relative path, the
+ * convention {@link setupSource} follows, so a test detects a mis-copied file by reading it back.
+ *
+ * @param args
+ * @param args.files - File paths relative to `dist/webui`.
+ * @param args.root  - The tmpdir directory to populate as the plugin root.
+ */
+async function writeWebUiBuild({ files, root }: { files: readonly string[]; root: string }): Promise<void> {
+
+  await Promise.all(files.map(async (path) => {
+
+    const absolute = join(root, "dist", "webui", path);
+
+    await mkdir(dirname(absolute), { recursive: true });
+    await writeFile(absolute, path);
+  }));
+}
+
+/**
+ * List every file under a directory by its POSIX path relative to that directory, sorted, so a row asserts the whole of what a run left there rather than only
+ * the files it expects.
+ *
+ * @param root - The directory to list.
+ *
+ * @returns The relative paths, sorted.
+ */
+async function filesUnder(root: string): Promise<string[]> {
+
+  const entries = await readdir(root, { recursive: true, withFileTypes: true });
+
+  return entries.filter((entry) => entry.isFile()).map((entry) => relative(root, join(entry.parentPath, entry.name)).split(sep).join("/")).toSorted();
+}
+
+describe("runCli - copy-webui", () => {
+
+  test("copies every compiled module under dist/webui to the page, path for path, and leaves declarations and maps behind", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const dest = join(scratch.path, "homebridge-ui", "public", "lib", "webui");
+
+    await writeWebUiBuild({ files: [ "a.js", "a.js.map", "a.d.ts", "sub/b.js" ], root: scratch.path });
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
+
+    assert.equal(code, 0);
+    assert.equal(capture.chunks(), "", "a successful copy must not write to stderr");
+    assert.deepEqual(await filesUnder(dest), [ "a.js", "sub/b.js" ]);
+    assert.equal(await readFile(join(dest, "a.js"), "utf8"), "a.js");
+    assert.equal(await readFile(join(dest, "sub", "b.js"), "utf8"), "sub/b.js");
+  });
+
+  test("copies each module without the source-map comment TypeScript ends it with, and leaves the same text anywhere else in a module as it is", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const build = join(scratch.path, "dist", "webui");
+    const dest = join(scratch.path, "homebridge-ui", "public", "lib", "webui");
+    const body = "export function a() {\n\n  return 1;\n}\n";
+
+    // The first module ends as TypeScript leaves it, the comment alone on the final line with no newline after it. The second carries the same text mid-line, on a
+    // line of its own with code after it, and inside a string on its final line, none of which is the comment the copy leaves out. The third ends in the comment
+    // followed by a newline, which the copy leaves out with it.
+    const quoted = "// TypeScript ends a module with //# sourceMappingURL= and the map's name.\n//# sourceMappingURL=b.js.map\n" +
+      "export const comment = \"//# sourceMappingURL=b.js.map\";\n";
+
+    await mkdir(build, { recursive: true });
+    await writeFile(join(build, "a.js"), body + "//# sourceMappingURL=a.js.map");
+    await writeFile(join(build, "b.js"), quoted);
+    await writeFile(join(build, "c.js"), body + "//# sourceMappingURL=c.js.map\n");
+
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.equal(await readFile(join(dest, "a.js"), "utf8"), body, "the comment's line goes, and every byte before it stays, the newline above it included");
+    assert.equal(await readFile(join(dest, "b.js"), "utf8"), quoted, "the same text anywhere but a final line of its own is the module's and copies unchanged");
+    assert.equal(await readFile(join(dest, "c.js"), "utf8"), body, "a final comment goes with the newline after it, and every byte before it stays");
+  });
+
+  test("a module removed from dist/webui is gone from the page after the next run", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const dest = join(scratch.path, "homebridge-ui", "public", "lib", "webui");
+
+    await writeWebUiBuild({ files: [ "a.js", "sub/b.js" ], root: scratch.path });
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.deepEqual(await filesUnder(dest), [ "a.js", "sub/b.js" ]);
+
+    // Each run clears the folder before it copies rather than copying over what is there, so the copy of a module the source has lost goes with the rest.
+    await rm(join(scratch.path, "dist", "webui", "sub", "b.js"));
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.deepEqual(await filesUnder(dest), ["a.js"]);
+  });
+
+  test("leaves the rest of lib, the mirrored webUI and its manifest, untouched", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
+    const manifest = JSON.stringify({ hash: "0123456789abcdef", subdir: "2.0.0-0123456789abcdef", version: "2.0.0" }, null, 2) + "\n";
+
+    // The content-hashed folder and the manifest prepare-ui writes beside the copy's own folder, laid down as that verb leaves them.
+    await mkdir(join(lib, "2.0.0-0123456789abcdef"), { recursive: true });
+    await writeFile(join(lib, "2.0.0-0123456789abcdef", "webUi.mjs"), "webUi.mjs");
+    await writeFile(join(lib, "manifest.json"), manifest);
+    await writeWebUiBuild({ files: ["a.js"], root: scratch.path });
+
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.deepEqual(await filesUnder(lib), [ "2.0.0-0123456789abcdef/webUi.mjs", "manifest.json", "webui/a.js" ]);
+    assert.equal(await readFile(join(lib, "2.0.0-0123456789abcdef", "webUi.mjs"), "utf8"), "webUi.mjs");
+    assert.equal(await readFile(join(lib, "manifest.json"), "utf8"), manifest);
+  });
+
+  test("before the build exits 1 naming the build as the step to run first, and leaves the page's copy as it was", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const dest = join(scratch.path, "homebridge-ui", "public", "lib", "webui");
+
+    // A copy an earlier run left on the page, which a run that cannot copy must not clear.
+    await mkdir(dest, { recursive: true });
+    await writeFile(join(dest, "a.js"), "a.js");
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
+
+    assert.equal(code, 1);
+    assert.equal(capture.chunks(), "homebridge-plugin-utils copy-webui: The plugin has not been built: " + join(scratch.path, "dist", "webui") +
+      " is missing. Run the plugin's build first.\n");
+    assert.deepEqual(await filesUnder(dest), ["a.js"]);
+  });
+
+  test("a dist/webui that is not a directory exits 1 naming the path", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    await mkdir(join(scratch.path, "dist"), { recursive: true });
+    await writeFile(join(scratch.path, "dist", "webui"), "not a directory");
+
+    const capture = captureStderr();
+    const code = await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
+
+    assert.equal(code, 1);
+    assert.equal(capture.chunks(), "homebridge-plugin-utils copy-webui: The plugin's compiled webUI path is not a directory: " + join(scratch.path, "dist", "webui") +
+      ".\n");
   });
 });
 

@@ -7,9 +7,13 @@
  * kept for test and helper paths, the blank-line rule kept on at warn severity for source, browser-side, test, and fixture paths alike, with no blank line
  * allowed at a file's start or end and at most one in a row inside it, and a test-named file outside every linted glob left unlinted. The rest read the
  * builder's exports directly: the Node globals it reads from the runtime, which blocks its `node`, `tests`, and `fixtures` options emit, what a Node-only glob
- * resolves to, and where the test-file and fixture blocks sit.
+ * resolves to, and where the test-file and fixture blocks sit. The settings-page rows lint text under a module of `src/webui/` and assert what the folder's block
+ * refuses and admits there, that source outside the folder and the folder's test files are left alone, that the `webui` option opts out, where the block sits,
+ * and that the package's lint entry exports the folder's rule preset. One row holds the lint helper itself to failing a row whose path no config lints or whose
+ * text never parses.
  */
-import { config as buildConfig, fixtureRules, globalsNode, testRules } from "./config.mjs";
+import * as lintEntry from "homebridge-plugin-utils/eslint";
+import { config as buildConfig, commonRules, fixtureRules, globalsNode, testRules, webuiRules } from "./config.mjs";
 import { describe, it } from "node:test";
 import { ESLint } from "eslint";
 import assert from "node:assert/strict";
@@ -36,13 +40,23 @@ function severityOf(config, rule) {
 
 // Reading a resolved severity says the rule is configured; linting a fixture says what it does, which is what the rows below assert. The text is linted under
 // an existing project file's path because the preset declares no default project, so a virtual path has no project membership to lint against - the source is
-// linted in memory and nothing is written to disk. Counting only the named rule's messages keeps the assertion clear of the fixture's other findings, which
-// belong to other rules.
-async function ruleMessageCount({ filePath = "src/util.ts", rule, source }) {
+// linted in memory and nothing is written to disk. Keeping only the named rule's messages keeps the assertion clear of the fixture's other findings, which
+// belong to other rules. A message no rule raised fails the row outright, because a path no block lints answers only the notice that it was ignored, a text
+// that never parsed answers only its parse error, and in each case no rule runs, so the row would read as no message from its rule. A row linting through a
+// config other than this package's passes its own instance as the linter.
+async function ruleMessages({ filePath = "src/util.ts", linter = eslint, rule, source }) {
 
-  const [result] = await eslint.lintText(source, { filePath });
+  const [result] = await linter.lintText(source, { filePath });
 
-  return result.messages.filter((message) => message.ruleId === rule).length;
+  assert.deepEqual(result.messages.filter((message) => message.ruleId === null).map((message) => message.message), [], filePath + " must be linted and must parse.");
+
+  return result.messages.filter((message) => message.ruleId === rule);
+}
+
+// The count of the named rule's messages, which most rows assert.
+async function ruleMessageCount(options) {
+
+  return (await ruleMessages(options)).length;
 }
 
 // The blocks of a built config that carry a given rule set, found by that rule set rather than by position so a row can assert where each block sits.
@@ -100,6 +114,16 @@ describe("flat config composition", () => {
 
     assert.equal(globals.document, "readonly");
     assert.equal(globals.process, "readonly");
+  });
+
+  // The lint helper fails a row whose path no block lints and a row whose text never parses, so a row expecting no message from its rule cannot pass because
+  // no rule ran. The text would draw that rule's message at a linted path.
+  it("fails a row aimed at a path no config lints or a text that never parses", async () => {
+
+    await assert.rejects(ruleMessageCount({ filePath: "test/e2e/stray.test.ts", rule: "no-var", source: "var a = 1;\n" }),
+      { message: /^test\/e2e\/stray\.test\.ts must be linted and must parse\./u });
+    await assert.rejects(ruleMessageCount({ rule: "no-var", source: "var = 1;\n" }), { message: /^src\/util\.ts must be linted and must parse\./u });
+    assert.equal(await ruleMessageCount({ rule: "no-var", source: "var a = 1;\n" }), 1);
   });
 
   // Two value declarations of one module are what the rule exists to catch, and their member lists make no difference to it.
@@ -297,5 +321,129 @@ describe("flat config composition", () => {
     assert.equal(severityOf(await eslint.calculateConfigForFile("src/mqtt.helpers.ts"), "sort-keys"), 1);
     assert.equal(severityOf(await eslint.calculateConfigForFile("ui/ui.helpers.mjs"), "sort-keys"), 1);
     assert.equal(await eslint.calculateConfigForFile("test/e2e/stray.fixtures.ts"), undefined);
+  });
+});
+
+describe("the settings-page folder", () => {
+
+  // A module in the folder, the path the rows lint their text under. The text is linted in memory under an existing project file's path, as the rows above lint
+  // theirs, because the project service refuses a path it does not know, and a refused path reads no message from any rule.
+  const webuiFile = "src/webui/address.ts";
+
+  // The rules the folder's block sets.
+  const webuiRuleNames = [ "@hjdhjd/split-type-imports", "@typescript-eslint/no-restricted-imports", "no-restricted-globals", "no-restricted-syntax" ];
+
+  // A value import of each specifier, refused in the folder by the import rule.
+  const valueImport = (specifier) => ({ rule: "@typescript-eslint/no-restricted-imports", source: "import { a } from " + JSON.stringify(specifier) + ";\n" });
+
+  // The texts a module in the folder is refused, each beside the rule that refuses it.
+  const refused = [
+
+    ...[ "node:fs", "homebridge-plugin-utils", "../settings.ts", "./sub/../../settings.ts", "./..\\settings.ts" ].map(valueImport),
+    { rule: "no-restricted-globals", source: "const a = process.env;\n" },
+    { rule: "no-restricted-globals", source: "const a = globalThis.process;\n" },
+    { rule: "no-restricted-syntax", source: "const a = import(\"./x.ts\");\n" }
+  ];
+
+  // Lint every text under one path at once and answer each text's count of messages from its own rule, keyed by the text so a failing row names the text whose
+  // count moved. Each lint parses and runs its rules in one synchronous pass, so texts sharing a path never read one another's content.
+  const countsAt = async ({ filePath, linter, texts }) => Object.fromEntries(await Promise.all(texts.map(async ({ rule, source }) => [ source,
+    await ruleMessageCount({ filePath, linter, rule, source }) ])));
+
+  // Every text keyed to the one count a row expects of it.
+  const each = (texts, count) => Object.fromEntries(texts.map(({ source }) => [ source, count ]));
+
+  // The folder's modules reach the browser and nothing else does, so a value may come only from inside the folder, through a "./" path, and a ".." segment or a
+  // backslash, which a browser reads as a "/", is refused even behind a "./" opening, since each can climb out of the folder. A Node global, named bare or read
+  // through globalThis, and a dynamic import are refused as well.
+  it("refuses a value import from outside the folder, a Node global, and a dynamic import", async () => {
+
+    assert.deepEqual(await countsAt({ filePath: webuiFile, texts: refused }), each(refused, 1));
+  });
+
+  // The compiler erases a type-only import, so it may come from anywhere, and a value import from inside the folder, its subfolders included, is what the folder
+  // is for.
+  it("admits a type-only import from anywhere and a value import from inside the folder", async () => {
+
+    const admitted = [ ...[ "homebridge-plugin-utils", "../types.ts" ].map((specifier) => ({ rule: "@typescript-eslint/no-restricted-imports",
+      source: "import type { T } from " + JSON.stringify(specifier) + ";\n" })), ...[ "./routes.ts", "./sub/x.ts" ].map(valueImport) ];
+
+    assert.deepEqual(await countsAt({ filePath: webuiFile, texts: admitted }), each(admitted, 0));
+  });
+
+  // Every Node global the browser lacks is refused by name, and read through globalThis as well, each through the same message.
+  it("refuses each Node global the browser lacks", async () => {
+
+    const references = (name) => [ "", "globalThis." ].map((owner) => ({ rule: "no-restricted-globals", source: "const a = " + owner + name + ";\n" }));
+    const globals = [ "Buffer", "__dirname", "__filename", "clearImmediate", "global", "module", "process", "require", "setImmediate" ].flatMap(references);
+
+    assert.deepEqual(await countsAt({ filePath: webuiFile, texts: globals }), each(globals, 1));
+  });
+
+  // An import whose every name carries an inline `type` reads as type-only to the import rule, yet the compiler keeps it as a bare import that loads its module,
+  // so the folder holds the family's split-type-imports rule at error severity, while source elsewhere and the folder's test files keep the common block's warning.
+  it("refuses an inline type qualifier at error severity in the folder alone", async () => {
+
+    const inline = { rule: "@hjdhjd/split-type-imports", source: "import { type X } from \"../settings.ts\";\n" };
+    const severities = async (filePath) => (await ruleMessages({ ...inline, filePath })).map((message) => message.severity);
+
+    assert.deepEqual(await severities(webuiFile), [2]);
+    assert.deepEqual(await severities("src/util.ts"), [1]);
+    assert.deepEqual(await severities("src/webui/address.test.ts"), [1]);
+  });
+
+  // The guard belongs to the folder alone: source elsewhere runs under Node, and a test file in the folder runs under Node's test runner, so each takes every
+  // refused text without a message from the rule that refuses it in the folder.
+  it("leaves source outside the folder and the folder's test files alone", async () => {
+
+    assert.deepEqual(await countsAt({ filePath: "src/util.ts", texts: refused }), each(refused, 0));
+    assert.deepEqual(await countsAt({ filePath: "src/webui/address.test.ts", texts: refused }), each(refused, 0));
+  });
+
+  // An empty list opts out: the builder emits no block for the folder, so a module there takes every refused text. The block pairs its globs with the linted ones,
+  // so a config that lints nothing emits no block for the folder as well.
+  it("emits no block for the folder when the webui option is empty or the config lints nothing", async () => {
+
+    const optedOut = buildConfig({ ts: ["src/**/*.ts"], webui: [] });
+    const consumer = new ESLint({ cwd: packageRoot, overrideConfig: optedOut, overrideConfigFile: true });
+
+    assert.equal(blocksCarrying(buildConfig({ ts: ["src/**/*.ts"] }), webuiRules).length, 1);
+    assert.deepEqual(blocksCarrying(optedOut, webuiRules), []);
+    assert.deepEqual(blocksCarrying(buildConfig(), webuiRules), []);
+    assert.deepEqual(await countsAt({ filePath: webuiFile, linter: consumer, texts: refused }), each(refused, 0));
+  });
+
+  // The block reaches a module the folder does not hold yet, every rule at error severity, while a test file the folder does not hold yet keeps the common block's
+  // warn severity for the inline-type rule and the template-literal entry, which that block sets, and none of the folder's other rules.
+  it("holds a new module in the folder to every rule at error severity", async () => {
+
+    const newModule = await eslint.calculateConfigForFile("src/webui/x.ts");
+    const newTest = await eslint.calculateConfigForFile("src/webui/x.test.ts");
+
+    assert.deepEqual(webuiRuleNames.map((rule) => severityOf(newModule, rule)), [ 2, 2, 2, 2 ]);
+    assert.deepEqual(webuiRuleNames.map((rule) => severityOf(newTest, rule)), [ 1, undefined, undefined, 1 ]);
+  });
+
+  // The folder's block follows the common block, whose template-literal entry it carries on at error severity, and sits ahead of a consumer's own blocks, so a
+  // consumer still has the final word.
+  it("places the folder's block after the common block and ahead of a consumer's own blocks", async () => {
+
+    const extra = { files: ["src/webui/**/*.ts"], rules: { "no-restricted-globals": "off" } };
+    const configs = buildConfig({ extraConfigs: [extra], ts: ["src/**/*.ts"] });
+    const [block] = blocksCarrying(configs, webuiRules);
+    const [common] = blocksCarrying(configs, commonRules);
+    const consumer = new ESLint({ cwd: packageRoot, overrideConfig: configs, overrideConfigFile: true });
+
+    assert.ok(configs.indexOf(common) < configs.indexOf(block), "the folder's block must follow the common block.");
+    assert.ok(configs.indexOf(block) < configs.indexOf(extra), "the folder's block must precede the consumer's own blocks.");
+    assert.equal(severityOf(await consumer.calculateConfigForFile("src/webui/x.ts"), "no-restricted-globals"), 0);
+    assert.equal(await ruleMessageCount({ filePath: webuiFile, rule: "no-restricted-syntax", source: "const a = `x`;\n" }), 1);
+  });
+
+  // The folder's preset is public as its sibling presets are, imported here by the package's own name, so a consumer that scopes the guard to a block of its own
+  // spreads the same rules the builder's block carries.
+  it("exports the folder's rule preset from the package's lint entry", () => {
+
+    assert.equal(lintEntry.webuiRules, webuiRules);
   });
 });

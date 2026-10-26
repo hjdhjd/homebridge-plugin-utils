@@ -123,19 +123,28 @@ for await (const record of stream) {
 
 ## Plugin Tooling
 
-Installing this library also installs a `homebridge-plugin-utils` command-line tool that automates the build steps a consuming plugin needs: mirroring the compiled webUI into the plugin, keeping the Feature Options reference in sync with the options catalog, keeping the MQTT topic tables in sync with the topic catalog, and stamping the shared documentation chrome across the plugin's pages. Each is meant to run from a plugin's `build` or `prepublishOnly` script so no artifact can drift from the source it is generated from.
+Installing this library also installs a `homebridge-plugin-utils` command-line tool that automates the build steps a consuming plugin needs: mirroring the compiled webUI into the plugin, copying the plugin's own compiled settings-page modules beside it, keeping the Feature Options reference in sync with the options catalog, keeping the MQTT topic tables in sync with the topic catalog, and stamping the shared documentation chrome across the plugin's pages. Each is meant to run from a plugin's `build` or `prepublishOnly` script so no artifact can drift from the source it is generated from.
 
 ```
 Usage: homebridge-plugin-utils <command> [options]
 
 Commands:
   prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.
+  copy-webui    Copy the plugin's compiled settings-page modules from dist/webui into homebridge-ui/public/lib/webui.
   prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.
   prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.
   prepare-chrome <manifest> [--root <dir>] [--check] [--offline]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across the plugin's docs, README, and webUI.
 ```
 
 - **`prepare-ui <destination>`** mirrors this library's compiled browser-side webUI into your plugin's UI directory (typically `homebridge-ui/public/lib`) under a content-hashed, version-named subfolder. Because the folder name changes whenever its contents change, the browser's HTTP cache invalidates structurally - you never have to chase a stale cached copy after a rebuild. The run is safe to repeat and sweeps away the previous build's subfolder in the same pass, while leaving any non-versioned files in the destination untouched.
+
+- **`copy-webui`** copies your plugin's own settings-page modules to its UI. Write that logic in TypeScript under `src/webui/`, where your ordinary build
+  compiles it to `dist/webui/` beside the rest of your source, and run this from your plugin's root after the build: every `.js` file under `dist/webui/` lands
+  at the same path under `homebridge-ui/public/lib/webui/`, where your page loads it. Every run clears the folder before it copies, so a module you remove from
+  the source leaves no stale copy behind, and nothing else under `lib/` is touched, so `prepare-ui`'s subfolder and manifest stay as they were. Only the
+  JavaScript is copied: the declarations and source maps stay in `dist/`, and each module's trailing source-map comment is left out too, because the map it
+  names stays there. The shared lint preset holds `src/webui/` browser-safe, so a module there imports values only from its own folder and never reaches a
+  Node global.
 
 - **`prepare-docs <catalog-module> [--doc <path>] [--check]`** regenerates your plugin's Feature Options reference straight from its options catalog, splicing it into a marked region of the target document - `docs/FeatureOptions.md` by default, or the `--doc` path you pass for a plugin that ships its reference elsewhere. Running it on every build keeps the published reference from drifting away from the options you actually ship. Passing `--check` writes nothing: the run renders every target it would write, compares each against the file on disk, names each one that would change on standard error, and exits non-zero when any would. `prepare-mqtt` and `prepare-chrome` take the same flag, so a continuous-integration job proves a plugin's committed documentation is what these verbs would produce in one invocation each.
 

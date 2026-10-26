@@ -240,13 +240,47 @@ const fixtureRules = {
   "sort-keys": "off"
 };
 
+/**
+ * Rule preset for browser-shipped TypeScript: the settings-page modules a plugin keeps in `src/webui/`, which its build compiles with the rest of its source and
+ * `homebridge-plugin-utils copy-webui` copies to the page. Only that folder's compiled modules reach the browser, so a module there may import a value only from its
+ * own folder, through a `./` path with no `..` segment and no backslash, which a browser reads as a path separator, while a type-only import, which the compiler
+ * erases, may come from anywhere. An inline `type` qualifier is refused, because an import whose every name carries one reads as type-only to the import check while
+ * the family's compiler settings keep it as a bare import that still loads its module. A dynamic `import()` is refused outright, since its specifier can be computed
+ * past the import check, and so is every Node global the browser lacks, whether named bare or read through `globalThis`. With no value edge leaving the folder and no
+ * module in it reaching Node, every module the page loads runs in the browser, and that holds by induction over the folder rather than by reading emitted code.
+ *
+ * Every rule sits at error severity, because a breach otherwise surfaces only when the page loads. A block's setting for a rule replaces any earlier block's setting
+ * rather than adding to it, so `no-restricted-syntax` carries the common block's own entries beside the dynamic import, at this block's severity, and the family's
+ * `split-type-imports` rule, which the common block sets at warn, is set again here at error.
+ *
+ * Spread into the `rules:` slot of a flat config block scoped to browser-shipped TypeScript files.
+ */
+const webuiRules = {
+
+  "@hjdhjd/split-type-imports": "error",
+  "@typescript-eslint/no-restricted-imports": [ "error", { patterns: [{
+
+    allowTypeImports: true,
+    message: "A settings-page module may import a value only from its own folder, through a ./ path with no .. segment and no backslash, because only that " +
+      "folder reaches the browser.",
+
+    // A specifier that does not open with "./", that carries a backslash, which a browser reads as a path separator, or that carries a ".." segment anywhere, can
+    // name a module outside the folder.
+    regex: /^(?!\.\/)|\\|(?:^|\/)\.\.(?:\/|$)/u.source
+  }] } ],
+  "no-restricted-globals": [ "error", { checkGlobalObject: true, globals: [ "Buffer", "__dirname", "__filename", "clearImmediate", "global", "module", "process",
+    "require", "setImmediate" ].map((name) => ({ message: "A settings-page module runs in the browser, which has no Node globals.", name })) } ],
+  "no-restricted-syntax": [ "error", ...commonRules["no-restricted-syntax"].slice(1),
+    { message: "A settings-page module may not import dynamically, because a computed specifier can reach past its own folder.", selector: "ImportExpression" } ]
+};
+
 // The family's fixture-file naming convention, in `.ts` and `.mjs`, wherever the file lives. It is the `fixtures` default and part of the `tests` default in
 // `config`, so the `fixtures` and `tests` defaults name the same fixture files.
 const fixtureGlobs = [ "**/*.fixtures.ts", "**/*.fixtures.mjs" ];
 
 // Pair every glob in `linted` with every glob in `globs`, in the form where a file must match both. In flat config a block's `files` globs also pick files out of a
-// linted directory, so a relaxation block scoped through this pairing reaches only files the preset already lints and never widens what gets linted. The pairing
-// is empty when `linted` or `globs` is.
+// linted directory, so a block scoped through this pairing reaches only files the preset already lints and never widens what gets linted. The pairing is empty
+// when `linted` or `globs` is.
 function pairWithLinted({ globs, linted }) {
 
   return linted.flatMap((glob) => globs.map((scoped) => [ glob, scoped ]));
@@ -255,15 +289,16 @@ function pairWithLinted({ globs, linted }) {
 /**
  * Build a ready-to-use ESLint flat config array. Consumers call this function and export default the result.
  *
- * Every option is optional, and every one but `tests` and `fixtures` defaults to an empty array, mirrored by the destructuring defaults in the signature below.
- * `tests` defaults to the family's naming convention for test, fixture, and helper files wherever the file lives, `fixtures` defaults to the fixture-file part of
- * that convention, and an empty array for an option opts it out. The JSDoc marks them optional with the bracket form so the emitted declaration types each property
- * as optional, matching how consumers actually call this - passing only the subset they need.
+ * Every option is optional, and every one but `tests`, `fixtures`, and `webui` defaults to an empty array, mirrored by the destructuring defaults in the signature
+ * below. `tests` defaults to the family's naming convention for test, fixture, and helper files wherever the file lives, `fixtures` defaults to the fixture-file part
+ * of that convention, `webui` defaults to the family's settings-page folder, `src/webui/`, and an empty array for an option opts it out. The JSDoc marks them optional
+ * with the bracket form so the emitted declaration types each property as optional, matching how consumers actually call this - passing only the subset they need.
  *
  * @param {object} [options] - Configuration options.
  * @param {string[]} [options.ts] - Glob patterns for TypeScript files (strict + stylistic type-checked rules).
  * @param {string[]} [options.js] - Glob patterns for JavaScript files (disable-type-checked rules).
  * @param {string[]} [options.ui] - Glob patterns for browser UI files (adds browser globals).
+ * @param {string[]} [options.webui] - Glob patterns for browser-shipped TypeScript, less the test files (holds it browser-safe). Defaults to the settings-page folder.
  * @param {string[]} [options.node] - Glob patterns for files that run under Node (linted, adds Node globals).
  * @param {string[]} [options.tests] - Glob patterns for linted test, fixture, and helper files (adds test rule relaxations). Defaults to the family naming convention.
  * @param {string[]} [options.fixtures] - Glob patterns for linted fixture files (switches sort-keys off). Defaults to the family naming convention for fixtures.
@@ -281,7 +316,8 @@ function config({
   node = [],
   tests = [ "**/*.test.ts", "**/*.test.mjs", ...fixtureGlobs, "**/*.helpers.ts", "**/*.helpers.mjs" ],
   ts: tsFiles = [],
-  ui = []
+  ui = [],
+  webui = ["src/webui/**/*.ts"]
 } = {}) {
 
   const allFiles = [ ...tsFiles, ...js, ...ui, ...node ];
@@ -385,6 +421,21 @@ function config({
     });
   }
 
+  // Browser-shipped TypeScript, reaching only the files the preset already lints, paired the way the relaxation blocks below are, and none of the test files, which
+  // run under Node. The block sits after the common block, whose `no-restricted-syntax` setting it replaces with a stricter one, and ahead of the escape hatch, so a
+  // consumer's own block still has the final word.
+  const webuiFiles = pairWithLinted({ globs: webui, linted: allFiles });
+
+  if(webuiFiles.length > 0) {
+
+    configs.push({
+
+      files: webuiFiles,
+      ignores: tests,
+      rules: { ...webuiRules }
+    });
+  }
+
   // Test-file relaxations, reaching only the test files the preset already lints. The block sits ahead of the escape hatch so a consumer's own block still has the
   // final word.
   const testFiles = pairWithLinted({ globs: tests, linted: allFiles });
@@ -420,4 +471,4 @@ function config({
 export default config;
 
 // Named exports for advanced customization or gradual migration.
-export { commonRules, config, fixtureRules, globalsNode, globalsUi, jsRules, plugins, testRules, tsRules };
+export { commonRules, config, fixtureRules, globalsNode, globalsUi, jsRules, plugins, testRules, tsRules, webuiRules };

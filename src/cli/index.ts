@@ -6,8 +6,8 @@
 
 /**
  * The homebridge-plugin-utils CLI, exposed to consumers via the `bin` field in `package.json`. A single cohesive module: the content-hash helper, the `prepareUi`,
- * `prepareDocs`, `prepareMqttDocs`, and `prepareChrome` transforms, the `runCli` dispatcher, and the entry-point execution all live here with no inter-file relative
- * VALUE imports.
+ * `copyWebUi`, `prepareDocs`, `prepareMqttDocs`, and `prepareChrome` transforms, the `runCli` dispatcher, and the entry-point execution all live here with no
+ * inter-file relative VALUE imports.
  *
  * That single-file shape is deliberate, not incidental. A bin is invoked through an `npm`-managed symlink in `node_modules/.bin`; if the entry imported a sibling
  * module by relative path AT LOAD TIME, that import would resolve against the symlink's directory under symlink-preserving or copied-package layouts and fail. With
@@ -16,9 +16,9 @@
  * so it carries the SSOT types without reintroducing a load-time relative dependency; when `prepareDocs` actually needs the renderer it reaches it through a computed
  * dynamic import the dispatch site supplies, the same indirection the `hblog` bin uses.
  *
- * The module is simultaneously the executable (run via the bin) and a side-effect-free library surface (`prepareUi` / `prepareDocs` / `prepareMqttDocs` /
- * `prepareChrome` / `runCli` / `USAGE`) that the test suite imports. The entry block at the bottom only executes when this module is the program entry point,
- * detected by comparing canonicalized real paths - see its comment for why a raw path comparison is insufficient.
+ * The module is simultaneously the executable (run via the bin) and a side-effect-free library surface (`prepareUi` / `copyWebUi` / `prepareDocs` /
+ * `prepareMqttDocs` / `prepareChrome` / `runCli` / `USAGE`) that the test suite imports. The entry block at the bottom only executes when this module is the program
+ * entry point, detected by comparing canonicalized real paths - see its comment for why a raw path comparison is insufficient.
  *
  * @module
  */
@@ -50,12 +50,19 @@ const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/;
 // astronomically unlikely.
 const HASH_LENGTH = 16;
 
+// The source-map comment TypeScript writes as a compiled module's final line. {@link copyWebUi} removes it from each module it copies, because the map it names
+// stays in `dist/` and a copy carrying it would point a browser's developer tools at a file the page does not serve. The text matches only where it opens a line
+// and whatever follows that line is whitespace alone, so the newline ending the line before it is kept, and a module that carries the same text anywhere but as
+// its final line, in a string or comment of its own, keeps that text.
+const SOURCE_MAP_COMMENT_PATTERN = /(?<=^|\n)\/\/# sourceMappingURL=[^\n]*(?:\n\s*)?$/;
+
 /**
  * Usage banner shown on no command or an unknown command. Kept as an exported constant so tests assert against its text without
  * coupling to formatting details and so README documentation can reference it via import rather than duplicate.
  */
 export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
   "Commands:\n  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.\n" +
+  "  copy-webui    Copy the plugin's compiled settings-page modules from dist/webui into homebridge-ui/public/lib/webui.\n" +
   "  prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.\n" +
   "  prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.\n" +
   "  prepare-chrome <manifest> [--root <dir>] [--check] [--offline]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across " +
@@ -327,6 +334,62 @@ async function stampWebUiLoader({ absDest, loader, packageName, splice }: {
 
     throw new Error("The webUI mirror succeeded but stamping the loader in " + indexPath + " failed: " + (error instanceof Error ? error.message : String(error)) + ".");
   }
+}
+
+/**
+ * Copy a plugin's compiled settings-page modules to its webUI. A plugin writes that logic in TypeScript under `src/webui/`, its ordinary build compiles the folder to
+ * `dist/webui/`, and this places every `.js` file from there at the same relative path under `homebridge-ui/public/lib/webui/`, where the page loads it. The shared
+ * lint preset holds `src/webui/` browser-safe, so what is copied needs no parsing here: a module there imports values only from its own folder, whose compiled
+ * modules all arrive together, and reaches no Node global.
+ *
+ * Every run clears the destination folder before it copies, so a module removed from the source leaves no stale copy behind, and nothing else under `lib/` is
+ * touched, which keeps the content-hashed folder and manifest {@link prepareUi} writes there intact. Only the JavaScript is copied: the declarations and source
+ * maps beside it stay in `dist/`, since the page never loads them. Each module's trailing source-map comment is left out too, because the map it names stays there.
+ *
+ * @param args
+ * @param args.pluginRoot - The plugin's root directory, holding its `dist/` and its `homebridge-ui/`.
+ *
+ * @throws When the plugin has not been built (`dist/webui/` missing) or `dist/webui` exists but is not a directory.
+ */
+export async function copyWebUi({ pluginRoot }: { pluginRoot: string }): Promise<void> {
+
+  const source = join(pluginRoot, "dist", "webui");
+  const dest = join(pluginRoot, "homebridge-ui", "public", "lib", "webui");
+
+  // Validate the source first, so a run before the build fails naming the step that fixes it rather than the read that could not happen, and the destination is
+  // never cleared for a copy that cannot follow.
+  let sourceStat;
+
+  try {
+
+    sourceStat = await stat(source);
+  } catch {
+
+    throw new Error("The plugin has not been built: " + source + " is missing. Run the plugin's build first.");
+  }
+
+  if(!sourceStat.isDirectory()) {
+
+    throw new Error("The plugin's compiled webUI path is not a directory: " + source + ".");
+  }
+
+  // Every compiled module, by its path relative to the source, read before the destination is cleared. A directory holding no module adds nothing, so the copy
+  // creates exactly the folders its modules need.
+  const modules = (await readdir(source, { recursive: true, withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+    .map((entry) => relative(source, join(entry.parentPath, entry.name)));
+
+  await rm(dest, { force: true, recursive: true });
+  await mkdir(dest, { recursive: true });
+
+  // Each copy creates the folders above its module before it writes, so the modules copy in parallel, each as its compiled text less its trailing source-map comment.
+  await Promise.all(modules.map(async (path) => {
+
+    const target = join(dest, path);
+
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, (await readFile(join(source, path), "utf8")).replace(SOURCE_MAP_COMMENT_PATTERN, ""), "utf8");
+  }));
 }
 
 /**
@@ -903,7 +966,8 @@ function reportCheck(verb: string, changed: readonly string[], stderr: { write: 
  *
  * @param args
  * @param args.argv       - Positional and flag arguments (typically `process.argv.slice(2)`).
- * @param args.cwd        - The working directory that relative subcommand path arguments resolve against. Production passes `process.cwd()`; tests pass a tmpdir.
+ * @param args.cwd        - The working directory that relative subcommand path arguments resolve against, and the plugin root `copy-webui` reads and writes
+ *                          under. Production passes `process.cwd()`; tests pass a tmpdir.
  * @param args.sourceRoot - Path to HBPU's package root (resolved from the CLI's real path by the entry block; tests pass a tmpdir).
  * @param args.stderr     - Stream-like sink for usage and error output. Production passes `process.stderr`; tests pass a captured-output collector.
  *
@@ -925,7 +989,7 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
   const [ command, ...rest ] = positionals;
 
   // The docs verbs share one mode: `--check` renders and compares every target it would write and reports instead of writing, which is the whole docs gate in
-  // one invocation per verb. `prepare-ui` mirrors a directory rather than splicing a document, so it has no target set to answer and ignores the flag.
+  // one invocation per verb. `prepare-ui` and `copy-webui` copy directories rather than splice a document, so they have no target set to answer and ignore the flag.
   const mode = values.check ? "check" : "write";
 
   switch(command) {
@@ -971,6 +1035,23 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
       } catch(error) {
 
         stderr.write("homebridge-plugin-utils prepare-ui: " + (error instanceof Error ? error.message : String(error)) + "\n");
+
+        return 1;
+      }
+
+      return 0;
+    }
+
+    case "copy-webui": {
+
+      // The verb takes no argument: its source and destination are fixed paths under the plugin's root, which is the working directory a plugin's build script
+      // runs it from.
+      try {
+
+        await copyWebUi({ pluginRoot: cwd });
+      } catch(error) {
+
+        stderr.write("homebridge-plugin-utils copy-webui: " + (error instanceof Error ? error.message : String(error)) + "\n");
 
         return 1;
       }
@@ -1191,7 +1272,7 @@ function isEntryPoint(): boolean {
 }
 
 // Execute the CLI when this module is the program entry point. When imported by the test suite instead, `isEntryPoint()` is false and the module exposes
-// `prepareUi` / `prepareDocs` / `prepareMqttDocs` / `prepareChrome` / `runCli` / `USAGE` as a side-effect-free library surface.
+// `prepareUi` / `copyWebUi` / `prepareDocs` / `prepareMqttDocs` / `prepareChrome` / `runCli` / `USAGE` as a side-effect-free library surface.
 if(isEntryPoint()) {
 
   // Resolve HBPU's package root from this file's real location. The compiled CLI sits at `dist/cli/index.js`; walking two segments up from its real directory

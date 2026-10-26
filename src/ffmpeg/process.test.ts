@@ -13,7 +13,6 @@ import type { FfmpegProcessExitInfo } from "./process.ts";
 import { HbpuAbortError } from "../util.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
-import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { once } from "node:events";
 
@@ -371,20 +370,6 @@ describe("FfmpegProcess - startup timeout", () => {
     assert.equal(proc.isTimedOut, true, "and the process reports the timeout teardown");
 
     await proc.exited;
-  });
-
-  test("does not fire once ready has resolved", async () => {
-
-    // Longer timeout than the stderr delay - the process writes to stderr before the watchdog fires, so the watchdog must remain silent.
-    await using proc = new FfmpegProcess(makeOptions(), { args: stderrThenIdle(), startupTimeout: 500 });
-
-    await proc.ready;
-
-    // Wait past the watchdog window. If the watchdog misbehaves it would abort here.
-    await delay(600);
-
-    assert.equal(proc.aborted, false, "watchdog must not fire once we are already past the first-stderr milestone");
-    assert.equal(proc.isTimedOut, false);
   });
 
   test("the first stderr byte clears the window from the clock, so crossing it afterwards aborts nothing", async () => {

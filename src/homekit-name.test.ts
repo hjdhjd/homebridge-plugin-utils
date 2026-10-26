@@ -1,11 +1,11 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * homekit-name.test.ts: Unit tests for HomeKit's naming rule - validateName and sanitizeName - and for the package root resolving each to this module's own
- * function.
+ * homekit-name.test.ts: Unit tests for HomeKit's naming rule (validateName and sanitizeName) and the custom-name rule (resolveNameOverride and displayedName), and
+ * for the package root resolving each to this module's own function.
  */
 import * as root from "./index.ts";
 import { describe, test } from "node:test";
-import { sanitizeName, validateName } from "./homekit-name.ts";
+import { displayedName, resolveNameOverride, sanitizeName, validateName } from "./homekit-name.ts";
 import assert from "node:assert/strict";
 
 describe("validateName", () => {
@@ -194,13 +194,93 @@ describe("sanitizeName", () => {
   });
 });
 
+describe("resolveNameOverride", () => {
+
+  test("answers the trimmed text of an override HomeKit can carry, never its sanitized form", () => {
+
+    // Each caller sanitizes the name it settles on where it applies it, so the answer is the user's text trimmed and nothing more: a custom name holding an emoji
+    // HomeKit drops is answered with the emoji still in place.
+    const rows: readonly (readonly [ string, string ])[] = [
+
+      [ "  Reading Nook  ", "Reading Nook" ],
+      [ "\tReading Nook\n", "Reading Nook" ],
+      [ "Bedtime \u{1F319}", "Bedtime \u{1F319}" ],
+      [ "Kitchen", "Kitchen" ]
+    ];
+
+    for(const [ text, expected ] of rows) {
+
+      assert.equal(resolveNameOverride(text), expected, "resolving " + JSON.stringify(text));
+    }
+  });
+
+  test("answers null for an override HomeKit's naming rule leaves nothing of", () => {
+
+    // An emoji alone and punctuation alone are names the rule empties, and HomeKit carries no such name: an accessory minted under one is refused, and a refresh
+    // that applies one leaves the accessory's last name standing. Such an override counts as none, so the caller's fallback applies as if the user had named nothing.
+    for(const text of [ "\u{1F3E0}", "---" ]) {
+
+      assert.equal(resolveNameOverride(text), null, "resolving " + JSON.stringify(text));
+    }
+  });
+
+  test("answers null for no value, whether the text trims to nothing or the option engine answers null or undefined", () => {
+
+    for(const text of [ "", "   ", null, undefined ]) {
+
+      assert.equal(resolveNameOverride(text), null, "resolving " + JSON.stringify(text));
+    }
+  });
+});
+
+describe("displayedName", () => {
+
+  test("shows a custom name HomeKit can carry, sanitized as the runtime applies it", () => {
+
+    assert.equal(displayedName({ fallback: "Kitchen Shade", override: "  Reading Nook  " }), "Reading Nook", "a custom name is shown trimmed");
+    assert.equal(displayedName({ fallback: "Kitchen Shade", override: "Bedtime \u{1F319}" }), "Bedtime", "and sanitized, its emoji dropped");
+  });
+
+  test("shows the fallback where there is no custom name HomeKit can carry", () => {
+
+    assert.equal(displayedName({ fallback: "Kitchen Shade", override: "\u{1F3E0}" }), "Kitchen Shade", "an override HomeKit's naming rule empties is no override");
+    assert.equal(displayedName({ fallback: "Kitchen Shade", override: null }), "Kitchen Shade", "nor is a null one");
+    assert.equal(displayedName({ fallback: "Kitchen Shade" }), "Kitchen Shade", "nor an absent one");
+  });
+
+  test("shows the fallback sanitized, or as it stands when HomeKit's naming rule leaves nothing of it", () => {
+
+    // A blank row would name nothing at all, so a fallback the rule empties entirely is shown as it stands rather than sanitized away, its padding included. Each
+    // fallback is read under every kind of override that is no custom name, since none of them may change what the row shows.
+    const rows: readonly (readonly [ string, string ])[] = [
+
+      [ "Kitchen \u{1F319}", "Kitchen" ],
+      [ "\u{1F319}", "\u{1F319}" ],
+      [ " \u{1F319} ", " \u{1F319} " ],
+      [ "", "" ]
+    ];
+    const unusable: readonly (string | null | undefined)[] = [ undefined, null, "   ", "\u{1F3E0}", "---" ];
+
+    for(const [ fallback, expected ] of rows) {
+
+      for(const override of unusable) {
+
+        assert.equal(displayedName({ fallback, override }), expected, "showing the fallback " + JSON.stringify(fallback) + " under the override " +
+          JSON.stringify(override));
+      }
+    }
+  });
+});
+
 describe("homekit-name - the package root", () => {
 
-  test("resolves sanitizeName and validateName from the package root to this module's own functions", () => {
+  test("resolves each of the module's functions from the package root to this module's own", () => {
 
-    // The root reaches the rule only through util.ts's forwarding re-export, so this is the row a dropped re-export fails: a consumer importing sanitizeName or
-    // validateName from the package root must get the one definition a settings page loads.
+    // The root reaches the module only through util.ts's forwarding re-export, so this is the row a dropped re-export fails: a consumer importing any of the
+    // module's functions from the package root must get the one definition a settings page loads.
     assert.equal(root.sanitizeName, sanitizeName, "the package root's sanitizeName must be this module's own");
     assert.equal(root.validateName, validateName, "and so must its validateName");
+    assert.equal(root.resolveNameOverride, resolveNameOverride, "and its resolveNameOverride");
+    assert.equal(root.displayedName, displayedName, "and its displayedName");
   });
 });

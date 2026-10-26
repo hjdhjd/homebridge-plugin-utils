@@ -956,10 +956,11 @@ export { formatBps, formatBytes, formatMs, formatPercent, formatSeconds } from "
 // SSOT is `mark-handled.ts`; this file is just a forwarding re-export.
 export { markHandled } from "./mark-handled.ts";
 
-// Re-export HomeKit's naming rule from the browser-safe `homekit-name.ts` module. `service.ts` and a plugin's settings page import it directly from there (so a
-// page can load it without dragging in any of util.ts's Node-only imports); util.ts surfaces it here so server-side consumers and the package root reach the
-// validator and the sanitizer alongside the rest of the utilities. The single SSOT is `homekit-name.ts`; this file is just a forwarding re-export.
-export { sanitizeName, validateName } from "./homekit-name.ts";
+// Re-export HomeKit's naming functions from the browser-safe `homekit-name.ts` module. `service.ts` imports the sanitizer directly from there and a plugin's
+// settings page imports the module itself (so a page can load it without dragging in any of util.ts's Node-only imports); util.ts surfaces the module's functions
+// here so server-side consumers and the package root reach them alongside the rest of the utilities. The single SSOT is `homekit-name.ts`; this file is just a
+// forwarding re-export.
+export { displayedName, resolveNameOverride, sanitizeName, validateName } from "./homekit-name.ts";
 
 /* How far down a `cause` chain any reader descends. Real chains are short - a client wraps a transport error, a transport wraps a socket error - and the depth is
  * what makes the descent terminate at all: a chain that refers back to itself simply exhausts the cap, so no separate cycle bookkeeping has to exist. Counted in

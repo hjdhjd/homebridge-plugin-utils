@@ -1,7 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * homekit-name.ts: HomeKit's naming rule - the validator and the sanitizer built from one statement of it - shared between the server-side `util.ts` surface and
- * a plugin's settings page.
+ * homekit-name.ts: HomeKit's naming rule - the validator and the sanitizer built from one statement of it - and the custom-name rule built on the sanitizer, shared
+ * between the server-side `util.ts` surface and a plugin's settings page.
  */
 
 /**
@@ -10,8 +10,8 @@
  * resolve, so the rule lives here as the one definition the server side and the browser read. It has zero runtime imports of any kind, so it ships into
  * `dist/ui/` through the browser-module list and loads in any runtime that can execute ES2024+ JavaScript.
  *
- * **Consumers.** `util.ts` re-exports the validator and the sanitizer for the server-side surface and the package root, `service.ts` imports the sanitizer directly
- * from here, and a settings page imports `homebridge-plugin-utils/homekit-name.js`. Every consumer shares one implementation - the file is the join point.
+ * **Consumers.** `util.ts` re-exports the module's functions for the server-side surface and the package root, `service.ts` imports the sanitizer directly from
+ * here, and a settings page imports `homebridge-plugin-utils/homekit-name.js`. Every consumer shares one implementation - the file is the join point.
  *
  * @module
  */
@@ -105,4 +105,65 @@ export function sanitizeName(name: string): string {
 export function validateName(name: string): boolean {
 
   return VALID_HOMEKIT_NAME.test(name);
+}
+
+/**
+ * Resolve the raw value of a name option into the custom name HomeKit can carry for an accessory.
+ *
+ * @param text - The raw value of the name option, as the option engine answers it.
+ *
+ * @returns Returns the trimmed text when HomeKit's naming rule leaves something of it, and `null` otherwise.
+ *
+ * @remarks An override counts only when trimming leaves something behind and sanitizing what remains leaves something of it. HomeKit carries no name its naming
+ * rule empties, an emoji or punctuation alone among them: an accessory minted under one is refused, and a refresh that applies one leaves the accessory's last name
+ * standing. Such an override therefore counts as none, and the caller's fallback applies as if the user had named nothing. The trimmed text is answered rather
+ * than its sanitized form, because each caller sanitizes the name it settles on where it applies it, as `setServiceName` does. The parameter takes the value
+ * {@link featureOptions!FeatureOptions.value | FeatureOptions.value} answers for the name option, its answers for no value included.
+ *
+ * @example
+ * ```ts
+ * resolveNameOverride("  Reading Nook  ")
+ * ```
+ *
+ * Returns: `Reading Nook`, trimmed and otherwise as the user typed it. An override HomeKit's naming rule leaves nothing of, an emoji alone among them, returns `null`.
+ *
+ * @category Utilities
+ */
+export function resolveNameOverride(text: string | null | undefined): string | null {
+
+  const trimmed = text?.trim();
+
+  return (trimmed?.length && sanitizeName(trimmed).length) ? trimmed : null;
+}
+
+/**
+ * Answer the name a settings page shows for an accessory: the custom name where one resolves and the fallback otherwise, sanitized as the runtime sanitizes it.
+ *
+ * @param options          - The accessory's names.
+ * @param options.fallback - The name to show when the user has set no custom name HomeKit can carry, such as the name the plugin composes for the accessory.
+ * @param options.override - Optional. The raw value of the accessory's name option, resolved through {@link resolveNameOverride}.
+ *
+ * @returns Returns the custom name where one resolves and the fallback otherwise, sanitized by HomeKit's naming rule, or as it stands when the rule leaves nothing
+ * of it.
+ *
+ * @remarks The chosen name is sanitized as the runtime sanitizes a name before it applies one. The length HAP keeps is not applied here: the runtime cuts a name
+ * to it where each name characteristic is written, as `setServiceName` does against that characteristic's maximum length, so a name past that length shows whole
+ * here. A name the rule empties entirely is shown as it stands instead, because a blank row would name nothing at all. Only the fallback can be such a name, since
+ * {@link resolveNameOverride} already refuses an override the rule empties.
+ *
+ * @example
+ * ```ts
+ * displayedName({ fallback: "Kitchen Shade", override: "Bedtime \u{1F319}" })
+ * ```
+ *
+ * Returns: `Bedtime`, the custom name sanitized, its emoji dropped.
+ *
+ * @category Utilities
+ */
+export function displayedName({ fallback, override }: { fallback: string; override?: string | null }): string {
+
+  const chosen = resolveNameOverride(override) ?? fallback;
+  const sanitized = sanitizeName(chosen);
+
+  return sanitized.length ? sanitized : chosen;
 }

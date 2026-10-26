@@ -5,7 +5,7 @@
 "use strict";
 
 // The compiled-TS modules the browser bundle carries alongside the webUI. `featureOptions` and `formatters` back the catalog and its magnitude renderers;
-// `homekit-name` is HomeKit's naming rule, the sanitizer and validator a plugin's settings page applies to a name before it is saved; `mark-handled` is the
+// `homekit-name` is HomeKit's naming module, whose functions a plugin's settings page applies to the names it saves and shows; `mark-handled` is the
 // identity-preserving handled mark the library and the page alike reach for; `webui/address` is the listed-address rule a plugin's settings cards apply before a
 // Save; `webui/saveflow` is the shared save flow a plugin's settings cards run every press of their Save through; `webui/status` is the live device-status wire
 // contract the status panel consumes. An entry is a module's path under `src/` without its extension, and the build keeps that path

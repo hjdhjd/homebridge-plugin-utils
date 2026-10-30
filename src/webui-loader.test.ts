@@ -19,20 +19,41 @@ function htmlWith(configJson: string): string {
 
 describe("parseWebUiLoaderConfig", () => {
 
-  test("parses a valid config into its entry and bust list", () => {
+  test("parses a valid config into its entry", () => {
 
-    const config = parseWebUiLoaderConfig(htmlWith("{\"bust\":[\"./protect-config.mjs\"],\"entry\":\"./ui.mjs\"}"), "index.html");
-
-    assert.equal(config.entry, "./ui.mjs");
-    assert.deepEqual(config.bust, ["./protect-config.mjs"]);
+    assert.deepEqual(parseWebUiLoaderConfig(htmlWith("{\"entry\":\"./ui.mjs\"}"), "index.html"), { entry: "./ui.mjs" });
   });
 
-  test("defaults an absent bust list to an empty array", () => {
+  test("refuses a bust field as retired, naming the file and telling the plugin to delete it, whatever the field holds", () => {
 
-    const config = parseWebUiLoaderConfig(htmlWith("{\"entry\":\"./ui.mjs\"}"), "index.html");
+    // A list of modules, an empty list and a value of the wrong shape all draw the one sentence, because the field itself is what the plugin deletes.
+    for(const bust of [ "[\"./protect-config.mjs\"]", "[]", "\"./x.mjs\"" ]) {
 
-    assert.equal(config.entry, "./ui.mjs");
-    assert.deepEqual(config.bust, [], "an omitted bust field is treated as no extra cache-busts");
+      assert.throws(() => parseWebUiLoaderConfig(htmlWith("{\"bust\":" + bust + ",\"entry\":\"./ui.mjs\"}"), "plugin/index.html"), {
+
+        message: "webui-loader: the `WEBUI LOADER CONFIG` `bust` field in plugin/index.html is retired, because page modules are cache-busted automatically; delete it."
+      }, bust);
+    }
+  });
+
+  test("refuses any key but entry, naming the key and the file", () => {
+
+    assert.throws(() => parseWebUiLoaderConfig(htmlWith("{\"entry\":\"./ui.mjs\",\"modules\":[\"./a.mjs\"]}"), "plugin/index.html"), {
+
+      message: "webui-loader: the `WEBUI LOADER CONFIG` in plugin/index.html carries an unknown `modules` field; the config takes an `entry` string alone."
+    });
+  });
+
+  test("throws a framed error when the config is not a JSON object", () => {
+
+    // An array is an object to typeof, so it is named among the shapes refused alongside a string and null.
+    for(const json of [ "[\"./ui.mjs\"]", "\"./ui.mjs\"", "null" ]) {
+
+      assert.throws(() => parseWebUiLoaderConfig(htmlWith(json), "index.html"), {
+
+        message: "webui-loader: the `WEBUI LOADER CONFIG` in index.html must be a JSON object with an `entry` string."
+      }, json);
+    }
   });
 
   test("throws a framed error naming the file when no config comment is present", () => {
@@ -72,7 +93,7 @@ describe("parseWebUiLoaderConfig", () => {
     const cases: readonly (readonly [ string, string, string ])[] = [
 
       [ "an unquoted value", "{\"entry\": " + marker + "}", "" ],
-      [ "a missing comma after a value", "{\n\"entry\": \"" + marker + "\"\n\"bust\": []\n}", " at line 3, column 1" ]
+      [ "a missing comma after a value", "{\n\"entry\": \"" + marker + "\"\n\"other\": []\n}", " at line 3, column 1" ]
     ];
 
     for(const [ label, json, location ] of cases) {
@@ -94,17 +115,8 @@ describe("parseWebUiLoaderConfig", () => {
 
   test("throws a framed error when the entry field is missing or not a string", () => {
 
-    assert.throws(() => parseWebUiLoaderConfig(htmlWith("{\"bust\":[\"./x.mjs\"]}"), "index.html"), /must carry an `entry` string/);
+    assert.throws(() => parseWebUiLoaderConfig(htmlWith("{}"), "index.html"), /must carry an `entry` string/);
     assert.throws(() => parseWebUiLoaderConfig(htmlWith("{\"entry\":42}"), "index.html"), /must carry an `entry` string/);
-  });
-
-  test("throws a framed error when the bust field is not an array of strings", () => {
-
-    const notArray = "{\"bust\":\"./x.mjs\",\"entry\":\"./ui.mjs\"}";
-    const notStrings = "{\"bust\":[1,2],\"entry\":\"./ui.mjs\"}";
-
-    assert.throws(() => parseWebUiLoaderConfig(htmlWith(notArray), "index.html"), /`bust` field in index\.html must be an array of strings/);
-    assert.throws(() => parseWebUiLoaderConfig(htmlWith(notStrings), "index.html"), /`bust` field in index\.html must be an array of strings/);
   });
 
   test("throws a framed error when the config comment sits inside the marked region", () => {
@@ -116,9 +128,98 @@ describe("parseWebUiLoaderConfig", () => {
   });
 });
 
-// The rendered region for a representative config, shared by the render-form assertions and the monitor-behavior harness below. Its inputs match a real plugin's
-// config so the extracted panel markup and monitor script are exactly what a stamped index.html carries.
-const region = renderWebUiBootRegion({ bust: ["./protect-config.mjs"], entry: "./ui.mjs", libPath: "./lib/", packageName: "homebridge-plugin-utils" });
+// The rendered region for a representative page without compiled modules, shared by the render-form assertions and the monitor-behavior harness below. Its inputs
+// match a real plugin's page so the extracted panel markup and monitor script are exactly what a stamped index.html carries. The module list leaves the entry out,
+// so the entry rows below prove the render busts the entry whatever the list carries.
+const REGION_INPUTS = { compiledModules: false, entry: "./ui.mjs", libPath: "./lib/", modules: ["./protect-config.mjs"], packageName: "homebridge-plugin-utils" };
+const region = renderWebUiBootRegion(REGION_INPUTS);
+
+// The same page with compiled modules, which differs from the region above in the loader alone.
+const compiledRegion = renderWebUiBootRegion({ ...REGION_INPUTS, compiledModules: true });
+
+// The loader a page without compiled modules carries, line for line, for the inputs above. Every plugin page without compiled modules is re-stamped to exactly this
+// block, so a change here changes what each of those pages requests and loads, and this golden holds it in place.
+const LOADER_WITHOUT_COMPILED_MODULES = [
+
+  "<script type=\"module\">",
+  "  /* Plugin webUI loader, generated by homebridge-plugin-utils from the loader-config comment above - do not edit this region by hand. It reads the",
+  "   * homebridge-plugin-utils manifest at load time and injects an importmap mapping the bare \"homebridge-plugin-utils/\" specifier to the " +
+    "hashed-versioned subdir the",
+  "   * prepare-ui CLI mirrors into place; the trailing-slash prefix carries transitive imports through relative-URL resolution, and each of the plugin's own modules",
+  "   * carries a Date.now() cache-bust so a single page load stays coherent across them. The body is stage-instrumented: a fetch, importmap, or entry-import failure",
+  "   * is reported to the boot monitor above with the stage that failed, which reveals the on-page status panel. The import-stage probe proves the injected importmap",
+  "   * applied - a browser that ignored it lands in the browser bucket - but it cannot tell a delivery failure from a top-level throw inside a delivered module, so",
+  "   * that case knowingly folds into the delivery bucket and the panel's raw error line is what disambiguates it for support.",
+  "   */",
+  "",
+  "  const cb = Date.now();",
+  "  const bust = (path) => new URL(path, import.meta.url).href + \"?cb=\" + cb;",
+  "",
+  "  let stage = \"manifest\";",
+  "",
+  "  try {",
+  "",
+  "    const response = await fetch(\"./lib/manifest.json\", { cache: \"no-store\" });",
+  "",
+  "    if(!response.ok) {",
+  "",
+  "      throw new Error(\"The manifest request failed with HTTP status \" + response.status + \".\");",
+  "    }",
+  "",
+  "    const manifest = await response.json();",
+  "",
+  "    const importMap = {",
+  "",
+  "      imports: {",
+  "",
+  "        \"./protect-config.mjs\": bust(\"./protect-config.mjs\"),",
+  "        \"./ui.mjs\": bust(\"./ui.mjs\"),",
+  "        \"homebridge-plugin-utils/\": new URL(\"./lib/\" + manifest.subdir + \"/\", import.meta.url).href",
+  "      }",
+  "    };",
+  "",
+  "    const mapScript = document.createElement(\"script\");",
+  "",
+  "    mapScript.type = \"importmap\";",
+  "    mapScript.textContent = JSON.stringify(importMap);",
+  "    document.head.appendChild(mapScript);",
+  "",
+  "    stage = \"import\";",
+  "",
+  "    await import(\"./ui.mjs\");",
+  "  } catch(error) {",
+  "",
+  "    // The monitor owns the on-page display, so after classifying we report and swallow: rethrowing would only add a duplicate uncaught error to the console the",
+  "    // original failure already produced.",
+  "    if(stage === \"import\") {",
+  "",
+  "      if(typeof import.meta.resolve !== \"function\") {",
+  "",
+  "        window.webUiBoot.fail(\"browser\", error);",
+  "      } else {",
+  "",
+  "        try {",
+  "",
+  "          import.meta.resolve(\"homebridge-plugin-utils/webUi.mjs\");",
+  "          window.webUiBoot.fail(\"import\", error);",
+  "        } catch {",
+  "",
+  "          window.webUiBoot.fail(\"browser\", error);",
+  "        }",
+  "      }",
+  "    } else {",
+  "",
+  "      window.webUiBoot.fail(\"manifest\", error);",
+  "    }",
+  "  }",
+  "</script>"
+].join("\n");
+
+// The loader block of a rendered region: everything from the module script's opening tag on, which is all a page's compiled modules change.
+function loaderOf(rendered: string): string {
+
+  return rendered.slice(rendered.indexOf("<script type=\"module\">"));
+}
 
 // The status-panel markup is everything before the first script tag; the classic monitor is the `<script>` that carries no attributes (the module loader is
 // `<script type="module">`, so a bare `<script>` search never catches it). Both are lifted from the rendered region so the tests exercise the real emitted text
@@ -206,9 +307,53 @@ describe("renderWebUiBootRegion", () => {
     assert.doesNotMatch(region, /"\.\/ui\.mjs": "\.\/ui\.mjs"/, "the entry must not be an unbusted identity mapping");
   });
 
-  test("busts each declared bust entry: bare key, bust() value", () => {
+  test("busts each page module: bare key, bust() value", () => {
 
-    assert.match(region, /"\.\/protect-config\.mjs": bust\("\.\/protect-config\.mjs"\)/, "the bust entry maps its bare key to a bust() call");
+    assert.match(region, /"\.\/protect-config\.mjs": bust\("\.\/protect-config\.mjs"\)/, "the page module maps its bare key to a bust() call");
+  });
+
+  test("without compiled modules renders the loader every such page carries, line for line, requesting the package manifest alone", () => {
+
+    assert.equal(loaderOf(region), LOADER_WITHOUT_COMPILED_MODULES);
+    assert.equal(region.match(/fetch\(/g)?.length, 1, "the page makes the one manifest request");
+    assert.ok(!region.includes("webui.json") && !region.includes("\"./lib/webui/\""), "no compiled-module manifest is fetched and no compiled prefix is mapped");
+  });
+
+  test("with compiled modules fetches the compiled-module manifest beside the package's and maps the compiled prefix to the folder it names", () => {
+
+    const loader = loaderOf(compiledRegion);
+    const concurrentFetch = [
+
+      "    const [ response, compiledResponse ] = await Promise.all([",
+      "",
+      "      fetch(\"./lib/manifest.json\", { cache: \"no-store\" }),",
+      "      fetch(\"./lib/webui.json\", { cache: \"no-store\" })",
+      "    ]);"
+    ].join("\n");
+
+    // The manifests are requested together, each with the HTTP cache bypassed, so the compiled-module manifest adds no round trip to the boot.
+    assert.ok(loader.includes(concurrentFetch), "the manifests are fetched concurrently, each past the HTTP cache");
+    assert.equal(loader.match(/fetch\(/g)?.length, 2, "and no other request is made");
+    assert.match(loader, /const \[ manifest, compiledManifest \] = await Promise\.all\(\[ response\.json\(\), compiledResponse\.json\(\) \]\);/,
+      "each manifest is parsed");
+
+    // The compiled prefix keeps the trailing slash on its key and its value, which is what makes it a prefix entry, and resolves the hashed folder against the page.
+    assert.match(loader, /"\.\/lib\/webui\/": new URL\("\.\/lib\/" \+ compiledManifest\.subdir \+ "\/", import\.meta\.url\)\.href,/,
+      "the compiled prefix maps to the folder the compiled-module manifest names");
+    assert.match(loader, /"homebridge-plugin-utils\/": new URL\("\.\/lib\/" \+ manifest\.subdir \+ "\/", import\.meta\.url\)\.href/, "the package prefix is kept");
+    assert.match(loader, /"\.\/protect-config\.mjs": bust\("\.\/protect-config\.mjs"\),\n\s+"\.\/ui\.mjs": bust\("\.\/ui\.mjs"\),/, "the page modules stay busted");
+    assert.match(loader, /the copy-webui CLI places the plugin's compiled modules in/, "the loader's comment names the compiled folder it maps");
+
+    // The panel and the monitor are the same for every page, so a render with compiled modules differs from one without in the loader alone.
+    assert.equal(compiledRegion.slice(0, compiledRegion.length - loader.length), region.slice(0, region.length - loaderOf(region).length));
+  });
+
+  test("with compiled modules derives the compiled-module manifest path and prefix from libPath", () => {
+
+    const withCustomLib = renderWebUiBootRegion({ ...REGION_INPUTS, compiledModules: true, libPath: "./assets/" });
+
+    assert.match(withCustomLib, /fetch\("\.\/assets\/webui\.json", \{ cache: "no-store" \}\)/, "the compiled-module manifest fetch resolves against libPath");
+    assert.match(withCustomLib, /"\.\/assets\/webui\/": new URL\("\.\/assets\/" \+ compiledManifest\.subdir/, "the compiled prefix resolves against libPath");
   });
 
   test("the bust() helper appends the shared ?cb= cache-bust parameter", () => {
@@ -220,7 +365,7 @@ describe("renderWebUiBootRegion", () => {
   test("the trailing-slash prefix entry maps a SYNTHETIC packageName - not a hardcoded literal - to the hashed subdir", () => {
 
     // A synthetic package name distinct from the real one: a hardcoded-literal implementation that emitted "homebridge-plugin-utils/" would fail this.
-    const withSyntheticName = renderWebUiBootRegion({ bust: [], entry: "./ui.mjs", libPath: "./lib/", packageName: "acme-plugin-name" });
+    const withSyntheticName = renderWebUiBootRegion({ compiledModules: false, entry: "./ui.mjs", libPath: "./lib/", modules: [], packageName: "acme-plugin-name" });
 
     assert.match(withSyntheticName, /"acme-plugin-name\/": new URL\("\.\/lib\/" \+ manifest\.subdir \+ "\/", import\.meta\.url\)\.href/,
       "the prefix key is the supplied package name, mapped to the hashed subdir");
@@ -230,7 +375,7 @@ describe("renderWebUiBootRegion", () => {
   test("libPath drives both the manifest fetch and the prefix URL - not a hardcoded ./lib/", () => {
 
     // A distinct libPath: a hardcoded "./lib/" that ignored the argument would fail both assertions.
-    const withCustomLib = renderWebUiBootRegion({ bust: [], entry: "./ui.mjs", libPath: "./assets/", packageName: "acme-plugin-name" });
+    const withCustomLib = renderWebUiBootRegion({ compiledModules: false, entry: "./ui.mjs", libPath: "./assets/", modules: [], packageName: "acme-plugin-name" });
 
     assert.match(withCustomLib, /fetch\("\.\/assets\/manifest\.json", \{ cache: "no-store" \}\)/, "the manifest fetch resolves against the supplied libPath");
     assert.match(withCustomLib, /new URL\("\.\/assets\/" \+ manifest\.subdir/, "the prefix URL resolves against the supplied libPath");
@@ -272,9 +417,10 @@ describe("renderWebUiBootRegion", () => {
 
   test("renders deterministically - two calls with the same inputs are byte-identical", () => {
 
-    const again = renderWebUiBootRegion({ bust: ["./protect-config.mjs"], entry: "./ui.mjs", libPath: "./lib/", packageName: "homebridge-plugin-utils" });
+    const again = renderWebUiBootRegion({ ...REGION_INPUTS });
 
     assert.equal(again, region, "the render is a pure function of its inputs, so the stamp is byte-stable across runs");
+    assert.equal(renderWebUiBootRegion({ ...REGION_INPUTS, compiledModules: true }), compiledRegion, "and so is the render with compiled modules");
   });
 });
 
@@ -294,6 +440,23 @@ describe("renderWebUiBootRegion - loader stage instrumentation (text-level)", ()
     assert.match(region, /if\(!response\.ok\)/, "the manifest response is checked before .json()");
     assert.match(region, /throw new Error\("The manifest request failed with HTTP status " \+ response\.status \+ "\."\);/,
       "a non-ok manifest response throws a plain-language HTTP-status message");
+  });
+
+  test("guards the compiled-module manifest response with a sentence of its own, reported under the manifest stage", () => {
+
+    const loader = loaderOf(compiledRegion);
+    const compiledCheck = [
+
+      "    if(!compiledResponse.ok) {",
+      "",
+      "      throw new Error(\"The compiled-module manifest request failed with HTTP status \" + compiledResponse.status + \".\");",
+      "    }"
+    ].join("\n");
+
+    // Each manifest fails into the same delivery bucket, so the sentence on the panel's raw error line is what tells support which file the server refused.
+    assert.ok(loader.includes(compiledCheck), "a non-ok compiled-module manifest response throws its own plain-language HTTP-status message");
+    assert.match(loader, /throw new Error\("The manifest request failed with HTTP status " \+ response\.status \+ "\."\);/, "the package manifest keeps its sentence");
+    assert.ok(loader.indexOf("compiledResponse.ok") < loader.indexOf("stage = \"import\";"), "the check runs before the stage flips, so it reports as manifest");
   });
 
   test("the manifest branch reports to the monitor without a capability probe", () => {

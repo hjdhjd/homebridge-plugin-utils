@@ -5,7 +5,7 @@
  */
 
 /**
- * The homebridge-plugin-utils CLI, exposed to consumers via the `bin` field in `package.json`. A single cohesive module: the content-hash helper, the `prepareUi`,
+ * The homebridge-plugin-utils CLI, exposed to consumers via the `bin` field in `package.json`. A single cohesive module: the content-hash helpers, the `prepareUi`,
  * `copyWebUi`, `prepareDocs`, `prepareMqttDocs`, and `prepareChrome` transforms, the `runCli` dispatcher, and the entry-point execution all live here with no
  * inter-file relative VALUE imports.
  *
@@ -56,23 +56,33 @@ const HASH_LENGTH = 16;
 // its final line, in a string or comment of its own, keeps that text.
 const SOURCE_MAP_COMMENT_PATTERN = /(?<=^|\n)\/\/# sourceMappingURL=[^\n]*(?:\n\s*)?$/;
 
+// The names of the content-hashed folders {@link copyWebUi} places a plugin's compiled settings-page modules in, `webui-<hash>`. Its sweep removes each top-level
+// entry of the page's `lib/` this matches other than the current folder, so a folder an earlier run wrote goes once the manifest names its successor. Exactly the
+// {@link HASH_LENGTH} hex digits the copy names a folder with may follow the hyphen, so a plugin's own folder whose name opens the same way, `webui-assets` or
+// `webui-cafe`, is never at risk.
+const COMPILED_FOLDER_PATTERN = new RegExp("^webui-[0-9a-f]{" + String(HASH_LENGTH) + "}$");
+
 /**
  * Usage banner shown on no command or an unknown command. Kept as an exported constant so tests assert against its text without
  * coupling to formatting details and so README documentation can reference it via import rather than duplicate.
  */
 export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
   "Commands:\n  prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.\n" +
-  "  copy-webui    Copy the plugin's compiled settings-page modules from dist/webui into homebridge-ui/public/lib/webui.\n" +
+  "  copy-webui    Copy the plugin's compiled settings-page modules from dist/webui into a content-hashed folder under homebridge-ui/public/lib.\n" +
   "  prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.\n" +
   "  prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.\n" +
   "  prepare-chrome <manifest> [--root <dir>] [--check] [--offline]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across " +
   "the plugin's docs, README, and webUI.\n";
 
 /**
- * Compute a deterministic content hash over `root`'s file tree. Walks every file in lexicographic order of relative POSIX path so two runs against the same content
- * produce the same hash regardless of underlying filesystem ordering, the host's path separator, or the absolute path the tree sits at. Mixes both the relative
- * path and the file bytes into the hash so renames produce a different output even when content bytes are unchanged - that is the correct cache-bust semantic,
- * since a rename is a visible difference to any consumer importing the file by name.
+ * Digest a set of files into the content hash that names every hashed folder this CLI writes. Each file is hashed as its relative POSIX path and its content, in
+ * the code-unit order of that path, so every run over the same files produces the same hash regardless of the order they were gathered in, the host's path separator,
+ * or the absolute path the files sit at. Mixing the relative path into the hash beside the content means a rename produces a different output even when the bytes
+ * are unchanged - that is the correct cache-bust semantic, since a rename is a visible difference to any consumer importing the file by name.
+ *
+ * The order is the POSIX path's on every platform because the native separator would change it: a set holding `ui/a.js` and `uiZ/b.js` is the case that shows why -
+ * "/" (0x2F) sorts below "Z" (0x5A) while "\" (0x5C) sorts above it, so native-separator ordering would feed the hasher those files in the opposite order on
+ * Windows. We order by code units rather than through `localeCompare` so the sequence is the same on every build machine regardless of the host's locale.
  *
  * The null-byte (`\0`) delimiters between path and content prevent the synthetic boundary-blurring case where a long path concatenated with a short content could
  * share its hash input with a shorter path concatenated with a longer content. SHA-256's preimage resistance covers anything more contrived, but the explicit
@@ -80,6 +90,46 @@ export const USAGE = "Usage: homebridge-plugin-utils <command> [options]\n\n" +
  *
  * Returns the first {@link HASH_LENGTH} hex characters of the hash. Truncation is deliberate: full SHA-256 (64 hex chars) would bloat the URL path and the
  * filesystem display without earning meaningful collision resistance for this use case.
+ *
+ * @param files - Each file's relative POSIX path and its content, as bytes or as text the hasher encodes as UTF-8, in any order.
+ *
+ * @returns The truncated hex hash, suitable for use as a path segment.
+ */
+function digestFiles(files: readonly { content: string | Uint8Array; rel: string }[]): string {
+
+  const ordered = files.toSorted((left, right) => {
+
+    if(left.rel < right.rel) {
+
+      return -1;
+    }
+
+    if(left.rel > right.rel) {
+
+      return 1;
+    }
+
+    return 0;
+  });
+
+  const hasher = createHash("sha256");
+
+  // The hasher is stateful and must consume the files in the canonical order to produce the same digest every run, so the update runs sequentially.
+  for(const { content, rel } of ordered) {
+
+    hasher.update(rel);
+    hasher.update("\0");
+    hasher.update(content);
+    hasher.update("\0");
+  }
+
+  return hasher.digest("hex").slice(0, HASH_LENGTH);
+}
+
+/**
+ * Compute a deterministic content hash over `root`'s file tree: every file under it, by its path relative to `root`, digested through {@link digestFiles}. The
+ * relative path anchors the hash to the tree structure rather than the absolute location, so the same source tree built into `/tmp/a/dist/ui` and
+ * `/var/build/b/dist/ui` produces an identical hash.
  *
  * @param root - The directory whose tree contents are hashed.
  *
@@ -92,60 +142,26 @@ async function computeContentHash(root: string): Promise<string> {
   // 21.4); using it here keeps the implementation aligned with current Node idioms.
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
 
-  /* Each file is carried as the absolute path the read needs beside the POSIX-normalized relative path that serves as both the sort key and the hashed key. Deriving
-   * that relative path once is what makes the digest identical on every platform: the ordering and the bytes handed to the hasher come from one derivation rather
-   * than two that agree only where the native separator is already "/". A tree holding `ui/a.js` and `uiZ/b.js` is the case that shows why it matters - "/" (0x2F)
-   * sorts below "Z" (0x5A) while "\" (0x5C) sorts above it, so native-separator ordering would feed the hasher those two files in the opposite order on Windows.
-   * The relative path also anchors the hash to the tree structure rather than the absolute location, so the same source tree built into `/tmp/a/dist/ui` and
-   * `/var/build/b/dist/ui` produces an identical hash. We order by the relative path's code units rather than through `localeCompare` so the sequence is the same
-   * on every build machine regardless of the host's locale.
-   */
-  const files = entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
+  // Each file is carried as the absolute path the read needs beside the POSIX-normalized relative path the digest sorts and hashes by. Deriving that relative path
+  // once is what makes the digest identical on every platform: the ordering and the bytes handed to the hasher come from one derivation rather than two that agree
+  // only where the native separator is already "/".
+  const files = entries.filter((entry) => entry.isFile()).map((entry) => {
 
-      const path = join(entry.parentPath, entry.name);
+    const path = join(entry.parentPath, entry.name);
 
-      return { path, rel: relative(root, path).split(sep).join("/") };
-    })
-    .toSorted((left, right) => {
+    return { path, rel: relative(root, path).split(sep).join("/") };
+  });
 
-      if(left.rel < right.rel) {
-
-        return -1;
-      }
-
-      if(left.rel > right.rel) {
-
-        return 1;
-      }
-
-      return 0;
-    });
-
-  // Read every file's bytes in parallel, then feed them into the hasher sequentially. Parallel reads keep the I/O latency bound to the slowest single file rather
-  // than the sum of all files; the sequential hash update is required because the hasher is stateful and must consume bytes in the canonical sorted order to
-  // produce the same digest every run.
-  const fileBytes = await Promise.all(files.map(async ({ path, rel }) => ({ bytes: await readFile(path), rel })));
-
-  const hasher = createHash("sha256");
-
-  for(const { bytes, rel } of fileBytes) {
-
-    hasher.update(rel);
-    hasher.update("\0");
-    hasher.update(bytes);
-    hasher.update("\0");
-  }
-
-  return hasher.digest("hex").slice(0, HASH_LENGTH);
+  // Read every file's bytes in parallel, which keeps the I/O latency bound to the slowest single file rather than the sum of all files; the digest orders them
+  // itself, so the reads finish in whatever order they do.
+  return digestFiles(await Promise.all(files.map(async ({ path, rel }) => ({ content: await readFile(path), rel }))));
 }
 
 /**
  * Mirror HBPU's compiled browser-side webUI into a plugin's homebridge-ui/public/lib directory under a content-hashed, version-named subdirectory. The subdir name
  * combines the package's semver version with a short content hash of `dist/ui/` (e.g., `2.0.0-abc1234567890def`), so the browser's HTTP cache invalidates
  * structurally on any content change rather than via per-file query-string hacks: the plugin's `index.html` reads the small manifest written alongside, then
- * injects a trailing-slash importmap entry that prefixes every `./lib/` import with the hashed-versioned path. Transitive imports inherit the prefix through
+ * injects a trailing-slash importmap entry that maps the bare package specifier to the hashed-versioned path. Transitive imports inherit the prefix through
  * relative-URL resolution, so cache-busting reaches files the importmap never names.
  *
  * The content hash is what makes the maintainer-iteration use case work. A semver-only subdir name would stay constant across the maintainer's
@@ -158,26 +174,32 @@ async function computeContentHash(root: string): Promise<string> {
  * survive across runs.
  *
  * When the `loader` and `splice` namespaces are injected, a final step stamps the plugin's webUI script loader: the `index.html` beside the destination is read, its
- * `WEBUI LOADER CONFIG` comment parsed, the loader block rendered from that config plus this run's `libPath` and package name, and spliced into its marked region with
- * an atomic `.tmp` + rename. The step is marker-gated - no `index.html`, or no BEGIN marker, is a silent no-op - so a plugin that has not opted in, and every
- * no-injection caller, mirror exactly as before. The stamp derives from the same package name and destination the mirror used, so the two never drift.
+ * `WEBUI LOADER CONFIG` comment parsed, the loader block rendered from that config plus the page's own modules, whether the plugin compiles settings-page modules,
+ * and this run's `libPath` and package name, and spliced into its marked region with an atomic `.tmp` + rename. The step is marker-gated - no `index.html`, or no
+ * BEGIN marker, is a silent no-op - so a plugin that has not opted in, and every no-injection caller, mirror exactly as before. The stamp derives from the same
+ * package name and destination the mirror used, so the two never drift, and every fact it reads is a source fact - nothing under the destination - so a run before
+ * the plugin's build and a run after it stamp the same bytes.
  *
  * @param args
  * @param args.dest       - The plugin's destination directory (typically `homebridge-ui/public/lib`). Created if missing.
  * @param args.loader     - The injected webUI-loader namespace (marker constants, `parseWebUiLoaderConfig`, `renderWebUiBootRegion`). Absent = no stamp step, so the
  *                          mirror-only path and its existing tests are untouched. Supplied with `splice`, it stamps the plugin's `index.html` loader region.
+ * @param args.pluginRoot - The plugin's root directory. The stamp reads whether its `src/webui/` folder exists, which is what tells it the plugin compiles
+ *                          settings-page modules that `copy-webui` places under `homebridge-ui/public/lib`.
  * @param args.sourceRoot - Path to HBPU's package root (the directory containing `package.json` and `dist/`). The entry block resolves this from the CLI's own
  *                          real path; tests pass a tmpdir populated with a synthetic HBPU layout.
  * @param args.splice     - The injected {@link spliceMarkedRegion} from `doc-markdown.ts` that replaces the loader's marked region. Paired with `loader`; absent =
  *                          no stamp step.
  *
  * @throws When the source has not been built (`dist/ui/` missing), the source `package.json` lacks a `version` field (or, when stamping, a `name` field), or the source
- *         `dist/ui` path exists but is not a directory; and, when stamping, propagates the parse/splice framed errors under a "mirror succeeded, stamp failed" frame.
+ *         `dist/ui` path exists but is not a directory; and, when stamping, propagates the parse/splice framed errors under a "mirror succeeded, stamp failed" frame,
+ *         beside the refusal of a destination other than `homebridge-ui/public/lib` under the plugin root for a plugin that compiles settings-page modules.
  */
-export async function prepareUi({ dest, loader, sourceRoot, splice }: {
+export async function prepareUi({ dest, loader, pluginRoot, sourceRoot, splice }: {
 
   dest: string;
   loader?: WebUiLoaderModule;
+  pluginRoot: string;
   sourceRoot: string;
   splice?: typeof spliceMarkedRegion;
 }): Promise<void> {
@@ -238,12 +260,15 @@ export async function prepareUi({ dest, loader, sourceRoot, splice }: {
   // which subdir to load from. Every manifest field serves a distinct purpose: `version` for human-readable identification, `hash` for change-detection, `subdir`
   // for the canonical "where to load from" answer that consumers reference directly without reconstructing the join. The join convention stays here in the
   // producer; if we ever change it (different delimiter, different segment order), no consumer breaks. Pretty-printed JSON because the file is human-read often
-  // enough to matter (debugging sessions, README screenshots, support requests).
-  await writeFile(join(absDest, "manifest.json"), JSON.stringify({ hash, subdir, version }, null, 2) + "\n");
+  // enough to matter (debugging sessions, README screenshots, support requests). The write goes through a `.tmp` + rename, the discipline `copyWebUi` follows for
+  // its own manifest, so a page loading mid-run reads the previous manifest or the complete new one, never a partial file.
+  await writeFile(join(absDest, "manifest.json.tmp"), JSON.stringify({ hash, subdir, version }, null, 2) + "\n");
+  await rename(join(absDest, "manifest.json.tmp"), join(absDest, "manifest.json"));
 
   // Sweep stale versioned subdirs from prior runs. The semver-shape filter is the discipline that keeps the sweep narrow: anything in the destination that doesn't
-  // look like a version we own (plugin's own files, sibling tools, hand-curated content) survives untouched. The current subdir is skipped here since we just
-  // (re)created it above; the loop targets only OLDER builds left over from prior runs (different version, different hash, or both).
+  // look like a version we own (plugin's own files, sibling tools, hand-curated content) survives untouched, `copyWebUi`'s `webui-<hash>` folder and its
+  // `webui.json` manifest among them. The current subdir is skipped here since we just (re)created it above; the loop targets only OLDER builds left over from prior
+  // runs, whichever of the version and the hash changed.
   const entries = await readdir(absDest, { withFileTypes: true });
 
   await Promise.all(entries
@@ -262,7 +287,7 @@ export async function prepareUi({ dest, loader, sourceRoot, splice }: {
       throw new Error("HBPU package.json at " + sourcePackageJson + " has no name field; the webUI loader importmap prefix derives from it.");
     }
 
-    await stampWebUiLoader({ absDest, loader, packageName, splice });
+    await stampWebUiLoader({ absDest, loader, packageName, pluginRoot, splice });
   }
 }
 
@@ -287,20 +312,33 @@ interface FeatureOptionsDocsModule {
   readonly renderFeatureOptionsReference: typeof renderFeatureOptionsReference;
 }
 
-// Stamp the rendered loader block into the plugin's index.html. Marker-gated and a no-op on repeat: no index.html beside the destination, or no BEGIN marker, is a
-// silent skip (a plugin without a config UI, or one that has not opted into the stamped loader, is left untouched); otherwise the config comment is parsed, the block
-// rendered from it plus this run's destination-relative libPath and the mirrored package's name, and spliced into the marked region with an atomic `.tmp` + rename.
-// The parse and splice throw their own framed errors; a stamp-phase failure re-frames them so the message states the mirror already succeeded and only the stamp
-// failed, since by this point the destination has been mirrored and only the plugin's index.html overlay remains.
-async function stampWebUiLoader({ absDest, loader, packageName, splice }: {
+/* Stamp the rendered loader block into the plugin's index.html. Marker-gated and a no-op on repeat: no index.html beside the destination, or no BEGIN marker, is a
+ * silent skip (a plugin without a config UI, or one that has not opted into the stamped loader, is left untouched); otherwise the config comment is parsed, the
+ * block rendered from it plus the page's own modules, whether the plugin compiles settings-page modules, this run's destination-relative libPath and the mirrored
+ * package's name, and spliced into the marked region with an atomic `.tmp` + rename.
+ *
+ * The page's own modules are every `.mjs` and `.js` file under the page folder outside the destination, which holds only hashed folders and their manifests. Each
+ * gets an importmap key whether the page imports it or not, which costs nothing, since a map entry affects only module specifiers, and every file of another
+ * extension, a declaration twin and the page itself among them, stays out. The plugin compiles settings-page modules when `src/webui/` is a directory under its
+ * root, the folder the shared lint preset and `copy-webui` each name, and since `copy-webui` writes only under `homebridge-ui/public/lib`, a destination anywhere
+ * else is refused rather than stamped with a map no copy can satisfy. These facts are read from the plugin's sources rather than from anything a build writes, so
+ * a stamp before the build and a stamp after it are byte-identical.
+ *
+ * The parse and splice throw their own framed errors; a stamp-phase failure re-frames them so the message states the mirror already succeeded and only the stamp
+ * failed, since by this point the destination has been mirrored and only the plugin's index.html overlay remains. The frame ends its sentence with a period only
+ * when the message it carries does not already end in one.
+ */
+async function stampWebUiLoader({ absDest, loader, packageName, pluginRoot, splice }: {
 
   absDest: string;
   loader: WebUiLoaderModule;
   packageName: string;
+  pluginRoot: string;
   splice: typeof spliceMarkedRegion;
 }): Promise<void> {
 
-  const indexPath = join(dirname(absDest), "index.html");
+  const page = dirname(absDest);
+  const indexPath = join(page, "index.html");
   let html: string;
 
   try {
@@ -321,43 +359,70 @@ async function stampWebUiLoader({ absDest, loader, packageName, splice }: {
   try {
 
     const config = loader.parseWebUiLoaderConfig(html, indexPath);
+    const compiledModules = (await stat(join(pluginRoot, "src", "webui")).catch(() => null))?.isDirectory() ?? false;
+    const copyDest = resolve(pluginRoot, "homebridge-ui", "public", "lib");
 
-    // The destination-relative segment the manifest fetch and the importmap prefix resolve against - `"./lib/"` for the family convention - derived from the mirror's
-    // own destination basename so it is correct for any destination the plugin chose.
-    const libPath = "./" + basename(absDest) + "/";
-    const script = loader.renderWebUiBootRegion({ bust: config.bust, entry: config.entry, libPath, packageName });
+    if(compiledModules && (absDest !== copyDest)) {
+
+      throw new Error("The plugin compiles settings-page modules, and copy-webui places them only under " + copyDest + ", so the destination " + absDest +
+        " cannot be stamped to load them.");
+    }
+
+    // The page's own modules, by their `./`-relative POSIX paths and sorted so the stamp is stable across runs. The walk descends into every folder of the page but
+    // the destination, which is the folder the mirror and the compiled copy fill, so the hashed modules there are never read at all.
+    const destName = basename(absDest);
+    const topLevel = await readdir(page, { withFileTypes: true });
+    const nested = await Promise.all(topLevel.filter((entry) => entry.isDirectory() && (entry.name !== destName))
+      .map(async (entry) => readdir(join(page, entry.name), { recursive: true, withFileTypes: true })));
+    const modules = [ ...topLevel, ...nested.flat() ].filter((entry) => entry.isFile() && [ ".js", ".mjs" ].some((extension) => entry.name.endsWith(extension)))
+      .map((entry) => "./" + relative(page, join(entry.parentPath, entry.name)).split(sep).join("/")).toSorted();
+
+    // The destination-relative segment the manifest fetches and the importmap prefixes resolve against - `"./lib/"` for the family convention - derived from the
+    // mirror's own destination basename so it is correct for any destination the plugin chose.
+    const libPath = "./" + destName + "/";
+    const script = loader.renderWebUiBootRegion({ compiledModules, entry: config.entry, libPath, modules, packageName });
     const stamped = splice(html, script, { beginMarker: loader.WEBUI_LOADER_BEGIN, endMarker: loader.WEBUI_LOADER_END });
 
     await writeFile(indexPath + ".tmp", stamped, "utf8");
     await rename(indexPath + ".tmp", indexPath);
   } catch(error) {
 
-    throw new Error("The webUI mirror succeeded but stamping the loader in " + indexPath + " failed: " + (error instanceof Error ? error.message : String(error)) + ".");
+    const message = (error instanceof Error) ? error.message : String(error);
+
+    throw new Error("The webUI mirror succeeded but stamping the loader in " + indexPath + " failed: " + message + (message.endsWith(".") ? "" : "."));
   }
 }
 
 /**
  * Copy a plugin's compiled settings-page modules to its webUI. A plugin writes that logic in TypeScript under `src/webui/`, its ordinary build compiles the folder to
- * `dist/webui/`, and this places every `.js` file from there at the same relative path under `homebridge-ui/public/lib/webui/`, where the page loads it. The shared
- * lint preset holds `src/webui/` browser-safe, so what is copied needs no parsing here: a module there imports values only from its own folder, whose compiled
- * modules all arrive together, and reaches no Node global.
+ * `dist/webui/`, and this places every `.js` file from there at the same relative path in a content-hashed folder under `homebridge-ui/public/lib/`, named
+ * `webui-<hash>` for the digest of what it copies, with a `webui.json` manifest beside it naming the folder. The page imports a compiled module as
+ * `./lib/webui/<module>.js`, and the loader {@link prepareUi} stamps reads that manifest with `cache: "no-store"` and maps `./lib/webui/` to the folder, so the
+ * browser caches each module until its content changes and fetches it fresh once it does. The folder is a sibling of `lib/webui/` rather than a child of it, because
+ * a compiled module's relative import resolves beside the module, and a URL under the mapped prefix would be mapped a second time. The shared lint preset holds
+ * `src/webui/` browser-safe, so what is copied needs no parsing here: a module there imports values only from its own folder, whose compiled modules all arrive
+ * together, and reaches no Node global.
  *
- * Every run clears the destination folder before it copies, so a module removed from the source leaves no stale copy behind, and nothing else under `lib/` is
- * touched, which keeps the content-hashed folder and manifest {@link prepareUi} writes there intact. Only the JavaScript is copied: the declarations and source
- * maps beside it stay in `dist/`, since the page never loads them. Each module's trailing source-map comment is left out too, because the map it names stays there.
+ * Each run writes the current folder in place unless it already holds exactly these modules, then the manifest through a `.tmp` + rename, and only then sweeps: a
+ * page loading while the copy runs reads a manifest whose folder is complete, a re-run over unchanged modules rewrites none of them, and a module removed from the
+ * source leaves no stale copy behind once the folder holding it goes. The sweep removes the top-level entries of `lib/` this verb owns alone - an earlier run's
+ * folder and a folder at the mapped `webui/` path itself - which keeps the content-hashed folder and manifest `prepareUi` writes there intact, the `webui/` folder
+ * inside that mirror included. Only the JavaScript is copied: the declarations and source maps beside it stay in `dist/`, since the page never loads them. Each
+ * module's trailing source-map comment is left out too, because the map it names stays there, and the hash is taken over the text the copy writes, so it names
+ * exactly what the page loads.
  *
  * @param args
  * @param args.pluginRoot - The plugin's root directory, holding its `dist/` and its `homebridge-ui/`.
  *
- * @throws When the plugin has not been built (`dist/webui/` missing) or `dist/webui` exists but is not a directory.
+ * @throws When the plugin has not been built (`dist/webui/` missing) or `dist/webui` exists but is not a directory, before anything is written or removed.
  */
 export async function copyWebUi({ pluginRoot }: { pluginRoot: string }): Promise<void> {
 
   const source = join(pluginRoot, "dist", "webui");
-  const dest = join(pluginRoot, "homebridge-ui", "public", "lib", "webui");
+  const lib = join(pluginRoot, "homebridge-ui", "public", "lib");
 
-  // Validate the source first, so a run before the build fails naming the step that fixes it rather than the read that could not happen, and the destination is
-  // never cleared for a copy that cannot follow.
+  // Validate the source first, so a run before the build fails naming the step that fixes it rather than the read that could not happen, and nothing under `lib/`
+  // is written or removed for a copy that cannot follow.
   let sourceStat;
 
   try {
@@ -373,23 +438,52 @@ export async function copyWebUi({ pluginRoot }: { pluginRoot: string }): Promise
     throw new Error("The plugin's compiled webUI path is not a directory: " + source + ".");
   }
 
-  // Every compiled module, by its path relative to the source, read before the destination is cleared. A directory holding no module adds nothing, so the copy
-  // creates exactly the folders its modules need.
-  const modules = (await readdir(source, { recursive: true, withFileTypes: true }))
+  // Every compiled module, by its POSIX path relative to the source, as its compiled text less its trailing source-map comment. All of them are read before anything
+  // is written, because the folder they land in is named for the digest of exactly those texts.
+  const modules = await Promise.all((await readdir(source, { recursive: true, withFileTypes: true }))
     .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
-    .map((entry) => relative(source, join(entry.parentPath, entry.name)));
+    .map(async (entry) => {
 
-  await rm(dest, { force: true, recursive: true });
-  await mkdir(dest, { recursive: true });
+      const path = join(entry.parentPath, entry.name);
 
-  // Each copy creates the folders above its module before it writes, so the modules copy in parallel, each as its compiled text less its trailing source-map comment.
-  await Promise.all(modules.map(async (path) => {
+      return { content: (await readFile(path, "utf8")).replace(SOURCE_MAP_COMMENT_PATTERN, ""), rel: relative(source, path).split(sep).join("/") };
+    }));
+  const hash = digestFiles(modules);
+  const subdir = "webui-" + hash;
+  const dest = join(lib, subdir);
 
-    const target = join(dest, path);
+  /* The folder's name is its content's digest, so a folder under that name whose own digest equals it already holds exactly these modules and is left alone: a write
+   * truncates each module before it fills it, and a page fetching one in that instant could cache a short body under a URL meant to stay stable for its content. Any
+   * other folder under the name, one an interrupted run left partway written among them, is written in place rather than cleared first, so a page loading meanwhile
+   * never finds a module missing. Each write creates the folders above its module first, so the modules write in parallel, and a directory holding no module adds
+   * nothing, so the copy creates exactly the folders its modules need.
+   */
+  const complete = ((await stat(dest).catch(() => null))?.isDirectory() ?? false) && ((await computeContentHash(dest)) === hash);
 
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, (await readFile(join(source, path), "utf8")).replace(SOURCE_MAP_COMMENT_PATTERN, ""), "utf8");
-  }));
+  if(!complete) {
+
+    await mkdir(dest, { recursive: true });
+    await Promise.all(modules.map(async ({ content, rel }) => {
+
+      const target = join(dest, rel);
+
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, content, "utf8");
+    }));
+  }
+
+  // The manifest names the folder only once every module in it is written, through a `.tmp` + rename so a page reads the previous manifest or the complete new one,
+  // never a partial file. Its `hash` and `subdir` fields mean what the same fields of `prepareUi`'s manifest mean.
+  await writeFile(join(lib, "webui.json.tmp"), JSON.stringify({ hash, subdir }, null, 2) + "\n");
+  await rename(join(lib, "webui.json.tmp"), join(lib, "webui.json"));
+
+  // Sweep last, once the manifest names the current folder. The sweep reads the top level of `lib/` alone, so it never reaches the `webui/` folder inside HBPU's own
+  // versioned mirror, and every name it removes is one this verb owns. A manifest temp an interrupted run left needs no sweep, because this run's own manifest write
+  // has already taken that name over, and a temp the sweep finds belongs to a run copying alongside, whose rename removing it would break.
+  const entries = await readdir(lib, { withFileTypes: true });
+
+  await Promise.all(entries.filter(({ name }) => (name === "webui") || ((name !== subdir) && COMPILED_FOLDER_PATTERN.test(name)))
+    .map(({ name }) => rm(join(lib, name), { force: true, recursive: true })));
 }
 
 /**
@@ -966,8 +1060,8 @@ function reportCheck(verb: string, changed: readonly string[], stderr: { write: 
  *
  * @param args
  * @param args.argv       - Positional and flag arguments (typically `process.argv.slice(2)`).
- * @param args.cwd        - The working directory that relative subcommand path arguments resolve against, and the plugin root `copy-webui` reads and writes
- *                          under. Production passes `process.cwd()`; tests pass a tmpdir.
+ * @param args.cwd        - The working directory that relative subcommand path arguments resolve against, and the plugin root `prepare-ui` reads and `copy-webui`
+ *                          reads and writes under. Production passes `process.cwd()`; tests pass a tmpdir.
  * @param args.sourceRoot - Path to HBPU's package root (resolved from the CLI's real path by the entry block; tests pass a tmpdir).
  * @param args.stderr     - Stream-like sink for usage and error output. Production passes `process.stderr`; tests pass a captured-output collector.
  *
@@ -1029,9 +1123,10 @@ export async function runCli({ argv, cwd, sourceRoot, stderr }: {
         return 1;
       }
 
+      // The destination resolves against the injected working directory, which is the plugin root the stamp reads, so the verb reads and writes under one root.
       try {
 
-        await prepareUi({ dest: destination, loader, sourceRoot, splice: uiSplicer.spliceMarkedRegion });
+        await prepareUi({ dest: resolve(cwd, destination), loader, pluginRoot: cwd, sourceRoot, splice: uiSplicer.spliceMarkedRegion });
       } catch(error) {
 
         stderr.write("homebridge-plugin-utils prepare-ui: " + (error instanceof Error ? error.message : String(error)) + "\n");

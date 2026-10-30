@@ -130,18 +130,23 @@ Usage: homebridge-plugin-utils <command> [options]
 
 Commands:
   prepare-ui <destination>    Mirror HBPU's webUI into the plugin's lib directory.
-  copy-webui    Copy the plugin's compiled settings-page modules from dist/webui into homebridge-ui/public/lib/webui.
+  copy-webui    Copy the plugin's compiled settings-page modules from dist/webui into a content-hashed folder under homebridge-ui/public/lib.
   prepare-docs <catalog-module> [--doc <path>] [--check]    Generate the Feature Options reference into the plugin's docs.
   prepare-mqtt <catalog-module> [--doc <path>] [--check]    Generate the MQTT topic tables into the plugin's MQTT documentation.
   prepare-chrome <manifest> [--root <dir>] [--check] [--offline]    Stamp the doc-chrome regions (masthead, nav, badges, logo, projects, schema footer) across the plugin's docs, README, and webUI.
 ```
 
 - **`prepare-ui <destination>`** mirrors this library's compiled browser-side webUI into your plugin's UI directory (typically `homebridge-ui/public/lib`) under a content-hashed, version-named subfolder. Because the folder name changes whenever its contents change, the browser's HTTP cache invalidates structurally - you never have to chase a stale cached copy after a rebuild. The run is safe to repeat and sweeps away the previous build's subfolder in the same pass, while leaving any non-versioned files in the destination untouched.
+  A plugin that compiles settings-page modules under `src/webui/` must pass `homebridge-ui/public/lib`, the folder `copy-webui` fills, and run the verb from its
+  root, which is where `prepare-ui` looks for `src/webui/`.
 
 - **`copy-webui`** copies your plugin's own settings-page modules to its UI. Write that logic in TypeScript under `src/webui/`, where your ordinary build
   compiles it to `dist/webui/` beside the rest of your source, and run this from your plugin's root after the build: every `.js` file under `dist/webui/` lands
-  at the same path under `homebridge-ui/public/lib/webui/`, where your page loads it. Every run clears the folder before it copies, so a module you remove from
-  the source leaves no stale copy behind, and nothing else under `lib/` is touched, so `prepare-ui`'s subfolder and manifest stay as they were. Only the
+  at the same path in a content-hashed folder under `homebridge-ui/public/lib/`, with a small `webui.json` manifest beside it naming that folder. Your page
+  keeps importing `./lib/webui/<module>.js`, and the loader `prepare-ui` stamps into your `index.html` maps that path to the hashed folder at load time, so the
+  browser caches each module until its content changes. Because that mapping happens in the browser, no file sits at `./lib/webui/` on disk, and an editor
+  cannot resolve those imports there. Each run writes the new folder and its manifest before it removes the previous folder, so a module you remove from the
+  source leaves no stale copy behind, and nothing else under `lib/` is touched, so `prepare-ui`'s subfolder and manifest stay as they were. Only the
   JavaScript is copied: the declarations and source maps stay in `dist/`, and each module's trailing source-map comment is left out too, because the map it
   names stays there. The shared lint preset holds `src/webui/` browser-safe, so a module there imports values only from its own folder and never reaches a
   Node global.

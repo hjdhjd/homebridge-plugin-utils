@@ -11,8 +11,8 @@ import * as webuiLoader from "../webui-loader.ts";
 import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END, renderFeatureOptionsReference } from "../featureOptions-docs.ts";
 import { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_BEGIN, MQTT_SUBSCRIBED_DOC_END,
   renderMqttTopicsReference } from "../mqtt-topics-docs.ts";
-import { USAGE, prepareChrome, prepareDocs, prepareMqttDocs, prepareUi, runCli } from "./index.ts";
-import { cp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { USAGE, copyWebUi, prepareChrome, prepareDocs, prepareMqttDocs, prepareUi, runCli } from "./index.ts";
+import { cp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { describe, test } from "node:test";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -133,7 +133,7 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: [ "webUi.mjs", "webUi-featureOptions.mjs", "webUi-featureOptions/state.mjs" ], root: sourceRoot, version: "2.0.0" });
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     // Read the manifest first to discover the canonical subdir name. This matches how a real plugin's index.html navigates - it never reconstructs the join from
     // version + hash, just trusts what prepare-ui writes. The subdir name's format is verified in a separate test below.
@@ -159,7 +159,7 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string; subdir: string; version: string };
 
@@ -179,7 +179,7 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "1.0.0" });
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { subdir: string };
 
@@ -196,11 +196,11 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: [ "webUi.mjs", "webUi-featureOptions/state.mjs" ], root: sourceRoot, version: "2.0.0" });
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const firstManifest = await readFile(join(dest, "manifest.json"), "utf8");
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const secondManifest = await readFile(join(dest, "manifest.json"), "utf8");
 
@@ -219,7 +219,7 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const firstManifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string; subdir: string };
 
@@ -228,7 +228,7 @@ describe("prepareUi", () => {
     await writeFile(join(sourceRoot, "dist", "ui", "webUi.mjs"), "MODIFIED");
     await writeFile(join(sourceRoot, "dist", "ui", "added.mjs"), "added.mjs");
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const secondManifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string; subdir: string };
 
@@ -243,6 +243,33 @@ describe("prepareUi", () => {
     assert.deepEqual(entries.toSorted(), [ secondManifest.subdir, "manifest.json" ].toSorted(), "the prior subdir is swept; only the current build + manifest remain");
   });
 
+  test("writes the manifest through a temp file and a rename, so a failed manifest write leaves the previous manifest and its subdir in place", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const sourceRoot = join(scratch.path, "source");
+    const dest = join(scratch.path, "dest");
+
+    await mkdir(sourceRoot, { recursive: true });
+    await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
+
+    const previous = await readFile(join(dest, "manifest.json"), "utf8");
+    const { subdir: previousSubdir } = JSON.parse(previous) as { subdir: string };
+
+    // A directory where the manifest's temp file goes makes the manifest write fail after the new subdir is mirrored and before the sweep runs, the check the copy's
+    // order row makes of its own manifest. A manifest written straight to its own name would succeed here instead.
+    await writeFile(join(sourceRoot, "dist", "ui", "webUi.mjs"), "MODIFIED");
+    await mkdir(join(dest, "manifest.json.tmp"));
+    await assert.rejects(prepareUi({ dest, pluginRoot: scratch.path, sourceRoot }));
+
+    const mirrored = (await readdir(dest)).filter((name) => /^2\.0\.0-[0-9a-f]{16}$/.test(name) && (name !== previousSubdir));
+
+    assert.equal(mirrored.length, 1, "the changed source's subdir is mirrored before the manifest is written");
+    assert.equal(await readFile(join(dest, "manifest.json"), "utf8"), previous, "the manifest still names the previous subdir when its write fails");
+    assert.equal(await readFile(join(dest, previousSubdir, "webUi.mjs"), "utf8"), "webUi.mjs", "the sweep runs only after the manifest names the new subdir");
+  });
+
   test("renaming a source file without content change produces a different hash", async () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
@@ -253,7 +280,7 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: [ "webUi.mjs", "old-name.mjs" ], root: sourceRoot, version: "2.0.0" });
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const firstManifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string };
 
@@ -262,7 +289,7 @@ describe("prepareUi", () => {
     await rm(join(sourceRoot, "dist", "ui", "old-name.mjs"));
     await writeFile(join(sourceRoot, "dist", "ui", "new-name.mjs"), "old-name.mjs");
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const secondManifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string };
 
@@ -285,7 +312,7 @@ describe("prepareUi", () => {
     const files = [ "ui/a.js", "uiZ/b.js" ];
 
     await setupSource({ files, root: sourceRoot, version: "2.0.0" });
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { hash: string };
 
@@ -318,7 +345,7 @@ describe("prepareUi", () => {
     await mkdir(join(dest, "2.0.0-rc.1"), { recursive: true });
     await writeFile(join(dest, "2.0.0-rc.1", "old.mjs"), "rc");
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { subdir: string };
     const entries = await readdir(dest);
@@ -345,7 +372,7 @@ describe("prepareUi", () => {
     await mkdir(join(dest, "i18n"), { recursive: true });
     await writeFile(join(dest, "i18n", "en.json"), "{}");
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     assert.equal(await readFile(join(dest, "plugin-assets", "logo.svg"), "utf8"), "<svg/>", "non-version sibling directory must survive");
     assert.equal(await readFile(join(dest, "README.md"), "utf8"), "consumer notes", "non-version root file must survive");
@@ -364,7 +391,7 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await writeFile(join(sourceRoot, "package.json"), JSON.stringify({ version: "2.0.0" }));
 
-    await assert.rejects(prepareUi({ dest, sourceRoot }), /HBPU has not been built/);
+    await assert.rejects(prepareUi({ dest, pluginRoot: scratch.path, sourceRoot }), /HBPU has not been built/);
   });
 
   test("throws when the source dist/ui path exists but is not a directory", async () => {
@@ -380,7 +407,7 @@ describe("prepareUi", () => {
     await writeFile(join(sourceRoot, "dist", "ui"), "I am not a directory");
     await writeFile(join(sourceRoot, "package.json"), JSON.stringify({ version: "2.0.0" }));
 
-    await assert.rejects(prepareUi({ dest, sourceRoot }), /is not a directory/);
+    await assert.rejects(prepareUi({ dest, pluginRoot: scratch.path, sourceRoot }), /is not a directory/);
   });
 
   test("throws when the source package.json has no version", async () => {
@@ -393,7 +420,7 @@ describe("prepareUi", () => {
     await mkdir(join(sourceRoot, "dist", "ui"), { recursive: true });
     await writeFile(join(sourceRoot, "package.json"), JSON.stringify({ name: "homebridge-plugin-utils" }));
 
-    await assert.rejects(prepareUi({ dest, sourceRoot }), /no version field/);
+    await assert.rejects(prepareUi({ dest, pluginRoot: scratch.path, sourceRoot }), /no version field/);
   });
 
   test("manifest is well-formed JSON terminated with a newline", async () => {
@@ -406,7 +433,7 @@ describe("prepareUi", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
 
-    await prepareUi({ dest, sourceRoot });
+    await prepareUi({ dest, pluginRoot: scratch.path, sourceRoot });
 
     const raw = await readFile(join(dest, "manifest.json"), "utf8");
     const manifest = JSON.parse(raw) as { hash: string; subdir: string; version: string };
@@ -420,23 +447,36 @@ describe("prepareUi", () => {
 
 describe("prepareUi - webUI loader stamp", () => {
 
-  // Build a scratch layout for the stamp tests: a synthetic HBPU source root, a `lib` destination, and the plugin's `index.html` beside it (so the stamp resolves it
-  // from the destination's parent). The dest basename is `lib` so the derived libPath is the family-convention `./lib/`. The real webui-loader module and the real
-  // splice primitive are injected, exercising the genuine parse/render/splice path rather than a mock.
-  async function setupStamp(scratchPath: string, indexHtml: string): Promise<{ dest: string; indexPath: string; sourceRoot: string }> {
+  /* Build a scratch layout for the stamp tests the way a plugin lays its page out: a synthetic HBPU source root beside a plugin root whose `homebridge-ui/public/`
+   * holds the `index.html`, the entry module and a sibling page module, with the `lib` destination beside them, so the stamp resolves the page from the
+   * destination's parent and the derived libPath is the family-convention `./lib/`. The plugin root carries no `src/webui/` unless a row makes one. The real
+   * webui-loader module and the real splice primitive are injected, exercising the genuine parse/render/splice path rather than a mock.
+   */
+  async function setupStamp(scratchPath: string, indexHtml: string): Promise<{ dest: string; indexPath: string; page: string; pluginRoot: string; sourceRoot: string }> {
 
     const sourceRoot = join(scratchPath, "source");
-    const dest = join(scratchPath, "lib");
-    const indexPath = join(scratchPath, "index.html");
+    const pluginRoot = join(scratchPath, "plugin");
+    const page = join(pluginRoot, "homebridge-ui", "public");
+    const dest = join(page, "lib");
+    const indexPath = join(page, "index.html");
 
     await mkdir(sourceRoot, { recursive: true });
+    await mkdir(page, { recursive: true });
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
     await writeFile(indexPath, indexHtml);
+    await writeFile(join(page, "ui.mjs"), "ui.mjs");
+    await writeFile(join(page, "protect-config.mjs"), "protect-config.mjs");
 
-    return { dest, indexPath, sourceRoot };
+    return { dest, indexPath, page, pluginRoot, sourceRoot };
   }
 
-  const CONFIG_COMMENT = "<!-- WEBUI LOADER CONFIG {\"bust\":[\"./protect-config.mjs\"],\"entry\":\"./ui.mjs\"} -->";
+  // The importmap keys a stamped page busts, in the order the loader lists them.
+  function bustedKeys(html: string): string[] {
+
+    return [...html.matchAll(/"(\.\/[^"]+)": bust\("\1"\)/g)].map((match) => match[1] ?? "");
+  }
+
+  const CONFIG_COMMENT = "<!-- WEBUI LOADER CONFIG {\"entry\":\"./ui.mjs\"} -->";
   const MARKED_INDEX = "<html>\n<body></body>\n" + CONFIG_COMMENT + "\n" + webuiLoader.WEBUI_LOADER_BEGIN + "\n" + webuiLoader.WEBUI_LOADER_END + "\n</html>\n";
 
   test("no index.html beside the destination is a no-op - the mirror still runs and no index.html is created", async () => {
@@ -449,7 +489,7 @@ describe("prepareUi - webUI loader stamp", () => {
     await mkdir(sourceRoot, { recursive: true });
     await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
 
-    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot: scratch.path, sourceRoot, splice: spliceMarkedRegion });
 
     assert.ok(await readFile(join(dest, "manifest.json"), "utf8"), "the mirror still produced its manifest");
     await assert.rejects(async () => readFile(join(scratch.path, "index.html"), "utf8"), { code: "ENOENT" });
@@ -460,9 +500,9 @@ describe("prepareUi - webUI loader stamp", () => {
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const plain = "<html>\n<body>no loader region here</body>\n</html>\n";
-    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, plain);
+    const { dest, indexPath, pluginRoot, sourceRoot } = await setupStamp(scratch.path, plain);
 
-    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
 
     assert.equal(await readFile(indexPath, "utf8"), plain, "an index.html with no BEGIN marker is not opted in and stays byte-identical");
   });
@@ -471,9 +511,9 @@ describe("prepareUi - webUI loader stamp", () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
-    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+    const { dest, indexPath, pluginRoot, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
 
-    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
 
     const stamped = await readFile(indexPath, "utf8");
 
@@ -482,10 +522,112 @@ describe("prepareUi - webUI loader stamp", () => {
       "the importmap prefix uses the mirrored package name and the derived ./lib/ libPath");
     assert.match(stamped, /await import\("\.\/ui\.mjs"\)/, "the entry import is present");
     assert.match(stamped, new RegExp(CONFIG_COMMENT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "the config comment survives outside the marked region");
+    assert.deepEqual(bustedKeys(stamped), [ "./protect-config.mjs", "./ui.mjs" ], "the page's own modules are found and busted with no list to declare them");
+    assert.ok(!stamped.includes("webui.json"), "a plugin without src/webui/ requests no compiled-module manifest");
 
-    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
 
     assert.equal(await readFile(indexPath, "utf8"), stamped, "a second stamp run is byte-identical");
+  });
+
+  test("busts every .mjs and .js file under the page folder at any depth, and nothing in the destination, a declaration twin or any other file", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const { dest, indexPath, page, pluginRoot, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+
+    // Beside the entry and its sibling: a declaration twin, a module in a nested subfolder, and files no page imports as a module. The destination holds a module at its
+    // top level and one in a hashed folder, the shapes the mirror and the compiled copy leave there, and neither may be busted.
+    await writeFile(join(page, "protect-config.d.mts"), "export {};");
+    await mkdir(join(page, "sub", "deep"), { recursive: true });
+    await writeFile(join(page, "sub", "deep", "helper.js"), "helper.js");
+    await writeFile(join(page, "sub", "notes.txt"), "notes");
+    await writeFile(join(page, "styles.css"), "body {}");
+    await mkdir(join(dest, "webui-0123456789abcdef"), { recursive: true });
+    await writeFile(join(dest, "webui-0123456789abcdef", "a.js"), "a.js");
+    await writeFile(join(dest, "stray.mjs"), "stray.mjs");
+
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
+
+    assert.deepEqual(bustedKeys(await readFile(indexPath, "utf8")), [ "./protect-config.mjs", "./sub/deep/helper.js", "./ui.mjs" ]);
+  });
+
+  test("a plugin with src/webui/ is stamped to load its compiled modules from the folder the compiled-module manifest names", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const { dest, indexPath, pluginRoot, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+
+    await mkdir(join(pluginRoot, "src", "webui"), { recursive: true });
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
+
+    const stamped = await readFile(indexPath, "utf8");
+
+    assert.match(stamped, /fetch\("\.\/lib\/webui\.json", \{ cache: "no-store" \}\)/, "the compiled-module manifest is fetched past the HTTP cache");
+    assert.match(stamped, /"\.\/lib\/webui\/": new URL\("\.\/lib\/" \+ compiledManifest\.subdir \+ "\/", import\.meta\.url\)\.href,/, "the compiled prefix is mapped");
+    assert.deepEqual(bustedKeys(stamped), [ "./protect-config.mjs", "./ui.mjs" ], "the hand-written page modules stay busted");
+  });
+
+  test("a plugin with src/webui/ refuses a destination other than homebridge-ui/public/lib, naming it and the copy's folder, and leaves the page as it was", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const { indexPath, page, pluginRoot, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+    const elsewhere = join(page, "assets");
+
+    // Without src/webui/ the same destination stamps, so the refusal belongs to the compiled modules the copy can place under lib/ alone.
+    await prepareUi({ dest: elsewhere, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
+    await writeFile(indexPath, MARKED_INDEX);
+    await mkdir(join(pluginRoot, "src", "webui"), { recursive: true });
+
+    await assert.rejects(async () => prepareUi({ dest: elsewhere, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion }), (error: Error) => {
+
+      assert.ok(error.message.includes("The plugin compiles settings-page modules, and copy-webui places them only under " + join(page, "lib") +
+        ", so the destination " + elsewhere + " cannot be stamped to load them"), error.message);
+
+      return true;
+    });
+    assert.equal(await readFile(indexPath, "utf8"), MARKED_INDEX, "the refused stamp writes nothing");
+  });
+
+  test("a file at src/webui is no folder of compiled modules, so the page is stamped without the compiled-module manifest", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const { dest, indexPath, pluginRoot, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+
+    await mkdir(join(pluginRoot, "src"), { recursive: true });
+    await writeFile(join(pluginRoot, "src", "webui"), "not a folder");
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
+
+    const stamped = await readFile(indexPath, "utf8");
+
+    assert.match(stamped, /<script type="module">/, "the page is stamped");
+    assert.ok(!stamped.includes("webui.json"), "only a directory at src/webui/ makes the page request the compiled-module manifest");
+  });
+
+  test("prepare-ui after copy-webui keeps the compiled folder and its manifest and re-stamps the page byte for byte", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const { dest, indexPath, pluginRoot, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+
+    // The order a plugin's scripts run in: the stamp before the build, the build's copy, and the stamp again when the plugin lints.
+    await mkdir(join(pluginRoot, "src", "webui"), { recursive: true });
+    await writeWebUiBuild({ files: ["a.js"], root: pluginRoot });
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
+
+    const stamped = await readFile(indexPath, "utf8");
+
+    await copyWebUi({ pluginRoot });
+
+    const copied = await filesUnder(dest);
+
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
+
+    assert.equal(await readFile(indexPath, "utf8"), stamped, "the stamp reads source facts alone, so it is the same before the copy and after it");
+    assert.deepEqual(await filesUnder(dest), copied, "the mirror's sweep leaves the compiled folder and its manifest where the copy put them");
+    assert.ok(copied.includes("webui-" + expectedHash(["a.js"]) + "/a.js") && copied.includes("webui.json"), "and the copy put the folder and its manifest there");
   });
 
   test("neighboring marked regions in the same html are left byte-identical through the stamp", async () => {
@@ -495,9 +637,9 @@ describe("prepareUi - webUI loader stamp", () => {
     const other = "<html>\n" + docChrome.DOCUMENTATION_BEGIN + "\ndocs region content\n" + docChrome.DOCUMENTATION_END + "\n" + CONFIG_COMMENT + "\n" +
       webuiLoader.WEBUI_LOADER_BEGIN + "\n" + webuiLoader.WEBUI_LOADER_END + "\n" + docChrome.PROJECTS_BEGIN + "\nprojects region content\n" + docChrome.PROJECTS_END +
       "\n</html>\n";
-    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, other);
+    const { dest, indexPath, pluginRoot, sourceRoot } = await setupStamp(scratch.path, other);
 
-    await prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion });
+    await prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion });
 
     const result = await readFile(indexPath, "utf8");
 
@@ -512,26 +654,54 @@ describe("prepareUi - webUI loader stamp", () => {
 
     const dupMarkers = "<html>\n" + CONFIG_COMMENT + "\n" + webuiLoader.WEBUI_LOADER_BEGIN + "\n" + webuiLoader.WEBUI_LOADER_END + "\n" + webuiLoader.WEBUI_LOADER_BEGIN +
       "\n" + webuiLoader.WEBUI_LOADER_END + "\n</html>\n";
-    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, dupMarkers);
+    const { dest, indexPath, pluginRoot, sourceRoot } = await setupStamp(scratch.path, dupMarkers);
 
-    await assert.rejects(async () => prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion }),
+    await assert.rejects(async () => prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion }),
       /mirror succeeded but stamping the loader[\s\S]*ambiguous/);
 
     // The failed stamp writes nothing over the original: the marked region still holds no stamped block.
     assert.doesNotMatch(await readFile(indexPath, "utf8"), /<script type="module">/, "a failed stamp leaves the index.html unstamped");
   });
 
+  test("a stamp-phase error ends in one period, whether or not the message it frames ends in one", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const { dest, indexPath, page, pluginRoot, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+
+    // A directory where the stamped page's temp file goes fails its write with the file system's own message, which ends in no period, so the frame ends the sentence.
+    await mkdir(indexPath + ".tmp");
+    await assert.rejects(async () => prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion }), (error: Error) => {
+
+      assert.ok(error.message.includes(indexPath + ".tmp"), error.message);
+      assert.match(error.message, /[^.]\.$/, "the frame closes a message that ends in no period");
+
+      return true;
+    });
+
+    // The destination refusal is a sentence of its own, ending in the period the frame does not repeat.
+    await mkdir(join(pluginRoot, "src", "webui"), { recursive: true });
+    await assert.rejects(async () => prepareUi({ dest: join(page, "assets"), loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion }),
+      (error: Error) => {
+
+        assert.ok(error.message.includes(" cannot be stamped to load them"), error.message);
+        assert.match(error.message, /[^.]\.$/, "the frame adds no period to a message that ends in one");
+
+        return true;
+      });
+  });
+
   test("a package.json without a name field fails the stamp with the framed derivation error", async () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
-    const { dest, indexPath, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
+    const { dest, indexPath, pluginRoot, sourceRoot } = await setupStamp(scratch.path, MARKED_INDEX);
 
     // The stamp derives the importmap prefix from the package name, so a name-less package.json is a precondition failure the stamp names; the mirror itself needs
     // only the version and completes first.
     await writeFile(join(sourceRoot, "package.json"), JSON.stringify({ version: "2.0.0" }, null, 2));
 
-    await assert.rejects(async () => prepareUi({ dest, loader: webuiLoader, sourceRoot, splice: spliceMarkedRegion }), /has no name field/);
+    await assert.rejects(async () => prepareUi({ dest, loader: webuiLoader, pluginRoot, sourceRoot, splice: spliceMarkedRegion }), /has no name field/);
 
     assert.equal(await readFile(indexPath, "utf8"), MARKED_INDEX, "the index.html is untouched when the stamp fails its precondition");
   });
@@ -1011,6 +1181,18 @@ describe("runCli", () => {
     assert.equal(lines.slice(opening, closing).join("\n") + "\n", USAGE, "the README's usage block must be the banner, verbatim");
   });
 
+  test("the banner and the README each say copy-webui places its copy in a content-hashed folder under homebridge-ui/public/lib", async () => {
+
+    const readme = await readFile(fileURLToPath(new URL("../../README.md", import.meta.url)), "utf8");
+    const copyLine = (text: string): string | undefined => text.split("\n").find((line) => line.startsWith("  copy-webui "));
+    const surfaces: readonly (readonly [ string, string ])[] = [ [ "banner", USAGE ], [ "README", readme ] ];
+
+    for(const [ label, text ] of surfaces) {
+
+      assert.ok(copyLine(text)?.endsWith("from dist/webui into a content-hashed folder under homebridge-ui/public/lib."), "the " + label + "'s copy-webui line");
+    }
+  });
+
   test("prepare-ui without a destination argument writes a misuse message and exits 1", async () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
@@ -1045,6 +1227,35 @@ describe("runCli", () => {
     const manifest = JSON.parse(await readFile(join(dest, "manifest.json"), "utf8")) as { subdir: string };
 
     assert.equal(await readFile(join(dest, manifest.subdir, "webUi.mjs"), "utf8"), "webUi.mjs");
+  });
+
+  test("prepare-ui resolves a relative destination against its working directory, the plugin root its stamp reads", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const sourceRoot = join(scratch.path, "source");
+    const pluginRoot = join(scratch.path, "plugin");
+    const page = join(pluginRoot, "homebridge-ui", "public");
+
+    await mkdir(sourceRoot, { recursive: true });
+    await setupSource({ files: ["webUi.mjs"], root: sourceRoot, version: "2.0.0" });
+    await writeLoaderDist(sourceRoot);
+    await mkdir(join(pluginRoot, "src", "webui"), { recursive: true });
+    await mkdir(page, { recursive: true });
+    await writeFile(join(page, "index.html"), "<!-- WEBUI LOADER CONFIG {\"entry\":\"./ui.mjs\"} -->\n" + webuiLoader.WEBUI_LOADER_BEGIN + "\n" +
+      webuiLoader.WEBUI_LOADER_END + "\n");
+
+    // The working directory is the plugin root, as a plugin's build script runs the verb, and the test process's own directory is elsewhere: a destination resolved
+    // against the process would land outside the plugin, and a stamp reading another directory as the plugin root would miss the plugin's src/webui/.
+    const capture = captureStderr();
+    const code = await runCli({ argv: [ "prepare-ui", "homebridge-ui/public/lib" ], cwd: pluginRoot, sourceRoot, stderr: capture.stderr });
+
+    assert.equal(code, 0, capture.chunks());
+
+    const manifest = JSON.parse(await readFile(join(page, "lib", "manifest.json"), "utf8")) as { subdir: string };
+
+    assert.equal(await readFile(join(page, "lib", manifest.subdir, "webUi.mjs"), "utf8"), "webUi.mjs", "the mirror lands under the working directory");
+    assert.match(await readFile(join(page, "index.html"), "utf8"), /fetch\("\.\/lib\/webui\.json"/, "the stamp read src/webui/ under the working directory");
   });
 
   test("prepare-ui surfaces the function's error message and exits 1", async () => {
@@ -1316,22 +1527,127 @@ async function filesUnder(root: string): Promise<string[]> {
 
 describe("runCli - copy-webui", () => {
 
-  test("copies every compiled module under dist/webui to the page, path for path, and leaves declarations and maps behind", async () => {
+  // The compiled-module manifest a run left under `lib/`, read the way the loader reads it.
+  async function compiledManifest(lib: string): Promise<{ hash: string; subdir: string }> {
+
+    return JSON.parse(await readFile(join(lib, "webui.json"), "utf8")) as { hash: string; subdir: string };
+  }
+
+  test("copies every compiled module under dist/webui into a folder named for their digest, path for path, beside a manifest naming it", async () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
-    const dest = join(scratch.path, "homebridge-ui", "public", "lib", "webui");
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
 
     await writeWebUiBuild({ files: [ "a.js", "a.js.map", "a.d.ts", "sub/b.js" ], root: scratch.path });
 
     const capture = captureStderr();
     const code = await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
 
+    // The folder sits beside lib/webui/, never inside it, and its name is the digest prepare-ui names its own folder by, taken over the modules alone: the
+    // declarations and maps stay behind.
+    const hash = expectedHash([ "a.js", "sub/b.js" ]);
+
     assert.equal(code, 0);
     assert.equal(capture.chunks(), "", "a successful copy must not write to stderr");
-    assert.deepEqual(await filesUnder(dest), [ "a.js", "sub/b.js" ]);
-    assert.equal(await readFile(join(dest, "a.js"), "utf8"), "a.js");
-    assert.equal(await readFile(join(dest, "sub", "b.js"), "utf8"), "sub/b.js");
+    assert.deepEqual(await filesUnder(lib), [ "webui-" + hash + "/a.js", "webui-" + hash + "/sub/b.js", "webui.json" ]);
+    assert.equal(await readFile(join(lib, "webui-" + hash, "a.js"), "utf8"), "a.js");
+    assert.equal(await readFile(join(lib, "webui-" + hash, "sub", "b.js"), "utf8"), "sub/b.js");
+    assert.equal(await readFile(join(lib, "webui.json"), "utf8"), JSON.stringify({ hash, subdir: "webui-" + hash }, null, 2) + "\n",
+      "the manifest names the folder, pretty-printed and ending in a newline as prepare-ui's does");
+  });
+
+  test("a re-run over unchanged modules writes the same folder in place and the same manifest", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
+
+    await writeWebUiBuild({ files: ["a.js"], root: scratch.path });
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+
+    const manifest = await readFile(join(lib, "webui.json"), "utf8");
+    const { subdir } = await compiledManifest(lib);
+
+    // A file the copy never wrote, planted in the current folder: it survives the re-run only because the folder is written over rather than cleared first, which is
+    // what keeps a page loading during the run from finding a module missing.
+    await writeFile(join(lib, subdir, "planted.txt"), "planted");
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.equal(await readFile(join(lib, "webui.json"), "utf8"), manifest);
+    assert.deepEqual(await filesUnder(lib), [ subdir + "/a.js", subdir + "/planted.txt", "webui.json" ]);
+  });
+
+  test("a re-run over a folder that already holds exactly its modules writes none of them, so each keeps its modification time", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
+
+    await writeWebUiBuild({ files: [ "a.js", "sub/b.js" ], root: scratch.path });
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+
+    const manifest = await readFile(join(lib, "webui.json"), "utf8");
+    const { subdir } = await compiledManifest(lib);
+    const modules = [ join(lib, subdir, "a.js"), join(lib, subdir, "sub", "b.js") ];
+    const dated = new Date("2020-01-01T00:00:00.000Z");
+
+    // Each module is dated well before the re-run, so a write of any of them, even one putting back the same bytes, would move its modification time to the present.
+    await Promise.all(modules.map(async (path) => utimes(path, dated, dated)));
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.deepEqual(await Promise.all(modules.map(async (path) => (await stat(path)).mtimeMs)), modules.map(() => dated.getTime()),
+      "a module the folder already holds is never written again");
+    assert.equal(await readFile(join(lib, "webui.json"), "utf8"), manifest, "the manifest still names the folder");
+    assert.deepEqual(await filesUnder(lib), [ subdir + "/a.js", subdir + "/sub/b.js", "webui.json" ]);
+  });
+
+  test("a folder under the current name that holds less than its modules, as an interrupted run leaves it, is written whole", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
+    const subdir = "webui-" + expectedHash([ "a.js", "sub/b.js" ]);
+
+    // A run cut short partway through writing: the folder named for the modules exists, one module holds only the start of its text and the other was never
+    // written. The folder's own digest is not its name, so the run writes it rather than taking it as complete.
+    await writeWebUiBuild({ files: [ "a.js", "sub/b.js" ], root: scratch.path });
+    await mkdir(join(lib, subdir), { recursive: true });
+    await writeFile(join(lib, subdir, "a.js"), "a");
+
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.equal(await readFile(join(lib, subdir, "a.js"), "utf8"), "a.js", "the short module is written whole");
+    assert.deepEqual(await filesUnder(lib), [ subdir + "/a.js", subdir + "/sub/b.js", "webui.json" ]);
+  });
+
+  test("writes the modules, then the manifest, then sweeps, so a failed manifest write leaves the previous manifest and its folder in place", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
+
+    await writeWebUiBuild({ files: ["a.js"], root: scratch.path });
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+
+    const previous = await readFile(join(lib, "webui.json"), "utf8");
+    const { subdir: previousSubdir } = await compiledManifest(lib);
+
+    // A directory where the manifest's temp file goes makes the manifest write fail after the modules are written and before the sweep runs, so what the failed run
+    // leaves shows the order: the new folder complete, the previous manifest still naming the previous folder, and that folder still there for a page loading it.
+    await writeFile(join(scratch.path, "dist", "webui", "a.js"), "changed");
+    await mkdir(join(lib, "webui.json.tmp"));
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 1);
+
+    const written = (await readdir(lib)).filter((name) => /^webui-[0-9a-f]{16}$/.test(name) && (name !== previousSubdir));
+
+    assert.equal(written.length, 1, "the changed module's folder is written before the manifest");
+    assert.equal(await readFile(join(lib, written[0] ?? "", "a.js"), "utf8"), "changed", "and it holds the changed module");
+    assert.equal(await readFile(join(lib, "webui.json"), "utf8"), previous, "the manifest still names the previous folder when its write fails");
+    assert.equal(await readFile(join(lib, previousSubdir, "a.js"), "utf8"), "a.js", "the sweep runs only after the manifest names the new folder");
+
+    // Once the manifest can be written, the next run completes: the manifest names the new folder and the previous one goes.
+    await rm(join(lib, "webui.json.tmp"), { recursive: true });
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.equal((await compiledManifest(lib)).subdir, written[0]);
+    assert.deepEqual(await filesUnder(lib), [ (written[0] ?? "") + "/a.js", "webui.json" ]);
   });
 
   test("copies each module without the source-map comment TypeScript ends it with, and leaves the same text anywhere else in a module as it is", async () => {
@@ -1339,7 +1655,7 @@ describe("runCli - copy-webui", () => {
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const build = join(scratch.path, "dist", "webui");
-    const dest = join(scratch.path, "homebridge-ui", "public", "lib", "webui");
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
     const body = "export function a() {\n\n  return 1;\n}\n";
 
     // The first module ends as TypeScript leaves it, the comment alone on the final line with no newline after it. The second carries the same text mid-line, on a
@@ -1354,55 +1670,101 @@ describe("runCli - copy-webui", () => {
     await writeFile(join(build, "c.js"), body + "//# sourceMappingURL=c.js.map\n");
 
     assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
-    assert.equal(await readFile(join(dest, "a.js"), "utf8"), body, "the comment's line goes, and every byte before it stays, the newline above it included");
-    assert.equal(await readFile(join(dest, "b.js"), "utf8"), quoted, "the same text anywhere but a final line of its own is the module's and copies unchanged");
-    assert.equal(await readFile(join(dest, "c.js"), "utf8"), body, "a final comment goes with the newline after it, and every byte before it stays");
+
+    const { subdir } = await compiledManifest(lib);
+
+    assert.equal(await readFile(join(lib, subdir, "a.js"), "utf8"), body, "the comment's line goes, and every byte before it stays, the newline above it included");
+    assert.equal(await readFile(join(lib, subdir, "b.js"), "utf8"), quoted, "the same text anywhere but a final line of its own is the module's and copies unchanged");
+    assert.equal(await readFile(join(lib, subdir, "c.js"), "utf8"), body, "a final comment goes with the newline after it, and every byte before it stays");
+
+    // The digest is taken over the text the copy writes, so a module whose source-map comment alone changes lands in the same folder and the page's cache holds.
+    await writeFile(join(build, "a.js"), body + "//# sourceMappingURL=renamed.js.map");
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.equal((await compiledManifest(lib)).subdir, subdir);
   });
 
   test("a module removed from dist/webui is gone from the page after the next run", async () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
-    const dest = join(scratch.path, "homebridge-ui", "public", "lib", "webui");
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
+    const before = "webui-" + expectedHash([ "a.js", "sub/b.js" ]);
+    const after = "webui-" + expectedHash(["a.js"]);
 
     await writeWebUiBuild({ files: [ "a.js", "sub/b.js" ], root: scratch.path });
     assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
-    assert.deepEqual(await filesUnder(dest), [ "a.js", "sub/b.js" ]);
+    assert.deepEqual(await filesUnder(lib), [ before + "/a.js", before + "/sub/b.js", "webui.json" ]);
 
-    // Each run clears the folder before it copies rather than copying over what is there, so the copy of a module the source has lost goes with the rest.
+    // Losing a module changes the digest, so the next run writes a new folder without it, and the sweep removes the folder that held the stale copy.
     await rm(join(scratch.path, "dist", "webui", "sub", "b.js"));
     assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
-    assert.deepEqual(await filesUnder(dest), ["a.js"]);
+    assert.deepEqual(await filesUnder(lib), [ after + "/a.js", "webui.json" ]);
   });
 
-  test("leaves the rest of lib, the mirrored webUI and its manifest, untouched", async () => {
+  test("sweeps an earlier folder, a webui folder and a manifest temp from lib's top level, and leaves the rest of lib, the mirror's webui folder included", async () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
     const lib = join(scratch.path, "homebridge-ui", "public", "lib");
     const manifest = JSON.stringify({ hash: "0123456789abcdef", subdir: "2.0.0-0123456789abcdef", version: "2.0.0" }, null, 2) + "\n";
+    const subdir = "webui-" + expectedHash(["a.js"]);
 
-    // The content-hashed folder and the manifest prepare-ui writes beside the copy's own folder, laid down as that verb leaves them.
-    await mkdir(join(lib, "2.0.0-0123456789abcdef"), { recursive: true });
+    // The content-hashed folder and the manifest prepare-ui writes beside the copy's own folder, laid down as that verb leaves them, its mirror carrying a webui/
+    // folder of its own one level down, and a plugin's own folder whose name opens the same way but carries no digest.
+    await mkdir(join(lib, "2.0.0-0123456789abcdef", "webui"), { recursive: true });
     await writeFile(join(lib, "2.0.0-0123456789abcdef", "webUi.mjs"), "webUi.mjs");
+    await writeFile(join(lib, "2.0.0-0123456789abcdef", "webui", "x.js"), "x.js");
     await writeFile(join(lib, "manifest.json"), manifest);
+    await mkdir(join(lib, "webui-assets"), { recursive: true });
+    await writeFile(join(lib, "webui-assets", "logo.svg"), "<svg/>");
+
+    // What the run removes: an earlier run's folder and a folder at the mapped webui/ path itself, which the sweep owns, and a manifest temp an interrupted run left,
+    // which the run's own manifest write takes over.
+    await mkdir(join(lib, "webui-fedcba9876543210"), { recursive: true });
+    await writeFile(join(lib, "webui-fedcba9876543210", "old.js"), "old.js");
+    await mkdir(join(lib, "webui"), { recursive: true });
+    await writeFile(join(lib, "webui", "old.js"), "old.js");
+    await writeFile(join(lib, "webui.json.tmp"), "{");
     await writeWebUiBuild({ files: ["a.js"], root: scratch.path });
 
     assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
-    assert.deepEqual(await filesUnder(lib), [ "2.0.0-0123456789abcdef/webUi.mjs", "manifest.json", "webui/a.js" ]);
-    assert.equal(await readFile(join(lib, "2.0.0-0123456789abcdef", "webUi.mjs"), "utf8"), "webUi.mjs");
+    assert.deepEqual(await filesUnder(lib), [ "2.0.0-0123456789abcdef/webUi.mjs", "2.0.0-0123456789abcdef/webui/x.js", "manifest.json", subdir + "/a.js",
+      "webui-assets/logo.svg", "webui.json" ].toSorted());
+    assert.equal(await readFile(join(lib, "2.0.0-0123456789abcdef", "webui", "x.js"), "utf8"), "x.js");
     assert.equal(await readFile(join(lib, "manifest.json"), "utf8"), manifest);
+  });
+
+  test("leaves a folder whose name opens webui- with hex digits that are not the length of the digest the copy names a folder with", async () => {
+
+    await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
+
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
+    const subdir = "webui-" + expectedHash(["a.js"]);
+
+    // A word spelled in hex, one digit short of a digest and one digit past it: none is a folder the copy writes, so each is the plugin's own.
+    const kept = [ "webui-cafe", "webui-0123456789abcde", "webui-0123456789abcdef0" ];
+
+    await Promise.all(kept.map(async (name) => {
+
+      await mkdir(join(lib, name), { recursive: true });
+      await writeFile(join(lib, name, "keep.js"), name);
+    }));
+    await writeWebUiBuild({ files: ["a.js"], root: scratch.path });
+
+    assert.equal(await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: captureStderr().stderr }), 0);
+    assert.deepEqual(await filesUnder(lib), [ ...kept.map((name) => name + "/keep.js"), subdir + "/a.js", "webui.json" ].toSorted());
   });
 
   test("before the build exits 1 naming the build as the step to run first, and leaves the page's copy as it was", async () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
-    const dest = join(scratch.path, "homebridge-ui", "public", "lib", "webui");
+    const lib = join(scratch.path, "homebridge-ui", "public", "lib");
 
-    // A copy an earlier run left on the page, which a run that cannot copy must not clear.
-    await mkdir(dest, { recursive: true });
-    await writeFile(join(dest, "a.js"), "a.js");
+    // A copy and a manifest an earlier run left on the page, which a run that cannot copy must neither replace nor sweep.
+    await mkdir(join(lib, "webui-0123456789abcdef"), { recursive: true });
+    await writeFile(join(lib, "webui-0123456789abcdef", "a.js"), "a.js");
+    await writeFile(join(lib, "webui.json"), "{}");
 
     const capture = captureStderr();
     const code = await runCli({ argv: ["copy-webui"], cwd: scratch.path, sourceRoot: scratch.path, stderr: capture.stderr });
@@ -1410,10 +1772,11 @@ describe("runCli - copy-webui", () => {
     assert.equal(code, 1);
     assert.equal(capture.chunks(), "homebridge-plugin-utils copy-webui: The plugin has not been built: " + join(scratch.path, "dist", "webui") +
       " is missing. Run the plugin's build first.\n");
-    assert.deepEqual(await filesUnder(dest), ["a.js"]);
+    assert.deepEqual(await filesUnder(lib), [ "webui-0123456789abcdef/a.js", "webui.json" ]);
+    assert.equal(await readFile(join(lib, "webui.json"), "utf8"), "{}");
   });
 
-  test("a dist/webui that is not a directory exits 1 naming the path", async () => {
+  test("a dist/webui that is not a directory exits 1 naming the path, and writes nothing", async () => {
 
     await using scratch = await makeScratchRoot(SCRATCH_PREFIX);
 
@@ -1426,6 +1789,7 @@ describe("runCli - copy-webui", () => {
     assert.equal(code, 1);
     assert.equal(capture.chunks(), "homebridge-plugin-utils copy-webui: The plugin's compiled webUI path is not a directory: " + join(scratch.path, "dist", "webui") +
       ".\n");
+    await assert.rejects(stat(join(scratch.path, "homebridge-ui")), { code: "ENOENT" }, "nothing is written for a copy that cannot follow");
   });
 });
 

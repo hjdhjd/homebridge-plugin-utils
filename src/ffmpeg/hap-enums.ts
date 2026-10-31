@@ -13,7 +13,7 @@
  *
  * @module
  */
-// We source the HAP enum types through "homebridge", the surface a plugin compiles against. The family's TypeScript base (build/tsconfig.json) maps the bare
+// We source the HAP enum types through "homebridge", the surface a plugin compiles against. The family's TypeScript base (build/tsconfig.base.json) maps the bare
 // specifiers "@homebridge/hap-nodejs" and "homebridge" to the compiling project's own copies, Homebridge's own bare imports included. A deep import, such as
 // Homebridge's own of hap-nodejs's dist/types.js, is outside that mapping, but the enum types sourced through homebridge come from the mapped copy, so each is the
 // very type hap-nodejs declares. VideoCodecType is the lone exception: "homebridge" does not re-export it, so that one alias is sourced straight from hap-nodejs.

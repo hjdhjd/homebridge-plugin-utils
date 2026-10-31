@@ -1,6 +1,9 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * tsconfig.json: The kind-neutral TypeScript base every family build extends through one of the profiles beside it, tsconfig.library.json and tsconfig.plugin.json.
+ * tsconfig.base.json: The kind-neutral TypeScript base every family build extends through one of the profiles beside it, tsconfig.library.json and
+ * tsconfig.plugin.json. It is not a project and claims no files of its own, so it is named apart from tsconfig.json: a tool that takes a file's nearest
+ * tsconfig.json as that file's project, as an editor and typescript-eslint do, would otherwise load this base for every file under build/ and fail on its empty
+ * inputs rather than reach the repository's own tsconfig.json.
  */
 {
   "compilerOptions": {

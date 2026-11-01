@@ -2024,6 +2024,12 @@ try {
 
 ## Other
 
+### displayedName
+
+Re-exports [displayedName](homekit-name.md#displayedname)
+
+***
+
 ### formatBps
 
 Re-exports [formatBps](formatters.md#formatbps)
@@ -2057,6 +2063,18 @@ Re-exports [formatSeconds](formatters.md#formatseconds)
 ### markHandled
 
 Re-exports [markHandled](mark-handled.md#markhandled)
+
+***
+
+### ownedName
+
+Re-exports [ownedName](homekit-name.md#ownedname)
+
+***
+
+### resolveNameOverride
+
+Re-exports [resolveNameOverride](homekit-name.md#resolvenameoverride)
 
 ***
 

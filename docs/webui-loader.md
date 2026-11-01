@@ -8,8 +8,9 @@
 
 The webUI boot-region stamp. A plugin's `index.html` carries a marker-fenced region that homebridge-plugin-utils generates and every build re-stamps. The region
 reports its own boot failures on the page, injects an importmap mapping the bare package specifier to the hashed-versioned subdir the `prepare-ui` CLI mirrors into
-place, and dynamically imports the plugin's entry module. It is identical across the family, so this module renders it from one template: the plugin declares its
-entry and cache-bust list in a config comment, and `prepare-ui` stamps the rendered region into the marker-fenced block on every build.
+place, and, for a plugin that compiles settings-page modules, `./lib/webui/` to the content-hashed folder the `copy-webui` CLI places them in, and dynamically
+imports the plugin's entry module. It is identical across the family, so this module renders it from one template: the plugin declares its entry in a config
+comment, `prepare-ui` finds the page's own modules and cache-busts each one, and it stamps the rendered region into the marker-fenced block on every build.
 
 The region carries, in boot order, a hidden status panel a screenshot turns into a complete support report; a boot monitor - a classic inline script, so
 it runs during HTML parse ahead of any deferred module evaluation - that owns the on-page failure surface: it reveals the panel with a plain-language message
@@ -18,21 +19,20 @@ importmap/cache-bust module script - stage-instrumented so a fetch, importmap, o
 classic-versus-module split is for execution ordering alone, not old-engine compatibility: the classic script runs during parse while the module script is deferred.
 
 Three exported pieces: the marked-region marker constants (following the family's uniform template - see `docChrome.ts`), [parseWebUiLoaderConfig](#parsewebuiloaderconfig) which reads
-and validates the plugin's config comment, and [renderWebUiBootRegion](#renderwebuibootregion) which renders the region from that config plus the destination and package facts the CLI
-supplies. The CLI's `prepareUi` owns the read/splice/atomic-write around them.
+and validates the plugin's config comment, and [renderWebUiBootRegion](#renderwebuibootregion) which renders the region from that config plus the page, destination and package facts
+the CLI supplies. The CLI's `prepareUi` owns the read/splice/atomic-write around them.
 
 ## WebUI Loader
 
 ### WebUiLoaderConfig
 
-The validated shape of a plugin's webUI loader config: the entry module the loader dynamically imports, and the list of hand-authored modules (the entry aside) that
-sit outside the package's hashed versioning and therefore each need a cache-bust.
+The validated shape of a plugin's webUI loader config: the entry module the loader dynamically imports. Nothing else is declared, because the CLI cache-busts every
+other module the page loads by itself: it lists the page's own hand-written modules when it stamps, and the compiled ones load from a content-hashed folder.
 
 #### Properties
 
 | Property | Modifier | Type |
 | ------ | ------ | ------ |
-| <a id="bust"></a> `bust` | `readonly` | readonly `string`[] |
 | <a id="entry"></a> `entry` | `readonly` | `string` |
 
 ***
@@ -64,13 +64,14 @@ The closing marker of the auto-generated webUI boot region. See [WEBUI\_LOADER\_
 function parseWebUiLoaderConfig(html, htmlPath): WebUiLoaderConfig;
 ```
 
-Read and validate the plugin's webUI loader config comment from an `index.html`. The comment is the plugin's sole declaration - its entry module and its cache-bust
-list - and everything else about the rendered region is a family constant or a fact the CLI supplies, so this is where a mistake in that declaration surfaces with a
-message naming the file and the defect.
+Read and validate the plugin's webUI loader config comment from an `index.html`. The comment is the plugin's sole declaration - its entry module - and everything
+else about the rendered region is a family constant or a fact the CLI supplies, so this is where a mistake in that declaration surfaces with a message naming the
+file and the defect.
 
 Rejects, each with a framed error naming `htmlPath`: an absent config comment, a duplicated one (the region it drives would be ambiguous), an unterminated one,
-invalid JSON, a mis-shaped object (a missing/non-string `entry`, or a `bust` that is not a string array), and a config comment sitting INSIDE the marked region (the
-first stamp would erase it, so it must live outside the marker pair).
+invalid JSON, a mis-shaped value (anything but an object holding an `entry` string and no other key, a `bust` field drawing a sentence of its own that tells the
+plugin to delete it, since the CLI cache-busts every page module itself), and a config comment sitting INSIDE the marked region (the first stamp would erase it,
+so it must live outside the marker pair).
 
 #### Parameters
 
@@ -97,11 +98,12 @@ The validated [WebUiLoaderConfig](#webuiloaderconfig).
 function renderWebUiBootRegion(args): string;
 ```
 
-Render the webUI boot region from the plugin's config plus the destination and package facts the CLI supplies. The region carries, in boot order, a hidden status
-panel, a classic-script boot monitor, and the importmap/cache-bust module loader. The loader reproduces the proven runtime semantics of the hand-authored block: a
-single `Date.now()` cache-bust stamp shared across the page load, a `bust()` helper that resolves a path against `import.meta.url` and appends the stamp, a
-`cache: "no-store"` fetch of the manifest, an importmap, and a dynamic import of the entry, all wrapped in a stage-instrumented `try`/`catch` that routes a boot
-failure to the monitor with the stage that failed, without adding any await or work to the happy path.
+Render the webUI boot region from the plugin's config plus the page, destination and package facts the CLI supplies. The region carries, in boot order, a hidden
+status panel, a classic-script boot monitor, and the importmap/cache-bust module loader. The loader's runtime sets a single `Date.now()` cache-bust stamp shared
+across the page load and a `bust()` helper that resolves a path against `import.meta.url` and appends the stamp, then runs a `cache: "no-store"` fetch of the
+manifest, an importmap, and a dynamic import of the entry inside a stage-instrumented `try`/`catch` that routes a boot failure to the monitor with the stage that
+failed, without adding any await or work to the happy path. With `compiledModules`, the same `no-store` fetch reads the compiled-module manifest `copy-webui`
+writes beside the package's, concurrently with it, and a failed response reports under the manifest stage with a sentence naming the manifest that failed.
 
 The catch classifies by stage. A manifest-stage failure reports directly, with no capability probe: the importmap is not injected yet, so probing resolution there
 would misroute every ordinary delivery failure into the browser bucket. At the import stage the map is injected, so an engine without `import.meta.resolve` predates
@@ -109,21 +111,24 @@ the loader's floor, and a probe of the injected prefix that throws proves the ma
 failure in the delivery bucket. The probe proves the map applied, not that the delivered module content is sound: a top-level throw inside a delivered module is
 indistinguishable from a fetch failure here and knowingly folds into the delivery bucket, where the panel's raw error line disambiguates it for support.
 
-Every importmap module entry keeps the BARE module path as its KEY with the busted URL as its VALUE - the entry module ITSELF plus every declared `bust` entry, so
-the most important module (the entry) is never served stale. The trailing-slash `<packageName>/` prefix entry maps the bare package specifier to the hashed-versioned
-subdir, and transitive imports inherit it through relative-URL resolution.
+Every importmap module entry keeps the BARE module path as its KEY with the busted URL as its VALUE - the entry module ITSELF plus every page module the CLI found,
+so the most important module (the entry) is never served stale. The trailing-slash `<packageName>/` prefix entry maps the bare package specifier to the
+hashed-versioned subdir, and transitive imports inherit it through relative-URL resolution. With `compiledModules`, a second trailing-slash entry maps
+`<libPath>webui/`, the path a page imports a compiled module through, to the content-hashed folder the compiled-module manifest names. That folder is a sibling of
+the mapped prefix rather than a child of it, so a compiled module's relative import resolves to a URL outside the prefix and the map never applies to it twice.
 
-`libPath` is the destination-relative segment the CLI derives from its `dest` basename (`"./lib/"` for the family convention), so the manifest fetch path and the
-prefix URL are path-correct for any destination rather than a hardcoded `./lib/` that is only coincidentally right for one plugin.
+`libPath` is the destination-relative segment the CLI derives from its `dest` basename (`"./lib/"` for the family convention), so the manifest fetch paths and the
+prefix URLs are path-correct for any destination rather than a hardcoded `./lib/` that is only coincidentally right for one plugin.
 
 #### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `args` | \{ `bust`: readonly `string`[]; `entry`: `string`; `libPath`: `string`; `packageName`: `string`; \} | - |
-| `args.bust` | readonly `string`[] | The hand-authored modules (the entry aside) that each need a cache-bust. |
-| `args.entry` | `string` | The entry module the loader dynamically imports; it is cache-busted alongside the `bust` list. |
-| `args.libPath` | `string` | The destination-relative segment (e.g. `"./lib/"`) the manifest fetch and the importmap prefix resolve against. |
+| `args` | \{ `compiledModules`: `boolean`; `entry`: `string`; `libPath`: `string`; `modules`: readonly `string`[]; `packageName`: `string`; \} | - |
+| `args.compiledModules` | `boolean` | Whether the plugin compiles settings-page modules, which `copy-webui` places in a content-hashed folder under the destination: the loader then reads that folder's manifest and maps `<libPath>webui/` to it. Without it, the loader reads the package's manifest alone. |
+| `args.entry` | `string` | The entry module the loader dynamically imports; it is cache-busted alongside `modules`, whether or not they list it. |
+| `args.libPath` | `string` | The destination-relative segment (e.g. `"./lib/"`) the manifest fetches and the importmap prefixes resolve against. |
+| `args.modules` | readonly `string`[] | The page's own hand-written modules, as `./`-relative paths, that sit outside every hashed folder and therefore each need a cache-bust. |
 | `args.packageName` | `string` | The mirrored package's name; the importmap prefix maps `<packageName>/` to the hashed-versioned subdir, and the import-stage probe resolves `<packageName>/webUi.mjs` against it. |
 
 #### Returns

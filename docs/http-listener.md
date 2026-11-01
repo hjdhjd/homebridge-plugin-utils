@@ -11,8 +11,8 @@ One plugin-hosted HTTP listener, shaped to the library's own lifecycle model.
 A plugin that has to answer HTTP - an inbound delivery a controller posts, a document a media player fetches, a redirect an authorization flow lands on - needs
 the same machinery every time: a server whose lifetime is an [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal), a port that is retried while something else holds it, a way to say which paths it
 answers and with which methods, a body read that refuses to buffer without bound, and a teardown that releases the port rather than leaking it across a plugin
-reload. That machinery is what this module owns, and it is all it owns: which port, which paths, what a request means, and what the answer is are the consumer's,
-handed in as options and as a handler.
+reload. That machinery is what this module owns, and it is all it owns: which address and port, which paths, what a request means, and what the answer is are the
+consumer's, handed in as options and as a handler.
 
 The pieces:
 
@@ -201,6 +201,7 @@ Construction options for [HttpListener](#httplistener).
 | ------ | ------ | ------ |
 | <a id="bodylimit"></a> `bodyLimit?` | `number` | The largest request body a route will be handed, in bytes. A body that crosses it is refused with 413 and never reaches a handler. Defaults to 65536. Size is the only bound this class sets. The read is bounded in time by the platform: Node's request timeout covers the whole request, headers and body alike, defaults to five minutes, and is enforced on a thirty-second check, so a peer that stalls mid-body is answered 408 and dropped by the server itself. A deadline of this class's own would be a second mechanism for a bound that already exists underneath it. |
 | <a id="clock"></a> `clock?` | [`Clock`](clock.md#clock) | Optional time source for the bind retry's waits, handed through to `retry()`. Defaults to `systemClock`; a `TestClock` puts the retry schedule on virtual time. |
+| <a id="host"></a> `host?` | `string` | The address to listen on. Loopback (`"127.0.0.1"` or `"::1"`) holds the listener to this machine, for something only a local process should reach, and one interface's own address holds it to that interface on a multi-homed host. A hostname binds the one address it resolves to, so `"localhost"` holds a single loopback address even where it names more than one. Defaults to every address, which an empty string selects too. An address the machine does not have fails the bind the way any cause other than a held port does: the listener reports it once and ends rather than retrying. |
 | <a id="label"></a> `label` | `string` | The noun phrase every one of this listener's log lines names it by - "event receiver", "document server". Required, because the library owns the wording of those lines and the label is what carries the purpose in them. An empty label is refused. |
 | <a id="log"></a> `log` | [`HomebridgePluginLogging`](util.md#homebridgepluginlogging) | Where the listener's own lines go. |
 | <a id="port"></a> `port` | `number` | The port to bind. Zero asks the operating system for an ephemeral one, which [HttpListener.boundPort](#boundport) then reports. |

@@ -353,15 +353,17 @@ The entry's message with its params interpolated.
 function freePort(): Promise<number>;
 ```
 
-Answer a TCP port nothing on this machine is holding, asked of the kernel the way an ephemeral bind asks for one and released again before the caller sees it.
+Answer a TCP port free on loopback (`127.0.0.1`), asked of the kernel the way an ephemeral bind asks for one and released again before the caller sees it.
 
 An arm needs this when its subject takes a port as configuration rather than choosing one: the port has to be named in a setting before the listener exists, and a
 hard-coded number collides the moment two files run at once. The kernel's own choice is the answer that cannot, so a throwaway server binds at port 0, the helper
 reads back what it was given, and the server closes. The close is awaited rather than fired and forgotten, which is what shuts the release-versus-rebind window a
 naive implementation carries...by the time the number comes back, the handle behind it is already gone.
 
-The bind takes the wildcard address rather than the loopback one, because the wildcard is what the caller's own listener will bind - `HttpListener` names no host
-either - and a loopback-only reservation would answer a port that is free on one interface and held on the one the caller is about to take.
+The bind takes loopback, because that is where a test arm's listener binds and where its client dials, and an answer is known to be free only on the address it was
+asked on. A reservation on every address can miss a port held on loopback: macOS lets a bind on every address stand beside a bind to one address, so the kernel can
+answer a port another socket already holds there, and a listener held to loopback then finds it in use on every attempt. A caller that binds another address asks
+the kernel for a port there itself, by binding port 0 on that address and reading back what it was given.
 
 The port is free when it is answered rather than reserved for the caller: another process can take it in the gap before the caller's own bind. That is the price of
 naming a port before binding it, and it is why a consuming arm keeps its own release in `t.after` rather than leaning on this helper for a lifetime. An arm that
@@ -371,13 +373,13 @@ needs a port HELD rather than named wants an occupy-and-hold helper instead, whi
 
 [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`number`\>
 
-A port the kernel chose and has released.
+A port the kernel chose on loopback and has released.
 
 #### Example
 
 ```ts
 const port = await freePort();
-const listener = new HttpListener({ label: "test listener", log, port });
+const listener = new HttpListener({ host: "127.0.0.1", label: "test listener", log, port });
 
 t.after(async () => await listener[Symbol.asyncDispose]());
 

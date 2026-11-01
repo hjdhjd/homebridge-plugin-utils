@@ -874,3 +874,68 @@ if((result.transition === "attached") || (result.transition === "kept")) {
 
  - acquireService - the creation this function delegates to on a verdict that should exist.
  - validCharacteristic - the same contract, applied to one characteristic's presence on a service.
+
+***
+
+### watchServiceName()
+
+```ts
+function watchServiceName(options): Disposable;
+```
+
+Holds a service to the name the plugin owns for it, putting that name back the moment the Home app renames the service.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | \{ `log`: [`HomebridgePluginLogging`](util.md#homebridgepluginlogging); `name`: () => `string` \| `null`; `service`: `Service`; `signal`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | The service to watch, the name the plugin owns for it, the log, and the signal that ends the watch. |
+| `options.log` | [`HomebridgePluginLogging`](util.md#homebridgepluginlogging) | The plugin's log, which reports at info each restore that wrote and at error each restore that failed. |
+| `options.name` | () => `string` \| `null` | Answers the name the plugin owns for the service, or `null` when the user owns it, as [ownedName](homekit-name.md#ownedname) answers under the family naming rule. It is read on each rename rather than once when the watch begins, so a change of owner applies to the next rename. |
+| `options.service` | `Service` | The service whose name to hold. |
+| `options.signal` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Ends the watch when it aborts. A signal already aborted attaches nothing. |
+
+#### Returns
+
+[`Disposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/dispose)
+
+A [Disposable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/dispose) that ends the watch, releasing its listener on the service and its registration on the signal. Disposing a watch that has already
+         ended, by its signal or by an earlier disposal, does nothing, and so does disposing the handle a signal already aborted answers.
+
+#### Remarks
+
+This enforces the family naming rule [ownedName](homekit-name.md#ownedname) states: a name the plugin owns overrides a rename in the Home app, because owning
+it is the user's explicit opt-in, through a custom name in the plugin's settings or through Sync Name, while a name the user owns is never touched. An owned
+name is restored the moment a rename arrives rather than at the next startup or refresh, so a rename the plugin overrides never lingers in the Home app.
+
+A rename in the Home app is a controller's write to the service's `ConfiguredName`. HAP raises a change for every write to a characteristic, a plugin's own
+included, and marks each with a reason and an originator: a controller's write is a write carrying the connection it arrived on, a plugin's `setValue` is a
+write with no originator, and its `updateValue`, which [setServiceName](#setservicename) writes through, is a change of another reason, as a controller's read is. The
+originator is what separates the Home app from the plugin, so the watch acts only on a write that carries one, and nothing the plugin writes, a restore
+included, reads as a rename...one rename produces at most one restore, and a restore never produces another.
+
+The restore waits for the event loop's next turn and reads the owner only then, so it lands once HAP has stored the controller's value and finished the write,
+and nothing the plugin supplies runs inside that write: a throw from `name`, from the log, or from another listener on the service as the restore writes is
+reported at error rather than failing the Home app's write or surfacing as an unhandled rejection. A watch that ends in that span restores nothing. The watch
+listens on the service rather than on its `ConfiguredName`, so a `ConfiguredName` added after the watch begins, as [setServiceName](#setservicename) adds one a service's
+kind supports, is watched too. A service carrying `Name` alone gives the Home app nothing to write, since HAP makes `Name` read-only to a controller, so a rename
+of such a service stays on the Home app's side, out of the plugin's reach.
+
+A watch holds its registration on the signal until the signal aborts or the watch is disposed, so a watch on a signal that outlives its service, the platform's
+own among them, keeps that service reachable after the plugin removes it. A plugin that removes a service disposes its watch as it does.
+
+#### Example
+
+```typescript
+// Hold a zone's service to the name the plugin owns for it, reading the zone's custom name and its Sync Name setting afresh on each rename, and keep the watch
+// so the zone's removal can end it.
+this.nameWatch = watchServiceName({ log: this.log, name: () => ownedName({ fallback: zone.name, override: this.zoneNameOption(zone), sync: this.syncName(zone) }),
+  service, signal: this.signal });
+
+// When the plugin removes the zone's service, it ends the service's watch with it.
+this.nameWatch[Symbol.dispose]();
+```
+
+#### See
+
+setServiceName - the setter each restore writes through.

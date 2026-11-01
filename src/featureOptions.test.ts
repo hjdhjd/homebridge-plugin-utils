@@ -13,6 +13,7 @@ import { ALL_CHOICES, FeatureOptions, applyClearOption, applyClearScope, applyMo
   selectValues } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter, RemovedListEntry } from "./featureOptions.ts";
 import { describe, test } from "node:test";
+import type { CapturingLog } from "./testing/index.ts";
 import assert from "node:assert/strict";
 import { capturingLog } from "./testing/index.ts";
 
@@ -387,7 +388,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(CATEGORIES, OPTIONS);
     const log = capturingLog();
 
-    fo.logFeature("Motion.Detect", "Motion sensor", log);
+    fo.logFeature({ label: "Motion sensor", log, option: "Motion.Detect" });
 
     assert.deepEqual(log.entries, []);
   });
@@ -397,7 +398,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect"]);
     const log = capturingLog();
 
-    fo.logFeature("Motion.Detect", "Motion sensor", log);
+    fo.logFeature({ label: "Motion sensor", log, option: "Motion.Detect" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensor"] }]);
   });
@@ -408,7 +409,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(CATEGORIES, OPTIONS);
     const log = capturingLog();
 
-    fo.logFeature("Motion.Sensitivity", "Motion sensitivity", log);
+    fo.logFeature({ label: "Motion sensitivity", log, option: "Motion.Sensitivity" });
 
     assert.deepEqual(log.entries, []);
   });
@@ -418,7 +419,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Motion.Sensitivity"]);
     const log = capturingLog();
 
-    fo.logFeature("Motion.Sensitivity", "Motion sensitivity", log);
+    fo.logFeature({ label: "Motion sensitivity", log, option: "Motion.Sensitivity" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled.", params: ["Motion sensitivity"] }]);
   });
@@ -427,14 +428,16 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
 
     // Device-scoped Disable overrides the default-on state for that device only. Sibling devices stay silent.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect.devA"]);
+    const log = capturingLog();
     const logDevA = capturingLog();
     const logDevB = capturingLog();
 
-    fo.logFeature("Motion.Detect", "Motion sensor", logDevA, "devA");
-    fo.logFeature("Motion.Detect", "Motion sensor", logDevB, "devB");
+    fo.logFeature({ device: { id: "devA", log: logDevA }, label: "Motion sensor", log, option: "Motion.Detect" });
+    fo.logFeature({ device: { id: "devB", log: logDevB }, label: "Motion sensor", log, option: "Motion.Detect" });
 
     assert.deepEqual(logDevA.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensor"] }]);
     assert.deepEqual(logDevB.entries, [], "device devB sees the default and stays silent");
+    assert.deepEqual(log.entries, [], "a setting made at a device never reaches the plugin's logger");
   });
 
   test("respects the controller scope when reporting a deviation", () => {
@@ -445,8 +448,8 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const logCtrl = capturingLog();
     const logBare = capturingLog();
 
-    fo.logFeature("Motion.Sensitivity", "Motion sensitivity", logCtrl, undefined, "ctrl1");
-    fo.logFeature("Motion.Sensitivity", "Motion sensitivity", logBare);
+    fo.logFeature({ controller: { id: "ctrl1", log: logCtrl }, label: "Motion sensitivity", log: logBare, option: "Motion.Sensitivity" });
+    fo.logFeature({ label: "Motion sensitivity", log: logBare, option: "Motion.Sensitivity" });
 
     assert.deepEqual(logCtrl.entries, [{ level: "info", message: "%s enabled.", params: ["Motion sensitivity"] }]);
     assert.deepEqual(logBare.entries, [], "no controller context resolves to the default and stays silent");
@@ -459,14 +462,14 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(CATEGORIES, OPTIONS);
     const logSilent = capturingLog();
 
-    fo.logFeature("Unknown.Option", "Mystery feature", logSilent);
+    fo.logFeature({ label: "Mystery feature", log: logSilent, option: "Unknown.Option" });
 
     assert.deepEqual(logSilent.entries, [], "effective false against defaultReturnValue false is silent");
 
     const foEnabled = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Unknown.Option"]);
     const logEnabled = capturingLog();
 
-    foEnabled.logFeature("Unknown.Option", "Mystery feature", logEnabled);
+    foEnabled.logFeature({ label: "Mystery feature", log: logEnabled, option: "Unknown.Option" });
 
     assert.deepEqual(logEnabled.entries, [{ level: "info", message: "%s enabled.", params: ["Mystery feature"] }]);
   });
@@ -476,8 +479,9 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     // logFeature must compose correctly with the case-insensitive lookups underneath. Mixed-case option keys and device ids must resolve identically.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect.DevA"]);
     const log = capturingLog();
+    const pluginLog = capturingLog();
 
-    fo.logFeature("MOTION.DETECT", "Motion sensor", log, "deva");
+    fo.logFeature({ device: { id: "deva", log }, label: "Motion sensor", log: pluginLog, option: "MOTION.DETECT" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensor"] }]);
   });
@@ -489,7 +493,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume"]);
     const log = capturingLog();
 
-    fo.logFeature("Audio.Volume", "Volume", log);
+    fo.logFeature({ label: "Volume", log, option: "Audio.Volume" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Volume", "50" ] }]);
   });
@@ -498,10 +502,10 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
 
     // Both axes deviate: the user enabled an off-by-default option (boolean axis) and supplied a non-default value (value axis). One line communicates the full
     // effective configuration; we do not emit two lines for the two axes.
-    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.75"]);
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume=75"]);
     const log = capturingLog();
 
-    fo.logFeature("Audio.Volume", "Volume", log);
+    fo.logFeature({ label: "Volume", log, option: "Audio.Volume" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Volume", "75" ] }]);
   });
@@ -518,7 +522,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(categories, options, ["Disable.Network.Mtu"]);
     const log = capturingLog();
 
-    fo.logFeature("Network.Mtu", "MTU", log);
+    fo.logFeature({ label: "MTU", log, option: "Network.Mtu" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s disabled.", params: ["MTU"] }]);
   });
@@ -534,7 +538,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(categories, options);
     const log = capturingLog();
 
-    fo.logFeature("Network.Mtu", "MTU", log);
+    fo.logFeature({ label: "MTU", log, option: "Network.Mtu" });
 
     assert.deepEqual(log.entries, []);
   });
@@ -548,10 +552,10 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
 
       Network: [{ default: true, defaultValue: "9000", description: "Jumbo MTU.", name: "Mtu" }]
     };
-    const fo = new FeatureOptions(categories, options, ["Enable.Network.Mtu.1500"]);
+    const fo = new FeatureOptions(categories, options, ["Enable.Network.Mtu=1500"]);
     const log = capturingLog();
 
-    fo.logFeature("Network.Mtu", "MTU", log);
+    fo.logFeature({ label: "MTU", log, option: "Network.Mtu" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s set to %s.", params: [ "MTU", "1500" ] }]);
   });
@@ -559,17 +563,17 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
   test("renders the value through the catalog-declared render function when one is present", () => {
 
     // The render function is the catalog's hook for "this option's value displays as <format>." A bandwidth option configured in raw kbps wants to read as "5.0 Mbps"
-    // in the log, and the renderer lives with the declaration so every consumer (logFeature today, future surfaces tomorrow) renders identically.
+    // in the log, and the renderer lives with the declaration so every consumer renders the value identically.
     const categories: FeatureCategoryEntry[] = [{ description: "Stream Options", name: "Stream" }];
     const options: Record<string, FeatureOptionEntry[]> = {
 
       Stream: [{ default: false, defaultValue: 1000, description: "Bandwidth budget (kbps).", name: "Bandwidth",
         render: (value: string): string => (Number.parseInt(value, 10) / 1000).toFixed(1) + " Mbps" }]
     };
-    const fo = new FeatureOptions(categories, options, ["Enable.Stream.Bandwidth.5000"]);
+    const fo = new FeatureOptions(categories, options, ["Enable.Stream.Bandwidth=5000"]);
     const log = capturingLog();
 
-    fo.logFeature("Stream.Bandwidth", "Bandwidth", log);
+    fo.logFeature({ label: "Bandwidth", log, option: "Stream.Bandwidth" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Bandwidth", "5.0 Mbps" ] }]);
   });
@@ -578,10 +582,10 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
 
     // The absence of `render` is the canonical path used by simple value-centric options. We assert the raw stored string is what reaches the log line so a missing
     // renderer does not silently corrupt output - it just shows the raw value.
-    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.75"]);
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume=75"]);
     const log = capturingLog();
 
-    fo.logFeature("Audio.Volume", "Volume", log);
+    fo.logFeature({ label: "Volume", log, option: "Audio.Volume" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Volume", "75" ] }],
       "raw value must appear verbatim when no render function is declared on the catalog entry");
@@ -591,18 +595,21 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
 
     // Degenerate catalog: a value-centric option declared with `defaultValue: undefined` and enabled at a scope that carries no explicit value. The option is enabled
     // per the user's choice but there is no value the system can display, so logFeature falls back to "<label> enabled." rather than emit "<label> enabled at ." which
-    // would mislead an operator. This is defensive plumbing; well-formed catalogs never reach this branch.
+    // would mislead an operator. This is defensive plumbing; well-formed catalogs never reach this branch. The bare device entry is a legacy dot entry, which also
+    // reads as a global value, so the global Disable ahead of it is what keeps the global level off and leaves the device as the level that turned the option on.
     const categories: FeatureCategoryEntry[] = [{ description: "Audio Options", name: "Audio" }];
     const options: Record<string, FeatureOptionEntry[]> = {
 
       Audio: [{ default: false, defaultValue: undefined, description: "Free-form profile.", name: "Profile" }]
     };
-    const fo = new FeatureOptions(categories, options, ["Enable.Audio.Profile.devA"]);
+    const fo = new FeatureOptions(categories, options, [ "Disable.Audio.Profile", "Enable.Audio.Profile.devA" ]);
     const log = capturingLog();
+    const pluginLog = capturingLog();
 
-    fo.logFeature("Audio.Profile", "Profile", log, "devA");
+    fo.logFeature({ device: { id: "devA", log }, label: "Profile", log: pluginLog, option: "Audio.Profile" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled.", params: ["Profile"] }]);
+    assert.deepEqual(pluginLog.entries, [], "the global Disable matches the default, so the global level writes nothing");
   });
 
   test("resolves every named built-in formatter from the registry and applies it to the rendered value", () => {
@@ -628,10 +635,10 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
 
         Test: [{ default: false, defaultValue: 0, description: "Test option.", name: "Knob", render: formatter }]
       };
-      const fo = new FeatureOptions(categories, options, ["Enable.Test.Knob." + storedValue]);
+      const fo = new FeatureOptions(categories, options, ["Enable.Test.Knob=" + storedValue]);
       const log = capturingLog();
 
-      fo.logFeature("Test.Knob", "Knob", log);
+      fo.logFeature({ label: "Knob", log, option: "Test.Knob" });
 
       assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Knob", expectedRender ] }],
         "formatter \"" + formatter + "\" must resolve from the registry and produce \"" + expectedRender + "\"");
@@ -672,7 +679,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(categories, options, ["Disable.Network.Mtu"]);
     const log = capturingLog();
 
-    fo.logFeature("Network.Mtu", "MTU", log);
+    fo.logFeature({ label: "MTU", log, option: "Network.Mtu" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s disabled.", params: ["MTU"] }]);
     assert.equal(renderCalls, 0, "render function must not be invoked when the option is disabled - the value is irrelevant");
@@ -691,7 +698,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(categories, options, ["Enable.Stream.Bandwidth"]);
     const log = capturingLog();
 
-    fo.logFeature("Stream.Bandwidth", "Bandwidth", log);
+    fo.logFeature({ label: "Bandwidth", log, option: "Stream.Bandwidth" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Bandwidth", "1.5 Mbps" ] }]);
   });
@@ -701,15 +708,17 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     // Value-centric scope interaction: a default-off option enabled at a specific device with an explicit value emits the enabled-at message for that device only;
     // a sibling device with no configuration resolves to the global default (disabled) and stays silent. This composes the scope-precedence logic in test()/value()
     // with the message-shape branching - both surfaces are individually tested elsewhere, this covers the interaction.
-    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.devA.75"]);
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.devA=75"]);
+    const log = capturingLog();
     const logDevA = capturingLog();
     const logDevB = capturingLog();
 
-    fo.logFeature("Audio.Volume", "Volume", logDevA, "devA");
-    fo.logFeature("Audio.Volume", "Volume", logDevB, "devB");
+    fo.logFeature({ device: { id: "devA", log: logDevA }, label: "Volume", log, option: "Audio.Volume" });
+    fo.logFeature({ device: { id: "devB", log: logDevB }, label: "Volume", log, option: "Audio.Volume" });
 
     assert.deepEqual(logDevA.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Volume", "75" ] }]);
     assert.deepEqual(logDevB.entries, [], "sibling device sees the global default (disabled) and stays silent");
+    assert.deepEqual(log.entries, [], "a setting made at a device never reaches the plugin's logger");
   });
 
   test("respects the controller scope for value-centric options when only the value axis deviates", () => {
@@ -722,12 +731,12 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
 
       Network: [{ default: true, defaultValue: "9000", description: "Jumbo MTU.", name: "Mtu" }]
     };
-    const fo = new FeatureOptions(categories, options, ["Enable.Network.Mtu.ctrl1.1500"]);
+    const fo = new FeatureOptions(categories, options, ["Enable.Network.Mtu.ctrl1=1500"]);
     const logCtrl = capturingLog();
     const logBare = capturingLog();
 
-    fo.logFeature("Network.Mtu", "MTU", logCtrl, undefined, "ctrl1");
-    fo.logFeature("Network.Mtu", "MTU", logBare);
+    fo.logFeature({ controller: { id: "ctrl1", log: logCtrl }, label: "MTU", log: logBare, option: "Network.Mtu" });
+    fo.logFeature({ label: "MTU", log: logBare, option: "Network.Mtu" });
 
     assert.deepEqual(logCtrl.entries, [{ level: "info", message: "%s set to %s.", params: [ "MTU", "1500" ] }]);
     assert.deepEqual(logBare.entries, [], "without the controller id the option resolves to the global default value and stays silent");
@@ -745,7 +754,7 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(categories, options, ["Enable.Motion.SmartDetect="]);
     const log = capturingLog();
 
-    fo.logFeature("Motion.SmartDetect", "Smart detections", log);
+    fo.logFeature({ label: "Smart detections", log, option: "Motion.SmartDetect" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled with an empty selection.", params: ["Smart detections"] }]);
   });
@@ -770,10 +779,401 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     const fo = new FeatureOptions(categories, options, ["Enable.Motion.SmartDetect="]);
     const log = capturingLog();
 
-    fo.logFeature("Motion.SmartDetect", "Smart detections", log);
+    fo.logFeature({ label: "Smart detections", log, option: "Motion.SmartDetect" });
 
     assert.deepEqual(log.entries, [{ level: "info", message: "%s set to an empty selection.", params: ["Smart detections"] }]);
     assert.equal(renderCalls, 0, "a plugin's renderer is never handed the empty string");
+  });
+});
+
+describe("FeatureOptions - logFeature (levels, loggers, and repeats)", () => {
+
+  // An owner the way a plugin hands one in - its scope identifier beside the logger its own lines belong in - with a capturing logger, so each test reads which
+  // logger a line reached.
+  const owner = (id: string): { id: string; log: CapturingLog } => ({ id, log: capturingLog() });
+
+  test("announces a global setting once, on the plugin's logger under the kind label, however many devices it governs", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect"]);
+    const log = capturingLog();
+    const devices = [ "devA", "devB", "devC" ].map((id) => owner(id));
+
+    for(const device of devices) {
+
+      fo.logFeature({ device, kindLabel: "Motion sensors", label: "Motion sensor", log, option: "Motion.Detect" });
+    }
+
+    assert.deepEqual(log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensors"] }]);
+
+    for(const device of devices) {
+
+      assert.deepEqual(device.log.entries, [], "device " + device.id + " restates the global setting and writes nothing");
+    }
+  });
+
+  test("announces a controller setting once per controller, on that controller's logger", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, [ "Enable.Motion.Sensitivity.ctrl1", "Enable.Motion.Sensitivity.ctrl2" ]);
+    const log = capturingLog();
+    const controllers = [ "ctrl1", "ctrl2" ].map((id) => owner(id));
+    const devices: { id: string; log: CapturingLog }[] = [];
+
+    for(const controller of controllers) {
+
+      for(const id of [ "devA", "devB" ]) {
+
+        const device = owner(controller.id + id);
+
+        devices.push(device);
+        fo.logFeature({ controller, device, kindLabel: "Motion sensitivity tuning", label: "Motion sensitivity", log, option: "Motion.Sensitivity" });
+      }
+    }
+
+    for(const controller of controllers) {
+
+      assert.deepEqual(controller.log.entries, [{ level: "info", message: "%s enabled.", params: ["Motion sensitivity tuning"] }], controller.id);
+    }
+
+    assert.deepEqual(log.entries, [], "a controller setting never reaches the plugin's logger");
+
+    for(const device of devices) {
+
+      assert.deepEqual(device.log.entries, [], "device " + device.id + " restates its controller's setting and writes nothing");
+    }
+  });
+
+  test("announces a device that turns off a globally enabled option on its own logger, and the global setting once for the rest", () => {
+
+    // Motion sensitivity defaults off. The global Enable is a setting of its own, announced once against the default; devA's Disable departs from that global
+    // setting rather than from the default, which is why it earns a line even though it matches the catalog.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, [ "Enable.Motion.Sensitivity", "Disable.Motion.Sensitivity.devA" ]);
+    const log = capturingLog();
+    const devA = owner("devA");
+    const devB = owner("devB");
+    const devC = owner("devC");
+
+    for(const device of [ devA, devB, devC ]) {
+
+      fo.logFeature({ device, kindLabel: "Motion sensitivity tuning", label: "Motion sensitivity", log, option: "Motion.Sensitivity" });
+    }
+
+    assert.deepEqual(devA.log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensitivity"] }]);
+    assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled.", params: ["Motion sensitivity tuning"] }]);
+    assert.deepEqual(devB.log.entries, []);
+    assert.deepEqual(devC.log.entries, []);
+  });
+
+  test("announces a controller that turns off a globally enabled option on the controller's logger, under the kind label", () => {
+
+    // Default off, global on, ctrl1 off. The device beneath ctrl1 inherits the controller's Disable rather than making one, so the line names the controller's level
+    // and writes through its logger. The device beneath ctrl2 inherits the global Enable, which is announced once on the plugin's logger.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, [ "Enable.Motion.Sensitivity", "Disable.Motion.Sensitivity.ctrl1" ]);
+    const log = capturingLog();
+    const ctrl1 = owner("ctrl1");
+    const ctrl2 = owner("ctrl2");
+    const devA = owner("devA");
+    const devB = owner("devB");
+
+    fo.logFeature({ controller: ctrl1, device: devA, kindLabel: "Motion sensitivity tuning", label: "Motion sensitivity", log, option: "Motion.Sensitivity" });
+    fo.logFeature({ controller: ctrl2, device: devB, kindLabel: "Motion sensitivity tuning", label: "Motion sensitivity", log, option: "Motion.Sensitivity" });
+
+    assert.deepEqual(ctrl1.log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensitivity tuning"] }]);
+    assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled.", params: ["Motion sensitivity tuning"] }]);
+    assert.deepEqual(ctrl2.log.entries, []);
+    assert.deepEqual(devA.log.entries, []);
+    assert.deepEqual(devB.log.entries, []);
+  });
+
+  test("leaves a device entry that restates its parent to the parent's line", () => {
+
+    // devA's value equals the global one, and devB's Disable equals its controller's. Neither device is where a setting was made, so each line names the parent,
+    // and the controller's line carries the plain label when no kind label is given.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS,
+      [ "Enable.Audio.Volume=75", "Enable.Audio.Volume.devA=75", "Disable.Motion.Detect.ctrl1", "Disable.Motion.Detect.devB" ]);
+    const log = capturingLog();
+    const ctrl1 = owner("ctrl1");
+    const devA = owner("devA");
+    const devB = owner("devB");
+
+    fo.logFeature({ device: devA, label: "Volume", log, option: "Audio.Volume" });
+    fo.logFeature({ controller: ctrl1, device: devB, label: "Motion sensor", log, option: "Motion.Detect" });
+
+    assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Volume", "75" ] }]);
+    assert.deepEqual(ctrl1.log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensor"] }]);
+    assert.deepEqual(devA.log.entries, []);
+    assert.deepEqual(devB.log.entries, []);
+  });
+
+  test("announces a value a device moves away from the global value as set to its rendered value, on the device's logger", () => {
+
+    // Default off, global enabled at 30, devA at 45. The device's boolean axis matches the global level it inherits, so its line takes the "set to" shape where a
+    // measurement against the catalog default would read "enabled at".
+    const categories: FeatureCategoryEntry[] = [{ description: "Audio Options", name: "Audio" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Audio: [{ default: false, defaultValue: 20, description: "Speaker volume.", name: "Volume", render: "percent" }]
+    };
+    const fo = new FeatureOptions(categories, options, [ "Enable.Audio.Volume=30", "Enable.Audio.Volume.devA=45" ]);
+    const log = capturingLog();
+    const devA = owner("devA");
+
+    fo.logFeature({ device: devA, kindLabel: "Speaker volume", label: "Volume", log, option: "Audio.Volume" });
+
+    assert.deepEqual(devA.log.entries, [{ level: "info", message: "%s set to %s.", params: [ "Volume", "45%" ] }]);
+    assert.deepEqual(log.entries, []);
+  });
+
+  test("announces through whichever owners a call names: a controller alone, a device alone, or neither", () => {
+
+    // A controller alone. ctrl1's value departs from the global one; ctrl2 inherits the global value, which departs from the default.
+    const foController = new FeatureOptions(CATEGORIES, OPTIONS, [ "Enable.Audio.Volume=60", "Enable.Audio.Volume.ctrl1=70" ]);
+    const controllerLog = capturingLog();
+    const ctrl1 = owner("ctrl1");
+    const ctrl2 = owner("ctrl2");
+
+    foController.logFeature({ controller: ctrl1, label: "Volume", log: controllerLog, option: "Audio.Volume" });
+    foController.logFeature({ controller: ctrl2, label: "Volume", log: controllerLog, option: "Audio.Volume" });
+
+    assert.deepEqual(ctrl1.log.entries, [{ level: "info", message: "%s set to %s.", params: [ "Volume", "70" ] }]);
+    assert.deepEqual(ctrl2.log.entries, []);
+    assert.deepEqual(controllerLog.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Volume", "60" ] }]);
+
+    // A device alone. devA's Disable is its own, and devB inherits the default.
+    const foDevice = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect.devA"]);
+    const deviceLog = capturingLog();
+    const devA = owner("devA");
+    const devB = owner("devB");
+
+    foDevice.logFeature({ device: devA, label: "Motion sensor", log: deviceLog, option: "Motion.Detect" });
+    foDevice.logFeature({ device: devB, label: "Motion sensor", log: deviceLog, option: "Motion.Detect" });
+
+    assert.deepEqual(devA.log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensor"] }]);
+    assert.deepEqual(devB.log.entries, []);
+    assert.deepEqual(deviceLog.entries, []);
+
+    // Neither. The global setting against the catalog default, announced once on the plugin's logger.
+    const foGlobal = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Motion.Sensitivity"]);
+    const globalLog = capturingLog();
+
+    foGlobal.logFeature({ label: "Motion sensitivity", log: globalLog, option: "Motion.Sensitivity" });
+    foGlobal.logFeature({ label: "Motion sensitivity", log: globalLog, option: "Motion.Sensitivity" });
+
+    assert.deepEqual(globalLog.entries, [{ level: "info", message: "%s enabled.", params: ["Motion sensitivity"] }]);
+  });
+
+  test("reads a device-only option at the device alone, ignoring its controller and global entries", () => {
+
+    // The global and controller entries sit at levels the option does not declare, so resolution skips them from every vantage and they earn no line. Only an entry
+    // at the device itself departs from the default.
+    const fo = new FeatureOptions(SCOPED_CATEGORIES, SCOPED_OPTIONS,
+      [ "Enable.Scoped.DeviceOnly", "Enable.Scoped.DeviceOnly.ctrl1", "Enable.Scoped.DeviceOnly.devB" ]);
+    const log = capturingLog();
+    const ctrl1 = owner("ctrl1");
+    const devA = owner("devA");
+    const devB = owner("devB");
+
+    fo.logFeature({ controller: ctrl1, device: devA, label: "Device-only feature", log, option: "Scoped.DeviceOnly" });
+    fo.logFeature({ controller: ctrl1, device: devB, label: "Device-only feature", log, option: "Scoped.DeviceOnly" });
+
+    assert.deepEqual(devB.log.entries, [{ level: "info", message: "%s enabled.", params: ["Device-only feature"] }]);
+    assert.deepEqual(devA.log.entries, []);
+    assert.deepEqual(ctrl1.log.entries, []);
+    assert.deepEqual(log.entries, []);
+  });
+
+  test("writes each line once, keyed by its level, owner, option, and label", () => {
+
+    // A repeated call is silent.
+    const foRepeat = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect.devA"]);
+    const repeatLog = capturingLog();
+    const devA = owner("devA");
+
+    foRepeat.logFeature({ device: devA, label: "Motion sensor", log: repeatLog, option: "Motion.Detect" });
+    foRepeat.logFeature({ device: devA, label: "Motion sensor", log: repeatLog, option: "Motion.Detect" });
+
+    assert.deepEqual(devA.log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensor"] }], "a repeat is silent");
+
+    // Distinct kind labels are distinct lines, because a line carries its label: a global setting each kind of device announces under its own label is written once
+    // per label.
+    const foKinds = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect"]);
+    const kindsLog = capturingLog();
+
+    foKinds.logFeature({ device: owner("cam1"), kindLabel: "Camera motion sensors", label: "Motion sensor", log: kindsLog, option: "Motion.Detect" });
+    foKinds.logFeature({ device: owner("bell1"), kindLabel: "Doorbell motion sensors", label: "Motion sensor", log: kindsLog, option: "Motion.Detect" });
+
+    assert.deepEqual(kindsLog.entries, [
+
+      { level: "info", message: "%s disabled.", params: ["Camera motion sensors"] },
+      { level: "info", message: "%s disabled.", params: ["Doorbell motion sensors"] }
+    ]);
+
+    // The key keeps its parts apart: X.A labelled "1B" and X.A1 labelled "B" would run together into one key if the option and the label were simply joined.
+    const categories: FeatureCategoryEntry[] = [{ description: "X Options", name: "X" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      X: [
+
+        { default: false, description: "Option A.", name: "A" },
+        { default: false, description: "Option A1.", name: "A1" }
+      ]
+    };
+    const foParts = new FeatureOptions(categories, options, [ "Enable.X.A", "Enable.X.A1" ]);
+    const partsLog = capturingLog();
+
+    foParts.logFeature({ label: "1B", log: partsLog, option: "X.A" });
+    foParts.logFeature({ label: "B", log: partsLog, option: "X.A1" });
+
+    assert.deepEqual(partsLog.entries, [
+
+      { level: "info", message: "%s enabled.", params: ["1B"] },
+      { level: "info", message: "%s enabled.", params: ["B"] }
+    ]);
+
+    // The option and the owner id fold case the way the readers do, so a repeat spelled in another case is still a repeat.
+    const foCase = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect.devA"]);
+    const caseLog = capturingLog();
+    const deviceLog = capturingLog();
+
+    foCase.logFeature({ device: { id: "devA", log: deviceLog }, label: "Motion sensor", log: caseLog, option: "Motion.Detect" });
+    foCase.logFeature({ device: { id: "DEVA", log: deviceLog }, label: "Motion sensor", log: caseLog, option: "MOTION.DETECT" });
+
+    assert.deepEqual(deviceLog.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensor"] }], "a case variant is a repeat");
+  });
+
+  test("ends a repeat at the level that named its line, so no level above it speaks", () => {
+
+    // Default off, global on, ctrl1 off, devA on. devA's Enable departs from its controller's Disable, so devA names the line. A repeat that walked on past the
+    // written line would reach ctrl1, whose Disable departs from the global Enable, and write a disabled line on ctrl1's logger.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, [ "Enable.Motion.Sensitivity", "Disable.Motion.Sensitivity.ctrl1", "Enable.Motion.Sensitivity.devA" ]);
+    const log = capturingLog();
+    const ctrl1 = owner("ctrl1");
+    const devA = owner("devA");
+
+    fo.logFeature({ controller: ctrl1, device: devA, kindLabel: "Motion sensitivity tuning", label: "Motion sensitivity", log, option: "Motion.Sensitivity" });
+    fo.logFeature({ controller: ctrl1, device: devA, kindLabel: "Motion sensitivity tuning", label: "Motion sensitivity", log, option: "Motion.Sensitivity" });
+
+    assert.deepEqual(devA.log.entries, [{ level: "info", message: "%s enabled.", params: ["Motion sensitivity"] }]);
+    assert.deepEqual(ctrl1.log.entries, [], "a repeat never walks on to the controller's level");
+    assert.deepEqual(log.entries, [], "a repeat never walks on to the global level");
+  });
+
+  test("records a line only after its logger writes it, so the next call writes a line a throwing logger lost", () => {
+
+    // A line recorded before its logger ran would stay marked as written when the logger throws, and the next call for devA would be silent.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect.devA"]);
+    const log = capturingLog();
+    const throwingDevA = { id: "devA", log: { ...capturingLog(), info: (): never => { throw new Error("The device logger failed."); } } };
+    const devA = owner("devA");
+
+    assert.throws(() => fo.logFeature({ device: throwingDevA, label: "Motion sensor", log, option: "Motion.Detect" }), /The device logger failed\./);
+
+    fo.logFeature({ device: devA, label: "Motion sensor", log, option: "Motion.Detect" });
+
+    assert.deepEqual(devA.log.entries, [{ level: "info", message: "%s disabled.", params: ["Motion sensor"] }]);
+    assert.deepEqual(log.entries, []);
+  });
+
+  test("re-arms every line at each rebuild of the catalog or the configuration, and at nothing else", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS,
+      [ "Disable.Motion.Detect", "Enable.Motion.Sensitivity", "Enable.Audio.Volume.devA=60", "Enable.Audio.Volume.devB=70" ]);
+    const log = capturingLog();
+
+    // Announce the global Disable and answer how many lines the plugin's logger holds after it, so each step below reads as whether it re-armed the line.
+    const announce = (): number => {
+
+      fo.logFeature({ label: "Motion sensor", log, option: "Motion.Detect" });
+
+      return log.entries.length;
+    };
+
+    const rearms = (step: () => unknown): boolean => {
+
+      const before = log.entries.length;
+
+      step();
+
+      return announce() > before;
+    };
+
+    assert.equal(announce(), 1);
+    assert.equal(announce(), 1, "a repeat with nothing rebuilt is silent");
+
+    // Each mutator's reference-equal no-op leaves the configuration exactly as it was, so the lines measured against it stay written. Setting defaultReturnValue
+    // is no reset point.
+    const unchanged = fo.configuredOptions;
+
+    assert.equal(rearms(() => fo.clearOption({ option: "Network.Mtu" })), false, "clearOption's no-op");
+    assert.equal(rearms(() => fo.clearScope({ id: "devZ" })), false, "clearScope's no-op");
+    assert.equal(rearms(() => fo.setOption({ enabled: true, id: "devZ", option: "Network.Mtu" })), false, "setOption's no-op");
+    assert.equal(rearms(() => fo.moveScope({ from: "devZ", to: "devY" })), false, "moveScope's no-op");
+    assert.equal(fo.configuredOptions, unchanged, "every mutation above was a reference-equal no-op");
+    assert.equal(rearms(() => { fo.defaultReturnValue = true; }), false, "defaultReturnValue");
+
+    // Each setter rebuilds even when handed back what it already holds, and so does every mutator that changes the configuration.
+    const { categories, options } = fo;
+
+    assert.equal(rearms(() => { fo.categories = categories; }), true, "the categories setter");
+    assert.equal(rearms(() => { fo.options = options; }), true, "the options setter");
+    assert.equal(rearms(() => { fo.configuredOptions = [...unchanged]; }), true, "the configuredOptions setter");
+    assert.equal(rearms(() => fo.setOption({ enabled: true, option: "Network.Mtu" })), true, "a setOption that changes the configuration");
+    assert.equal(rearms(() => fo.clearOption({ option: "Motion.Sensitivity" })), true, "a clearOption that changes the configuration");
+    assert.equal(rearms(() => fo.clearScope({ id: "devA" })), true, "a clearScope that changes the configuration");
+    assert.equal(rearms(() => fo.moveScope({ from: "devB", to: "devC" })), true, "a moveScope that changes the configuration");
+    assert.deepEqual(log.entries, Array.from({ length: log.entries.length }, () => ({ level: "info", message: "%s disabled.", params: ["Motion sensor"] })),
+      "every re-armed announcement is the same line");
+  });
+
+  test("stays silent at every logger when every level matches the default, and measures an unknown option against defaultReturnValue", () => {
+
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS);
+    const log = capturingLog();
+    const ctrl1 = owner("ctrl1");
+    const devA = owner("devA");
+
+    for(const option of [ "Audio.Volume", "Motion.Detect", "Motion.Sensitivity", "Network.Bandwidth", "Network.Mtu" ]) {
+
+      fo.logFeature({ controller: ctrl1, device: devA, kindLabel: "Features", label: "Feature", log, option });
+    }
+
+    assert.deepEqual(log.entries, []);
+    assert.deepEqual(ctrl1.log.entries, []);
+    assert.deepEqual(devA.log.entries, []);
+
+    // An option the catalog does not carry takes defaultReturnValue as its default at every level, so devB's Disable departs from it and devC's inherited state
+    // matches it.
+    const foUnknown = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Unknown.Option.devB"]);
+    const unknownLog = capturingLog();
+    const devB = owner("devB");
+    const devC = owner("devC");
+
+    foUnknown.defaultReturnValue = true;
+    foUnknown.logFeature({ device: devB, label: "Mystery feature", log: unknownLog, option: "Unknown.Option" });
+    foUnknown.logFeature({ device: devC, label: "Mystery feature", log: unknownLog, option: "Unknown.Option" });
+
+    assert.deepEqual(devB.log.entries, [{ level: "info", message: "%s disabled.", params: ["Mystery feature"] }]);
+    assert.deepEqual(devC.log.entries, []);
+    assert.deepEqual(unknownLog.entries, []);
+  });
+
+  test("leaves a bare device enable of an option with no concrete value to the global value's line", () => {
+
+    // A degenerate declaration: value-centric with `defaultValue: undefined`. The device enables the option without a value beneath a global value, so it could
+    // only differ from the global level on the value axis, where it resolves nothing at all. A level resolving no value says nothing about that axis, so the device
+    // restates the global setting and the global line is the one written.
+    const categories: FeatureCategoryEntry[] = [{ description: "Audio Options", name: "Audio" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Audio: [{ default: false, defaultValue: undefined, description: "Free-form profile.", name: "Profile" }]
+    };
+    const fo = new FeatureOptions(categories, options, [ "Enable.Audio.Profile=studio", "Enable.Audio.Profile.devA" ]);
+    const log = capturingLog();
+    const devA = owner("devA");
+
+    fo.logFeature({ device: devA, label: "Profile", log, option: "Audio.Profile" });
+
+    assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Profile", "studio" ] }]);
+    assert.deepEqual(devA.log.entries, []);
   });
 });
 

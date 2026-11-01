@@ -539,6 +539,48 @@ export interface ValueListArgs {
   option: string;
 }
 
+/**
+ * Arguments for {@link FeatureOptions.logFeature}. Carries the option and the labels its line reads under, the plugin's logger, and the owners the caller is
+ * configuring - a device, a controller, or a device beneath its controller - each beside the logger its own lines belong in.
+ *
+ * @property controller - Optional. The controller being configured, or the one above the device being configured. A line naming the controller's level writes
+ *                        through its logger.
+ * @property device     - Optional. The device being configured. A line naming the device's level writes through its logger, under `label`.
+ * @property kindLabel  - Optional. The label a controller or global line carries, naming the setting for every device it governs rather than for the one in hand -
+ *                        "Motion sensors" beside a device's "Motion sensor". Defaults to `label`.
+ * @property label      - Human-readable label that prefixes a device line, and a controller or global line when no `kindLabel` is given. It should be a noun
+ *                        phrase like "Motion sensor" or "Read-only mode" so the rendered line reads naturally ("Motion sensor enabled." / "Read-only mode disabled.").
+ * @property log        - The plugin's logger, which a global line writes through. Every line is INFO-level; debug-level enumeration of the full feature surface
+ *                        is a separate concern handled by the caller.
+ * @property option     - Feature option to announce (same key shape as {@link FeatureOptions.test}; case-insensitive).
+ *
+ * @category Feature Options
+ */
+export interface LogFeatureArgs {
+
+  controller?: LogFeatureOwner;
+  device?: LogFeatureOwner;
+  kindLabel?: string;
+  label: string;
+  log: HomebridgePluginLogging;
+  option: string;
+}
+
+/**
+ * One owner {@link FeatureOptions.logFeature} reads an option at: a device or a controller, named by the scope identifier its configured entries address, beside
+ * the logger its lines belong in.
+ *
+ * @property id  - The device or controller scope identifier, in the form {@link FeatureOptions.test} takes it (case-insensitive).
+ * @property log - The logger a line naming this owner's level writes through, typically the owner's own prefixed logger.
+ *
+ * @category Feature Options
+ */
+export interface LogFeatureOwner {
+
+  id: string;
+  log: HomebridgePluginLogging;
+}
+
 // Internal parse result for a single configured-options entry. `primaryKey` is the raw lowercased tail, the address the entry spells, and every reader of it -
 // the index registration, the scope matcher, and the enumerator alike - passes over it when `valueOnly` says this entry has no scope reading to offer: a legacy
 // trailing segment naming one of the option's declared choices is that option's value, not an enable at a scope the value happens to spell. Honoring the mark at
@@ -2160,7 +2202,8 @@ function scopedEntry(
 /**
  * Resolve a feature option through the scope hierarchy in a single traversal. Returns the scope where the option was found, its enabled state, and the raw value
  * for value-centric options. This is the core resolution primitive that every higher-level query builds on - {@link FeatureOptions.test}, {@link FeatureOptions.scope},
- * {@link FeatureOptions.value}, and {@link FeatureOptions.logFeature} all consume the same `ResolvedOptionEntry` shape from one walk.
+ * and {@link FeatureOptions.value} each consume the same `ResolvedOptionEntry` shape from one walk, and {@link FeatureOptions.logFeature} reads several levels,
+ * each through the `test` and `value` readers built on it.
  *
  * Resolution precedence: device beats controller beats global beats default. An explicit entry at a higher-precedence scope short-circuits the lookup, so the
  * cost is O(1) in the configured-options array size.
@@ -2355,6 +2398,24 @@ function parseOptionNumeric(option: Nullable<string | undefined>, convert: (valu
   return convertedValue;
 }
 
+// One level's state of an option as logFeature compares it: whether the option is enabled there and, for an enabled value-centric option, the value it resolves
+// to. The value is absent for a disabled option and for one that is not value-centric, so a value only ever compares against another level's value.
+interface FeatureLogState {
+
+  enabled: boolean;
+  value?: string;
+}
+
+// One level a logFeature call reaches, beside the owner, logger, and label a line naming it carries. The owner id is absent at the global level, which has none.
+interface FeatureLogLevel {
+
+  id?: string;
+  label: string;
+  log: HomebridgePluginLogging;
+  scope: FeatureOptionScope;
+  state: FeatureLogState;
+}
+
 /**
  * FeatureOptions provides a hierarchical feature option system for plugins and applications.
  *
@@ -2410,6 +2471,10 @@ export class FeatureOptions {
   #configIndex: ConfigIndex;
   #configuredOptions: string[];
 
+  // The lines logFeature has written, one key per line. #reset is the one place it is cleared, and `defaultReturnValue` is no reset point, so assigning it
+  // re-arms no line.
+  readonly #loggedFeatures = new Set<string>();
+
   /**
    * Create a new FeatureOptions instance.
    *
@@ -2429,6 +2494,16 @@ export class FeatureOptions {
     this.#configuredOptions = configuredOptions;
     this.#configIndex = buildConfigIndex(this.#catalog, configuredOptions);
     this.defaultReturnValue = false;
+  }
+
+  // The one rebuild of the derived state after construction: install a catalog - the current one unless a setter hands in a new one - rebuild the config index over
+  // it and the current configured options, and re-arm every line logFeature has written, since a changed catalog or configuration can move what each level earns.
+  // Every setter and every mutator that changes the configuration rebuilds through here, so no rebuild can leave a line suppressed against state that is gone.
+  #reset(catalog: CatalogIndex = this.#catalog): void {
+
+    this.#catalog = catalog;
+    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
+    this.#loggedFeatures.clear();
   }
 
   /**
@@ -2578,30 +2653,116 @@ export class FeatureOptions {
     return isValueOption(this.#catalog, option);
   }
 
+  // One level's state of an option, read through the public readers alone so each level resolves exactly what `test` and `value` answer from that vantage. An
+  // enabled value-centric option with nothing stored resolves its registered default, and `valueDefault` answers the declaration in string form, so the stringified
+  // user input the registry stores and a catalog default typed as `number | string` always compare as strings. `value` answers null for an option that is not
+  // value-centric and `valueDefault` undefined, so such an option carries no value, exactly as a disabled one does.
+  #featureState(option: string, device?: string, controller?: string): FeatureLogState {
+
+    const enabled = this.test(option, device, controller);
+
+    return { enabled, value: enabled ? (this.value(option, device, controller) ?? this.valueDefault(option)) : undefined };
+  }
+
+  // The line one level's state earns against the state it inherits, as the arguments a logger takes, or undefined where the level earns none. This one statement of
+  // the deviation test serves the walk and the message alike, so logFeature can never name a level whose line would come out silent.
+  #deviationLine({ inherited, label, option, state }: {
+
+    inherited: FeatureLogState;
+    label: string;
+    option: string;
+    state: FeatureLogState;
+  }): readonly [message: string, label: string, value?: string] | undefined {
+
+    const booleanDeviates = state.enabled !== inherited.enabled;
+
+    // Disabled: a line only when the level turned off something it inherits on. Value-centric options collapse to the same shape here - the value is irrelevant
+    // when the option is off, and the operator only needs to know it was disabled.
+    if(!state.enabled) {
+
+      return booleanDeviates ? [ "%s disabled.", label ] : undefined;
+    }
+
+    // Enabled. For plain boolean options that is the whole story.
+    if(!this.isValue(option)) {
+
+      return booleanDeviates ? [ "%s enabled.", label ] : undefined;
+    }
+
+    // Enabled, value-centric option. The value axis deviates when the level resolves a value and it differs from the one it inherits. A level that resolves no
+    // value says nothing about the value axis, so it deviates only where its enabled state does - a device enabled bare beneath a global value restates the global
+    // setting rather than making one.
+    const valueDeviates = (state.value !== undefined) && (state.value !== inherited.value);
+
+    if(!booleanDeviates && !valueDeviates) {
+
+      return undefined;
+    }
+
+    // Defensive fallback for the degenerate case of a value-centric catalog entry with no concrete value at this level - no registered default and no explicit value
+    // where the level resolves. The option is enabled per the user's choice but there is nothing meaningful to render after "at"; emitting "<label> enabled at ."
+    // would mislead a reader, so we collapse to the boolean-axis message shape and let the catalog declaration's malformed-ness surface elsewhere.
+    if(state.value === undefined) {
+
+      return [ "%s enabled.", label ];
+    }
+
+    // A list resolving to the empty selection is stated in words rather than rendered, because there is nothing to put after "at" or "to" and a catalog-declared
+    // renderer is written for the values the option offers, not for their absence. This resolves ahead of the renderer so no plugin's formatter is handed the
+    // empty string; every option storing a single value keeps the reading below, empty answers included.
+    if(!state.value.length && isMultipleOption(this.#catalog.optionsByName[option.toLowerCase()])) {
+
+      return [ booleanDeviates ? "%s enabled with an empty selection." : "%s set to an empty selection.", label ];
+    }
+
+    const renderedValue = this.#catalog.renderers[option.toLowerCase()]?.(state.value) ?? state.value;
+
+    // Message shape splits on which axis deviated: "enabled at" when the level turned the feature on (boolean axis crossed), "set to" when only the value moved away
+    // from the one it inherits. Each form carries the effective value, since for value-centric options the value is what the operator most needs to see.
+    if(booleanDeviates) {
+
+      return [ "%s enabled at %s.", label, renderedValue ];
+    }
+
+    return [ "%s set to %s.", label, renderedValue ];
+  }
+
   /**
-   * Emit an INFO-level log line for a feature option, but only when the user's effective configuration deviates from the declared default.
+   * Announce a feature option's setting at INFO level, once, at the level the user made it, and only where it departs from what that level inherits.
    *
    * This is the executable form of the project-wide startup-log convention: restating a default is log noise, and deviations should be reported in both directions - a
    * default-off feature the user turned on, a default-on feature the user turned off, and a value the user customized away from the registered default. Callers pass
-   * the option key and a human-readable label; this method handles the direction detection and the message synthesis so every plugin emits the same shape from one
-   * place. If the convention ever evolves, every call site picks up the change without any source modification.
+   * the option key, its labels, and the loggers; this method handles the level, the direction detection, the message synthesis, and the repeat suppression so every
+   * plugin emits the same shape from one place. If the convention ever evolves, every call site picks up the change without any source modification.
+   *
+   * The caller names the owners it is configuring - a device, a controller, a device beneath its controller, or no owner at all - and the call reads the option at
+   * each level they reach through {@link FeatureOptions.test} and {@link FeatureOptions.value}: the device as it resolves beneath its controller, the controller on
+   * its own, the global level, and the catalog default above them all. The walk runs lowest first, comparing each level with the one above it, and the first level
+   * that differs from what it inherits is where the setting was made, so that level names the line. A device line writes through the device's logger under
+   * `label`; a controller line writes through the controller's logger and a global line through the plugin's, each under `kindLabel` when the caller supplies one.
+   * A level that restates the one above it - a device entry equal to the global one - is not where the setting was made and names nothing, and a call where every
+   * level matches the catalog default is silent.
+   *
+   * Each line is written once. A written line is remembered by its level, its owner, the option, and the label it carried, so the devices a global or controller
+   * setting governs announce it once between them and a repeated call stays silent. Changing the catalog or the configured options - through any setter, or through
+   * a mutator that changes the configuration - re-arms every line, since what each level earns may have moved; a mutator that changes nothing re-arms nothing.
    *
    * Polymorphic over option type, mirroring how {@link FeatureOptions.test} and {@link FeatureOptions.value} already dispatch on whether the option is value-centric.
-   * The distinct emitted-line shapes, across these state combinations:
+   * The distinct emitted-line shapes, with the named level's state measured against the state it inherits:
    *
-   * | Option type      | User state vs. default                                  | Emitted line                       |
+   * | Option type      | Level state vs. inherited state                         | Emitted line                       |
    * |------------------|---------------------------------------------------------|------------------------------------|
-   * | Boolean          | matches default                                         | (silent)                           |
-   * | Boolean          | default off, enabled                                    | `<label> enabled.`                 |
-   * | Boolean          | default on, disabled                                    | `<label> disabled.`                |
+   * | Boolean          | matches                                                 | (silent)                           |
+   * | Boolean          | inherited off, enabled                                  | `<label> enabled.`                 |
+   * | Boolean          | inherited on, disabled                                  | `<label> disabled.`                |
    * | Value-centric    | both axes match                                         | (silent)                           |
-   * | Value-centric    | default on, disabled                                    | `<label> disabled.`                |
-   * | Value-centric    | default off, enabled (value matches or differs)         | `<label> enabled at <value>.`      |
-   * | Value-centric    | default on, enabled, value differs from declared default | `<label> set to <value>.`          |
+   * | Value-centric    | inherited on, disabled                                  | `<label> disabled.`                |
+   * | Value-centric    | inherited off, enabled (value matches or differs)       | `<label> enabled at <value>.`      |
+   * | Value-centric    | inherited on, enabled, value differs                    | `<label> set to <value>.`          |
    *
-   * A value-centric option enabled with no resolvable value anywhere - no catalog-declared default and no explicit value at any scope - collapses to the plain
-   * `<label> enabled.` line above rather than the `enabled at <value>` form, since there is nothing meaningful to render after "at" (see the defensive fallback in
-   * the implementation below).
+   * A value-centric option enabled with no resolvable value at its level - no catalog-declared default and no explicit value where the level resolves - collapses
+   * to the plain `<label> enabled.` line above rather than the `enabled at <value>` form, since there is nothing meaningful to render after "at". A level resolving
+   * no value says nothing about the value axis, so it differs from the level above only where its enabled state does.
    *
    * An option declaring {@link FeatureOptionEntry.multiple} that resolves to the empty selection keeps the same axis split and states the emptiness in words:
    * `<label> enabled with an empty selection.` where the boolean axis deviated, `<label> set to an empty selection.` where only the value axis did. Saying it
@@ -2610,106 +2771,80 @@ export class FeatureOptions {
    * Value rendering consults the catalog-declared {@link FeatureOptionEntry.render} when present; otherwise the raw string returned by {@link FeatureOptions.value}
    * is used. The renderer may be either a {@link FeatureOptionFormatter} string naming a built-in formatter from the shared registry (preferred when the format exists
    * there, since this keeps the catalog JSON-serializable and lets every plugin share one implementation) or an inline function for bespoke cases. Declaring the
-   * renderer at the option's catalog entry keeps display formatting a single source of truth shared by `logFeature` and any future surface that displays the value.
+   * renderer at the option's catalog entry keeps display formatting a single source of truth that every surface displaying the value shares.
    *
-   * Scope precedence matches {@link FeatureOptions.test}: device wins over controller wins over global wins over default. Pass the scope arguments that describe the
-   * vantage point you want to log from - typically a device identifier for accessory-level configuration, optionally with a controller identifier when the plugin's
-   * controller scope is meaningful (e.g., UniFi Protect controllers).
-   *
-   * @param option        - Feature option to check (same key shape as {@link FeatureOptions.test}; case-insensitive).
-   * @param label         - Human-readable label that prefixes the emitted message. Used verbatim as the first `%s` argument; should be a noun phrase like "Motion sensor"
-   *                        or "Read-only mode" so the rendered line reads naturally ("Motion sensor enabled." / "Read-only mode disabled.").
-   * @param log           - The plugin's logger. The emitted message is INFO-level; debug-level enumeration of the full feature surface is a separate concern handled by
-   *                        the caller.
-   * @param device        - Optional device scope identifier, forwarded to {@link FeatureOptions.test}.
-   * @param controller    - Optional controller scope identifier, forwarded to {@link FeatureOptions.test}.
+   * @param args
+   * @param args.controller - Optional. The controller being configured, or the one above the device being configured, beside its logger. See {@link LogFeatureOwner}.
+   * @param args.device     - Optional. The device being configured, beside its logger. See {@link LogFeatureOwner}.
+   * @param args.kindLabel  - Optional. The label a controller or global line carries. Defaults to `label`.
+   * @param args.label      - Human-readable label that prefixes the emitted message, and the one a device line always carries. See {@link LogFeatureArgs}.
+   * @param args.log        - The plugin's logger, which a global line writes through.
+   * @param args.option     - Feature option to announce (case-insensitive).
    *
    * @example
    *
    * ```ts
-   * // Boolean option, inside a plugin's `configureMotion()` for a specific device:
-   * featureOptions.logFeature("Motion", "Motion sensor", log, device.mac);
+   * // A camera beneath its controller. A per-camera setting announces on the camera's logger, a controller-wide one on the controller's, and a global one on the
+   * // plugin's, each once however many cameras it governs.
+   * featureOptions.logFeature({ controller: { id: nvr.mac, log: nvr.log }, device: { id: camera.mac, log: camera.log }, kindLabel: "Motion sensors",
+   *   label: "Motion sensor", log, option: "Motion" });
    *
-   * // Value-centric option - the message shape adapts to which axis (boolean, value, or both) deviated:
-   * featureOptions.logFeature("Stream.Bandwidth", "Bandwidth", log, device.mac);
+   * // A device with no controller above it, announcing a setting made at the device or globally.
+   * featureOptions.logFeature({ device: { id: opener.mac, log: opener.log }, label: "Read-only mode", log, option: "Device.ReadOnly" });
    *
-   * // With a controller scope:
-   * featureOptions.logFeature("HKSV.Record", "HKSV recording", log, device.mac, controller.id);
+   * // A controller with no device in hand. The message shape adapts to which axis, boolean or value, deviated.
+   * featureOptions.logFeature({ controller: { id: controller.serial, log: controller.log }, label: "Polling interval", log, option: "Controller.Polling" });
+   *
+   * // No owner at all: the global setting against the catalog default.
+   * featureOptions.logFeature({ label: "Price alerts", log, option: "Alerts.Price" });
    * ```
    */
-  public logFeature(option: string, label: string, log: HomebridgePluginLogging, device?: string, controller?: string): void {
+  public logFeature({ controller, device, kindLabel, label, log, option }: LogFeatureArgs): void {
 
-    const effective = this.test(option, device, controller);
+    const levels: FeatureLogLevel[] = [];
+
+    // The levels the call reaches, lowest first: the device as it resolves beneath its controller, the controller on its own, and the global level above them. A
+    // level the caller names no owner for takes no part in the walk.
+    if(device) {
+
+      levels.push({ id: device.id, label, log: device.log, scope: "device", state: this.#featureState(option, device.id, controller?.id) });
+    }
+
+    if(controller) {
+
+      levels.push({ id: controller.id, label: kindLabel ?? label, log: controller.log, scope: "controller",
+        state: this.#featureState(option, undefined, controller.id) });
+    }
+
+    levels.push({ label: kindLabel ?? label, log, scope: "global", state: this.#featureState(option) });
+
+    // The catalog default is the state the global level inherits. It closes the walk without ever naming a line of its own.
     const defaultEnabled = this.defaultValue(option);
-    const booleanDeviates = effective !== defaultEnabled;
+    const defaultState: FeatureLogState = { enabled: defaultEnabled, value: defaultEnabled ? this.valueDefault(option) : undefined };
 
-    // Disabled: emit only when the user turned off something whose default is on. Value-centric options collapse to the same shape here - the value is irrelevant
-    // when the option is off, and the operator only needs to know it was disabled.
-    if(!effective) {
+    // The first level, lowest first, that differs from the level above it is where the setting was made, so it names the line and the walk ends there whether or not
+    // the line is written. A level that restates what it inherits made no setting, and a call where no level differs is silent.
+    for(const [ index, level ] of levels.entries()) {
 
-      if(booleanDeviates) {
+      const line = this.#deviationLine({ inherited: levels[index + 1]?.state ?? defaultState, label: level.label, option, state: level.state });
 
-        log.info("%s disabled.", label);
+      if(!line) {
+
+        continue;
+      }
+
+      // The key folds case the way the readers do, so a repeat spelled differently is still a repeat, and it encodes its parts as a JSON array so no option and
+      // label can run together into another pair's key.
+      const key = JSON.stringify([ level.scope, level.id?.toLowerCase() ?? null, option.toLowerCase(), level.label ]);
+
+      if(!this.#loggedFeatures.has(key)) {
+
+        level.log.info(...line);
+        this.#loggedFeatures.add(key);
       }
 
       return;
     }
-
-    // Enabled. For plain boolean options that is the whole story.
-    if(!this.isValue(option)) {
-
-      if(booleanDeviates) {
-
-        log.info("%s enabled.", label);
-      }
-
-      return;
-    }
-
-    // Enabled, value-centric option. Resolve the effective value (an explicit user value when set, otherwise the registered catalog default) and compare against the
-    // declared default to detect value-axis deviation. We compare normalized strings because the registry stores stringified user input while the catalog's defaultValue
-    // is typed as `number | string`; coercing both to string is the one normalization that makes the comparison total.
-    const declaredDefault = this.valueDefault(option);
-    const effectiveValue = this.value(option, device, controller) ?? declaredDefault;
-    const valueDeviates = (effectiveValue !== undefined) && (effectiveValue !== declaredDefault);
-
-    if(!booleanDeviates && !valueDeviates) {
-
-      return;
-    }
-
-    // Defensive fallback for the degenerate case of a value-centric catalog entry with no concrete value anywhere - no registered default and no explicit value at any
-    // scope. The option is enabled per the user's choice but there is nothing meaningful to render after "at"; emitting "<label> enabled at ." would mislead a reader,
-    // so we collapse to the boolean-axis message shape and let the catalog declaration's malformed-ness surface elsewhere.
-    if(effectiveValue === undefined) {
-
-      log.info("%s enabled.", label);
-
-      return;
-    }
-
-    // A list resolving to the empty selection is stated in words rather than rendered, because there is nothing to put after "at" or "to" and a catalog-declared
-    // renderer is written for the values the option offers, not for their absence. This resolves ahead of the renderer so no plugin's formatter is handed the
-    // empty string; every option storing a single value keeps the reading below, empty answers included.
-    if(!effectiveValue.length && isMultipleOption(this.#catalog.optionsByName[option.toLowerCase()])) {
-
-      log.info(booleanDeviates ? "%s enabled with an empty selection." : "%s set to an empty selection.", label);
-
-      return;
-    }
-
-    const renderedValue = this.#catalog.renderers[option.toLowerCase()]?.(effectiveValue) ?? effectiveValue;
-
-    // Message shape splits on which axis deviated: "enabled at" when the user turned the feature on (boolean axis crossed), "set to" when only the value moved away
-    // from the registered default. Both forms always carry the effective value, since for value-centric options the value is what the operator most needs to see.
-    if(booleanDeviates) {
-
-      log.info("%s enabled at %s.", label, renderedValue);
-
-      return;
-    }
-
-    log.info("%s set to %s.", label, renderedValue);
   }
 
   /**
@@ -2738,8 +2873,8 @@ export class FeatureOptions {
 
     const next = applyClearOption({ args, catalog: this.#catalog, configuredOptions: this.#configuredOptions });
 
-    // Reference-stable no-op: nothing matched, so the array and the index are already coherent. Skip the rebuild and preserve the array reference so callers
-    // holding a snapshot see a stable identity for unchanged state.
+    // Reference-stable no-op: nothing matched, so the array, the index, and the lines logFeature has written are already coherent. Skip the reset and preserve
+    // the array reference so callers holding a snapshot see a stable identity for unchanged state.
     if(next === this.#configuredOptions) {
 
       return;
@@ -2749,8 +2884,8 @@ export class FeatureOptions {
     // field keeps the historically mutable type its consumers depend on. See setOption below for the same cast at the other mutation site.
     this.#configuredOptions = next as string[];
 
-    // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.
-    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
+    // The catalog is unchanged across config mutations, so the reset keeps it, rebuilding the index and re-arming logFeature for the new configuration.
+    this.#reset();
   }
 
   /**
@@ -2776,8 +2911,8 @@ export class FeatureOptions {
 
     const next = applyClearScope({ args, catalog: this.#catalog, configuredOptions: this.#configuredOptions });
 
-    // Reference-stable no-op: nothing was at the scope, so the array and the index are already coherent. Skip the rebuild and preserve the array reference so
-    // callers holding a snapshot see a stable identity for unchanged state.
+    // Reference-stable no-op: nothing was at the scope, so the array, the index, and the lines logFeature has written are already coherent. Skip the reset and
+    // preserve the array reference so callers holding a snapshot see a stable identity for unchanged state.
     if(next === this.#configuredOptions) {
 
       return;
@@ -2786,8 +2921,8 @@ export class FeatureOptions {
     // Same readonly-to-mutable cast rationale as clearOption above.
     this.#configuredOptions = next as string[];
 
-    // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.
-    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
+    // The catalog is unchanged across config mutations, so the reset keeps it, rebuilding the index and re-arming logFeature for the new configuration.
+    this.#reset();
   }
 
   /**
@@ -2827,8 +2962,8 @@ export class FeatureOptions {
 
     const next = applySetOption({ args, catalog: this.#catalog, configuredOptions: this.#configuredOptions });
 
-    // Reference-stable no-op: a scoped enable that reduced to a clear and found nothing to drop leaves the array and the index already coherent. Skip the
-    // rebuild and preserve the array reference so callers holding a snapshot see a stable identity for unchanged state.
+    // Reference-stable no-op: a scoped enable that reduced to a clear and found nothing to drop leaves the array, the index, and the lines logFeature has written
+    // already coherent. Skip the reset and preserve the array reference so callers holding a snapshot see a stable identity for unchanged state.
     if(next === this.#configuredOptions) {
 
       return;
@@ -2837,8 +2972,8 @@ export class FeatureOptions {
     // Same readonly-to-mutable cast rationale as clearOption above.
     this.#configuredOptions = next as string[];
 
-    // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.
-    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
+    // The catalog is unchanged across config mutations, so the reset keeps it, rebuilding the index and re-arming logFeature for the new configuration.
+    this.#reset();
   }
 
   /**
@@ -2875,8 +3010,8 @@ export class FeatureOptions {
 
     const next = applyMoveScope({ args, catalog: this.#catalog, configuredOptions: this.#configuredOptions });
 
-    // Reference-stable no-op: a same-scope move or a source carrying nothing leaves the array and the index already coherent, and it is the answer a caller
-    // reads as "nothing to write out".
+    // Reference-stable no-op: a same-scope move or a source carrying nothing leaves the array, the index, and the lines logFeature has written already coherent,
+    // and it is the answer a caller reads as "nothing to write out".
     if(next === this.#configuredOptions) {
 
       return false;
@@ -2885,8 +3020,8 @@ export class FeatureOptions {
     // Same readonly-to-mutable cast rationale as clearOption above.
     this.#configuredOptions = next as string[];
 
-    // Only the index depends on the configured-options array; the catalog-derived state is unchanged across config mutations and need not be touched here.
-    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
+    // The catalog is unchanged across config mutations, so the reset keeps it, rebuilding the index and re-arming logFeature for the new configuration.
+    this.#reset();
 
     return true;
   }
@@ -3175,10 +3310,9 @@ export class FeatureOptions {
   public set categories(category: FeatureCategoryEntry[]) {
 
     // The catalog derivation depends on categories, and the value-options registry (rebuilt by the catalog pass) feeds the index parser, so both stages must run
-    // in order. The class assembles a new catalog from the new categories + current options, then a new config index from the new catalog + current configured
-    // options.
-    this.#catalog = buildCatalogIndex(category, this.#catalog.options);
-    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
+    // in order. The class assembles a new catalog from the new categories + current options, and the reset installs it, builds a new config index from it + current
+    // configured options, and re-arms logFeature.
+    this.#reset(buildCatalogIndex(category, this.#catalog.options));
   }
 
   /**
@@ -3200,8 +3334,8 @@ export class FeatureOptions {
 
     this.#configuredOptions = options ?? [];
 
-    // The catalog-derived state is unchanged across config mutations; only the lookup index needs rebuilding.
-    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
+    // The catalog-derived state is unchanged across config mutations, so the reset keeps the catalog, rebuilding only the lookup index and re-arming logFeature.
+    this.#reset();
   }
 
   /**
@@ -3248,8 +3382,8 @@ export class FeatureOptions {
   public set options(options: Record<string, FeatureOptionEntry[]> | null | undefined) {
 
     // The catalog derivation depends on the option definitions, and the index parser consults the resulting value-options registry, so both stages must run in
-    // order. The class assembles a new catalog from the current categories + new options, then a new config index from the new catalog + current configured options.
-    this.#catalog = buildCatalogIndex(this.#catalog.categories, options ?? {});
-    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
+    // order. The class assembles a new catalog from the current categories + new options, and the reset installs it, builds a new config index from it + current
+    // configured options, and re-arms logFeature.
+    this.#reset(buildCatalogIndex(this.#catalog.categories, options ?? {}));
   }
 }

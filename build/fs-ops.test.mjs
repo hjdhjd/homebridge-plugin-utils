@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { runToExit } from "./child-process.helpers.mjs";
 import { tmpdir } from "node:os";
 
 // The script under test, resolved from this file's own location so the suite runs correctly from any working directory.
@@ -101,23 +102,16 @@ async function snapshotTree(root) {
 }
 
 /**
- * Run one of the script's verbs with a fixture repository as its working directory. A non-zero exit is an outcome the refusal tests below assert on rather than a
- * failure of the run itself, so the callback's error is read for its exit status instead of being rethrown.
+ * Run one of the script's verbs with a fixture repository as its working directory, to its exit, so the refusal tests below can assert on a non-zero one.
  *
  * @param cwd  - The fixture repository the run resolves its own paths against.
  * @param verb - The subcommand to run.
  *
- * @returns The run's exit code and its captured stderr.
+ * @returns The run's exit code and its captured output, of which the rows read stderr, where the script reports.
  */
-function runVerb(cwd, verb) {
+async function runVerb(cwd, verb) {
 
-  return new Promise((resolve) => {
-
-    execFile(process.execPath, [ SCRIPT, verb ], { cwd }, (error, _stdout, stderr) => {
-
-      resolve({ code: (error === null) ? 0 : error.code, stderr });
-    });
-  });
+  return runToExit(process.execPath, [ SCRIPT, verb ], { cwd });
 }
 
 /**
@@ -140,7 +134,7 @@ async function makeAuditFixture({ exclude = true, init = true, name, tracked = {
   const root = join(fixtureRoot, name);
   const manifest = JSON.stringify({ name: "audit-fixture", version: "1.0.0" }) + "\n";
   const allowlist = "*\n!build/**\n!dist/**\n!package.json\n";
-  const npmignore = allowlist + (exclude ? "build/**/*.test.mjs\nbuild/**/test-*.mjs\n" : "");
+  const npmignore = allowlist + (exclude ? "build/**/*.helpers.mjs\nbuild/**/*.test.mjs\nbuild/**/test-*.mjs\n" : "");
   const baseline = { ".gitignore": "dist\n", ".npmignore": npmignore, "build/tool.mjs": "export const tool = 1;\n", "package.json": manifest,
     "src/index.ts": "export const index = 1;\n", "ui/panel.mjs": "export const panel = 1;\n", ...tracked };
   const run = promisify(execFile);
@@ -333,6 +327,17 @@ describe("fs-ops audit-package", () => {
 
     assert.equal(code, 1, "a test file reaches the package through the allowlist whether or not git tracks it");
     assert.ok(stderr.includes("build/g.test.mjs"), "the refusal must name the path");
+  });
+
+  test("a tracked test-helper file that would ship is refused", async () => {
+
+    // The test-only segments cover the code a suite shares as well as the suite itself, and a helper file ships by the same route. The ignore file's exclusions
+    // are left out for the reason the row above gives.
+    const root = await makeAuditFixture({ exclude: false, name: "audit-test-helpers", tracked: { "build/i.helpers.mjs": "export const helper = 1;\n" } });
+    const { code, stderr } = await runVerb(root, "audit-package");
+
+    assert.equal(code, 1, "a test-helper file ships exactly as a suite file does, and is refused the same way");
+    assert.ok(stderr.includes("build/i.helpers.mjs"), "the refusal must name the path");
   });
 
   test("a tracked test-infrastructure file that would ship is refused", async () => {

@@ -18,14 +18,24 @@
 
 /* HomeKit's naming rule, stated once as the character classes it is built from, so validateName() and sanitizeName() read one definition and cannot drift apart. A
  * name starts with a letter or number, ends with a letter, number, or period, and in between holds only letters, numbers, spaces, and HomeKit's permitted punctuation.
- * No character in a name may be pictographic, a letter Unicode also marks pictographic included, so the letter-and-number class subtracts every pictograph and every
- * class below is built on it: the validator and the sanitizer read the exclusion from the same classes rather than from a check of their own. Each constant is a
- * whole class in the v flag's set notation, which is what lets the patterns below nest, subtract, and negate them. A one-character name is its own start and end, so
- * a single letter or number is a complete name.
+ * No character in a name may be pictographic, a letter Unicode also marks pictographic included. Each class is therefore letters and numbers with its own
+ * punctuation, every pictograph subtracted from the whole class, and nameClass() composes that shape for each of them, so the validator and the sanitizer read the
+ * exclusion from the same classes rather than from a check of their own. Each constant is a whole class in the v flag's set notation, which is what lets the
+ * patterns below negate them. A one-character name is its own start and end, so a single letter or number is a complete name.
+ *
+ * The subtraction is outermost, applied once to the whole class, rather than to a letter-and-number class nested inside a union with the punctuation.
+ * JavaScriptCore, Safari's engine, computes a subtracted class nested inside a union wrongly: the nested set loses every code point above U+FFFF and gains U+0000,
+ * and a hyphen placed right after it is refused outright, which fails the whole module's load. With the subtraction outermost, JavaScriptCore and V8 compute the
+ * same set.
  */
-const NAME_START_CHARACTERS = "[[\\p{L}\\p{N}]--\\p{Extended_Pictographic}]";
-const NAME_END_CHARACTERS = "[" + NAME_START_CHARACTERS + "\\.]";
-const NAME_CHARACTERS = "[" + NAME_START_CHARACTERS + "\\-\"'.,#& ]";
+function nameClass(members: string): string {
+
+  return "[[\\p{L}\\p{N}" + members + "]--\\p{Extended_Pictographic}]";
+}
+
+const NAME_START_CHARACTERS = nameClass("");
+const NAME_END_CHARACTERS = nameClass("\\.");
+const NAME_CHARACTERS = nameClass("\\-\"'.,#& ");
 
 // Validates a name against HomeKit's naming conventions. Compiled once at module scope since this sits on the fast path of sanitizeName(). The end class is optional
 // after the start class, which is what lets one character that may both start and end a name stand alone.

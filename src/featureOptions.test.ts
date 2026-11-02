@@ -595,14 +595,14 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
 
     // Degenerate catalog: a value-centric option declared with `defaultValue: undefined` and enabled at a scope that carries no explicit value. The option is enabled
     // per the user's choice but there is no value the system can display, so logFeature falls back to "<label> enabled." rather than emit "<label> enabled at ." which
-    // would mislead an operator. This is defensive plumbing; well-formed catalogs never reach this branch. The bare device entry is a legacy dot entry, which also
-    // reads as a global value, so the global Disable ahead of it is what keeps the global level off and leaves the device as the level that turned the option on.
+    // would mislead an operator. This is defensive plumbing; well-formed catalogs never reach this branch. The trailing dot enables the device with no value, and the
+    // global Disable ahead of it keeps the global level off, which leaves the device as the level that turned the option on.
     const categories: FeatureCategoryEntry[] = [{ description: "Audio Options", name: "Audio" }];
     const options: Record<string, FeatureOptionEntry[]> = {
 
       Audio: [{ default: false, defaultValue: undefined, description: "Free-form profile.", name: "Profile" }]
     };
-    const fo = new FeatureOptions(categories, options, [ "Disable.Audio.Profile", "Enable.Audio.Profile.devA" ]);
+    const fo = new FeatureOptions(categories, options, [ "Disable.Audio.Profile", "Enable.Audio.Profile.devA." ]);
     const log = capturingLog();
     const pluginLog = capturingLog();
 
@@ -1158,7 +1158,7 @@ describe("FeatureOptions - logFeature (levels, loggers, and repeats)", () => {
 
   test("leaves a bare device enable of an option with no concrete value to the global value's line", () => {
 
-    // A degenerate declaration: value-centric with `defaultValue: undefined`. The device enables the option without a value beneath a global value, so it could
+    // A degenerate declaration: value-centric with `defaultValue: undefined`. The trailing dot enables the device without a value beneath a global value, so it could
     // only differ from the global level on the value axis, where it resolves nothing at all. A level resolving no value says nothing about that axis, so the device
     // restates the global setting and the global line is the one written.
     const categories: FeatureCategoryEntry[] = [{ description: "Audio Options", name: "Audio" }];
@@ -1166,7 +1166,7 @@ describe("FeatureOptions - logFeature (levels, loggers, and repeats)", () => {
 
       Audio: [{ default: false, defaultValue: undefined, description: "Free-form profile.", name: "Profile" }]
     };
-    const fo = new FeatureOptions(categories, options, [ "Enable.Audio.Profile=studio", "Enable.Audio.Profile.devA" ]);
+    const fo = new FeatureOptions(categories, options, [ "Enable.Audio.Profile=studio", "Enable.Audio.Profile.devA." ]);
     const log = capturingLog();
     const devA = owner("devA");
 
@@ -1263,10 +1263,10 @@ describe("FeatureOptions - value resolution", () => {
 
   test("returns undefined when the option is enabled at the device scope with no trailing value", () => {
 
-    // "Enable.Network.Mtu.devA" is double-registered by the config-index builder: as a device-scope entry (`network.mtu.deva` -> enabled with no value) **and** as a
-    // global value (`network.mtu` -> enabled with value "devA", because a single trailing segment at global scope IS the value). Looking up the option with the
-    // matching device id resolves to the device entry, which is enabled but carries no value - the "enabled, no value" branch in value() returns undefined.
-    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Network.Mtu.devA"]);
+    // "Enable.Network.Mtu.devA." - the trailing dot leaves an id followed by an empty value, which registers as a device-scope entry (`network.mtu.deva` -> enabled
+    // with an empty value). Looking up the option with the matching device id resolves to that entry, which is enabled but carries no value - the "enabled, no value"
+    // branch in value() returns undefined.
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Network.Mtu.devA."]);
 
     assert.equal(fo.value("Network.Mtu", "devA"), undefined);
   });
@@ -2075,7 +2075,7 @@ describe("FeatureOptions - shared parser correctness", () => {
 
     fo.clearOption({ option: "Audio" });
 
-    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume.50"], "the longer-option entry must survive a clear targeting the shorter prefix");
+    assert.deepEqual(fo.configuredOptions, ["Enable.Audio.Volume=50"], "the longer-option entry must survive a clear targeting the shorter prefix, modernized by it");
   });
 
   test("setOption replaces only entries that the shared parser resolves to the same target, not prefix collisions", () => {
@@ -2087,8 +2087,8 @@ describe("FeatureOptions - shared parser correctness", () => {
     // "Audio" and "Volume" both expand to bare category names; setOption against "Volume" must replace only the Volume entry.
     fo.setOption({ enabled: true, option: "Volume", value: 75 });
 
-    assert.deepEqual(fo.configuredOptions, [ "Enable.Audio.10", "Enable.Volume=75" ],
-      "the Audio entry is left untouched - it addresses a different lookup target than Volume");
+    assert.deepEqual(fo.configuredOptions, [ "Enable.Audio=10", "Enable.Volume=75" ],
+      "the Audio entry survives, modernized by the save - it addresses a different lookup target than Volume");
   });
 
   test("first-write-wins on duplicate entries is preserved when the index is built through the shared parser", () => {
@@ -2276,13 +2276,13 @@ describe("FeatureOptions - the value payload delimiter", () => {
 
   test("the legacy bare-with-id form keeps its global-value reading", () => {
 
-    // Locked in as it has always resolved, for configurations that predate the delimiter: the single trailing segment is read as this option's global value, while
-    // the primary key registers the same text as a scope. Both readings are live at once, which is the ambiguity the delimiter form exists to avoid.
+    // Locked in for configurations that predate the delimiter: on an option declaring no domain the single trailing segment is this option's global value and
+    // nothing else, so a device named like it resolves against that global entry rather than one of its own.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Enable.Audio.Volume.ABC123"]);
 
     assert.equal(fo.value("Audio.Volume"), "ABC123", "the trailing segment reads as the global value");
-    assert.equal(fo.test("Audio.Volume", "ABC123"), true, "and the same text registers a scope through the primary key");
-    assert.equal(fo.value("Audio.Volume", "ABC123"), undefined, "which carries no value of its own");
+    assert.equal(fo.scope("Audio.Volume", "ABC123"), "global", "a device spelling the same text has no entry of its own");
+    assert.equal(fo.value("Audio.Volume", "ABC123"), "ABC123", "so it reads the global value");
   });
 
   test("a legacy global value ending in base64 padding keeps its legacy reading", () => {
@@ -2370,10 +2370,10 @@ describe("FeatureOptions - the value payload delimiter", () => {
   });
 });
 
-/* The legacy dot form's single trailing segment spells two things at once: this option's global value, and an enable at a scope carrying that same name. The
- * option's own declaration is what settles which of them an entry meant - a segment naming one of the members the catalog declares inline is the value, a segment
- * naming none of them but spelling a legal identifier is the scope, and a segment that is neither keeps both readings live. The rows below walk all three, the
- * case fold the membership test matches on, and the forms beside them the reading must leave untouched.
+/* The legacy dot form's single trailing segment could spell this option's global value or an enable at a scope carrying that same name, and it gets one reading. An
+ * option's declaration is what settles which - a segment naming one of the members the catalog declares inline is the value, a segment naming none of them but
+ * spelling a legal identifier is the scope, a segment on a source name is the scope, and a segment on an option declaring no domain is the value. The rows below walk
+ * those, the case fold the membership test matches on, and the forms beside them the reading must leave untouched.
  */
 describe("FeatureOptions - the legacy dot form's trailing segment", () => {
 
@@ -2443,30 +2443,30 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
     assert.equal(fo.value("Video.Only"), null, "and no global value is registered - the option is default-off and unset at the global scope");
   });
 
-  test("an option whose domain a source derives, and one declaring no domain, keep both readings", () => {
+  test("an option whose domain a source derives reads the segment as the scope, and one declaring no domain reads it as the global value", () => {
 
-    // Neither offers members this side can compare against - a source's list lives on the page holding the device record - so the segment stays the ambiguity the
-    // "=" form exists to spell away, and the index goes on registering it as a value and as a scope alike.
+    // Neither offers members this side can compare against - a source's list lives on the page holding the device record - so the declaration itself decides. A
+    // source name says the option has a domain, so a segment is no value it can vouch for and is the device its author addressed; no declaration leaves the value.
     const sourced = pinnedWith(["Enable.Video.Sourced.High"]);
 
-    assert.equal(sourced.value("Video.Sourced"), "High", "the value reading is live");
-    assert.equal(sourced.scope("Video.Sourced", "High"), "device", "and so is the scope reading");
+    assert.equal(sourced.value("Video.Sourced"), null, "no global value registers on the source name");
+    assert.equal(sourced.scope("Video.Sourced", "High"), "device", "the segment is the scope it names");
 
     const undeclared = pinnedWith(["Enable.Video.Bitrate.High"]);
 
-    assert.equal(undeclared.value("Video.Bitrate"), "High", "an option declaring no choices reads the same way");
-    assert.equal(undeclared.scope("Video.Bitrate", "High"), "device", "with both readings live there too");
+    assert.equal(undeclared.value("Video.Bitrate"), "High", "an option declaring no choices reads the value");
+    assert.equal(undeclared.scope("Video.Bitrate", "High"), "global", "and addresses no scope at all");
   });
 
-  test("a segment the identifier rule turns away keeps both readings as well", () => {
+  test("a segment the identifier rule turns away is the value, with its raw tail on the index beside it", () => {
 
     // A base64 value's padding is the field case: it carries the delimiter, so no composer could address a scope spelling it. The catalog has nothing to say
-    // about this one - the grammar is what leaves the scope reading unwritable - so both keys stay on the index.
+    // about this one - the grammar is what leaves the scope reading unwritable - so the raw tail stays on the index, where no address can reach it.
     const catalog = buildCatalogIndex(PIN_CATEGORIES, PIN_OPTIONS);
     const configIndex = buildConfigIndex(catalog, ["Enable.Video.Only.ABC123=="]);
 
     assert.deepEqual(configIndex.get("video.only"), { enabled: true, value: "ABC123==" }, "the value reading");
-    assert.deepEqual(configIndex.get("video.only.abc123=="), { enabled: true }, "and the scope reading beside it");
+    assert.deepEqual(configIndex.get("video.only.abc123=="), { enabled: true }, "and the raw tail beside it, which no address reaches");
   });
 
   test("the delimiter form and a multi-segment tail read exactly as they always have", () => {
@@ -2489,12 +2489,12 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
     assert.equal(global.scope("Video.Only", "High"), "global", "which addresses no scope at all");
   });
 
-  test("an option the catalog names exactly like the narrowed tail reads the same way to the index and to the enumeration", () => {
+  test("an option the catalog names exactly like the tail owns the entry, to the index and to the enumeration alike", () => {
 
     /* The catalog a plugin holds while it converts a set of boolean toggles into one value option and carries both through a deprecation window: the tail of a
-     * legacy entry spells both a declared member of the value option and the name of the boolean beside it. The value-option walk never considers that boolean,
-     * so the tail narrows to the value, and what this asserts is that every reader says so. A reader that went on reporting the boolean as enabled would have
-     * the engine contradicting itself about one entry, which is the whole reason the parse result is shared.
+     * legacy entry spells a declared member of the value option as well as the name of the boolean beside it. The dotted form is the only spelling the boolean's
+     * entry has while the value has the "=" form, so the tail is the boolean's, and what this asserts is that every reader says so. A reader that went on
+     * reporting the value would have the engine contradicting itself about one entry, which is the whole reason the parse result is shared.
      */
     const categories: FeatureCategoryEntry[] = [{ description: "Video Options", name: "Video" }];
     const options: Record<string, FeatureOptionEntry[]> = {
@@ -2509,12 +2509,12 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
     const catalog = buildCatalogIndex(categories, options);
     const fo = new FeatureOptions(categories, structuredClone(options), [...configured]);
 
-    assert.equal(fo.value("Video.Stream"), "High", "the segment is the value option's value");
-    assert.equal(fo.test("Video.Stream.High"), false, "so the boolean of that name is not what the entry enables");
-    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream.High" })], [],
-      "and the enumeration reports nothing for it either, which is what agreeing with the index means here");
-    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream" })],
-      [{ enabled: true, id: "", value: "High" }], "the one record the entry yields is the value reading");
+    assert.equal(fo.value("Video.Stream"), null, "the value option carries no value");
+    assert.equal(fo.test("Video.Stream.High"), true, "because the boolean of that name is what the entry enables");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream" })], [],
+      "and the enumeration reports nothing for the value option, which is what agreeing with the index means here");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: configured, option: "Video.Stream.High" })],
+      [{ enabled: true, id: "" }], "the one record the entry yields is the boolean");
   });
 
   test("the deprecation-window catalog's scoped entry is the boolean's, not an id and a value for the option its name extends", () => {
@@ -2546,6 +2546,282 @@ describe("FeatureOptions - the legacy dot form's trailing segment", () => {
   });
 });
 
+/* Each row below holds one step of the order a legacy single trailing segment reads by, first match first: a segment carrying the delimiter, a tail naming a declared
+ * option exactly, an option declaring scopes without the global level, an option declaring choices, and everything else, with a segment carrying no content outside
+ * the order altogether. The rows read each entry through the lookup index, the enumerators, the normalizer and the transforms together, because the parse is the one
+ * statement of what an entry means and each of them has to say the same thing.
+ */
+describe("FeatureOptions - the order a legacy single trailing segment reads by", () => {
+
+  const ORDER_CATEGORIES: FeatureCategoryEntry[] = [{ description: "Picker Options", name: "Pick" }];
+
+  const ORDER_CHOICES = [ { label: "High", value: "High" }, { label: "Low", value: "Low" }, { label: "Padded", value: "E=" } ];
+
+  const ORDER_OPTIONS: Record<string, FeatureOptionEntry[]> = {
+
+    Pick: [
+
+      { default: false, defaultValue: "", description: "No declared domain and no declared scopes.", name: "Free" },
+      { default: false, defaultValue: "", description: "No declared domain, scopes carrying the global level.", name: "FreeGlobal", scopes: [ "device", "global" ] },
+      { choices: "sourced", default: false, defaultValue: "", description: "A domain a webUI source derives.", name: "Sourced" },
+      { choices: ORDER_CHOICES, default: false, defaultValue: "Low", description: "A domain declared inline.", name: "Inline" },
+      { default: false, defaultValue: "", description: "Scopes without the global level.", name: "DeviceOnly", scopes: ["device"] },
+      { choices: ORDER_CHOICES, default: false, defaultValue: "Low", description: "An inline domain without the global level.", name: "DeviceInline",
+        scopes: ["device"] },
+      { default: false, defaultValue: "", description: "A value option a boolean's name extends.", name: "Parent" },
+      { default: false, description: "The boolean extending that name.", name: "Parent.Child" }
+    ]
+  };
+
+  // One option per declaration the exclusions and the delimiter arm reach, with the lookup key each registers under.
+  const DECLARATIONS = [ { key: "pick.free", option: "Pick.Free" }, { key: "pick.inline", option: "Pick.Inline" }, { key: "pick.sourced", option: "Pick.Sourced" },
+    { key: "pick.deviceonly", option: "Pick.DeviceOnly" } ];
+
+  const catalog = buildCatalogIndex(ORDER_CATEGORIES, ORDER_OPTIONS);
+
+  const featureOptionsWith = (configured: readonly string[]): FeatureOptions => new FeatureOptions(ORDER_CATEGORIES, structuredClone(ORDER_OPTIONS), [...configured]);
+
+  const indexOf = (entry: string): unknown[] => [...buildConfigIndex(catalog, [entry]).entries()];
+
+  const recordsOf = (entry: string, option: string): unknown[] => [...enumerateConfiguredEntries({ catalog, configuredOptions: [entry], option })];
+
+  const walkOf = (entry: string, id: string): unknown[] => [...enumerateScopeEntries({ catalog, configuredOptions: [entry], id })];
+
+  // Assert everything that says an entry is a scoped enable alone, verbatim: the raw tail is its only key, a save leaves it as written, and each reader and transform
+  // reads it at the identity it names and nowhere else.
+  const assertScopedEnable = (entry: string, option: string, id: string): void => {
+
+    const configuredOptions = [entry];
+    const fo = featureOptionsWith([entry]);
+
+    assert.deepEqual(indexOf(entry), [[ option.toLowerCase() + "." + id.toLowerCase(), { enabled: true } ]], "the raw tail is the entry's only key");
+    assert.equal(normalizeConfiguredOptions(catalog, configuredOptions), configuredOptions, "a save leaves it as written");
+    assert.equal(fo.scope(option, id), "device", "it resolves at the identity it names");
+    assert.equal(fo.test(option, id), true, "enabled there");
+    assert.equal(fo.value(option, id), undefined, "with nothing stored");
+    assert.equal(fo.consolidatedValue({ device: id, option }), undefined, "and the consolidated read says the same");
+    assert.equal(fo.isScopeDevice(option, id), true, "the device level holds it");
+    assert.equal(fo.isScopeGlobal(option), false, "the global level does not");
+    assert.equal(fo.exists(option), false, "so nothing exists at the global level");
+    assert.deepEqual(recordsOf(entry, option), [{ enabled: true, id }], "the record carries the identity");
+    assert.deepEqual(walkOf(entry, id), [{ enabled: true, id, option }], "and the scope walk reports it");
+    assert.deepEqual(applyClearScope({ args: { id }, catalog, configuredOptions }), [], "forgetting the identity removes it");
+    assert.deepEqual(applyMoveScope({ args: { from: id, to: "devZ" }, catalog, configuredOptions }), [], "moving the identity forgets it, there being no value to write");
+    assert.deepEqual(applyClearOption({ args: { id, option }, catalog, configuredOptions }), [], "clearing the option at the identity removes it");
+    assert.deepEqual(applyClearOption({ args: { option }, catalog, configuredOptions }), configuredOptions, "a global clear keeps it");
+    assert.deepEqual(applySetOption({ args: { enabled: true, option, value: "x" }, catalog, configuredOptions }), [ entry, "Enable." + option + "=x" ],
+      "and a global write lands beside it");
+  };
+
+  // Assert everything that says an entry is the global value alone: the option's own name is its only key, and nothing reads it at the identity it spells.
+  const assertGlobalValue = (entry: string, option: string, segment: string): void => {
+
+    const configuredOptions = [entry];
+    const canonical = "Enable." + option + "=" + segment;
+    const fo = featureOptionsWith([entry]);
+
+    assert.deepEqual(indexOf(entry), [[ option.toLowerCase(), { enabled: true, value: segment } ]], "the option's own name is the entry's only key");
+    assert.equal(fo.value(option), segment, "the segment is the global value");
+    assert.equal(fo.value(option, segment), segment, "a device spelling it reads that global value");
+    assert.equal(fo.scope(option, segment), "global", "and resolves against the global entry");
+    assert.equal(fo.exists(option, segment), false, "because nothing exists at that identity");
+    assert.equal(fo.isScopeDevice(option, segment), false, "so the device level holds nothing");
+    assert.deepEqual(recordsOf(entry, option), [{ enabled: true, id: "", value: segment }], "the record is the global value");
+    assert.deepEqual(walkOf(entry, segment), [], "and no scope walk reports it");
+    assert.deepEqual(applyClearOption({ args: { option }, catalog, configuredOptions }), [], "a global clear removes it");
+    assert.deepEqual(applyClearOption({ args: { id: segment, option }, catalog, configuredOptions }), [canonical], "a clear at the identity keeps it, modernized");
+    assert.deepEqual(applyClearScope({ args: { id: segment }, catalog, configuredOptions }), [canonical], "and forgetting the identity keeps it too");
+    assert.equal(applyMoveScope({ args: { from: segment, to: "devZ" }, catalog, configuredOptions }), configuredOptions, "moving the identity moves nothing");
+    assert.deepEqual(applySetOption({ args: { enabled: true, id: segment, option, value: "V" }, catalog, configuredOptions }),
+      [ canonical, "Enable." + option + "." + segment + "=V" ], "a write at the identity keeps the global beside the new entry");
+  };
+
+  test("a segment carrying the delimiter is the global value under every declaration, and a save rewrites it", () => {
+
+    for(const { key, option } of DECLARATIONS) {
+
+      const entry = "Enable." + option + ".ABC==";
+
+      assert.deepEqual(indexOf(entry), [ [ key + ".abc==", { enabled: true } ], [ key, { enabled: true, value: "ABC==" } ] ],
+        "the value key beside a raw tail nothing can address");
+      assert.deepEqual(normalizeConfiguredOptions(catalog, [entry]), ["Enable." + option + "=ABC=="], "the rewrite states the value outright");
+      assert.deepEqual(recordsOf(entry, option), [{ enabled: true, id: "", value: "ABC==" }], "and the record is the global value");
+    }
+
+    assert.deepEqual(indexOf("Enable.Pick.Inline.E="), [[ "pick.inline", { enabled: true, value: "E=" } ]],
+      "an inline member carrying the delimiter is the value alone");
+    assert.deepEqual(normalizeConfiguredOptions(catalog, ["Enable.Pick.Inline.E="]), ["Enable.Pick.Inline=E="], "and a save rewrites it too");
+  });
+
+  test("a tail naming a declared option exactly is that option's entry, primary key alone and verbatim", () => {
+
+    const entry = "Enable.Pick.Parent.Child";
+    const configuredOptions = [entry];
+    const fo = featureOptionsWith([entry]);
+
+    assert.deepEqual(indexOf(entry), [[ "pick.parent.child", { enabled: true } ]], "the tail's own key alone");
+    assert.equal(normalizeConfiguredOptions(catalog, configuredOptions), configuredOptions, "a save leaves it as written");
+    assert.equal(fo.test("Pick.Parent.Child"), true, "the option the tail names is what the entry enables");
+    assert.equal(fo.value("Pick.Parent"), null, "the shorter value option carries no value");
+    assert.deepEqual(recordsOf(entry, "Pick.Parent"), [], "and has nothing configured");
+    assert.deepEqual(recordsOf(entry, "Pick.Parent.Child"), [{ enabled: true, id: "" }], "the one record is the named option's");
+  });
+
+  test("an option declaring scopes without the global level reads any segment as the scope it names", () => {
+
+    assertScopedEnable("Enable.Pick.DeviceOnly.dev1", "Pick.DeviceOnly", "dev1");
+  });
+
+  test("a declared member on an option without the global level is the scope it names too, since the option has no global value to carry it", () => {
+
+    assertScopedEnable("Enable.Pick.DeviceInline.High", "Pick.DeviceInline", "High");
+    assertScopedEnable("Enable.Pick.DeviceInline.dev1", "Pick.DeviceInline", "dev1");
+  });
+
+  test("an inline member is the value alone, verbatim", () => {
+
+    const entry = "Enable.Pick.Inline.High";
+    const configuredOptions = [entry];
+
+    assert.deepEqual(indexOf(entry), [[ "pick.inline", { enabled: true, value: "High" } ]], "the option's own name is the entry's only key");
+    assert.equal(normalizeConfiguredOptions(catalog, configuredOptions), configuredOptions, "a save leaves it as written");
+    assert.deepEqual(applyClearOption({ args: { id: "High", option: "Pick.Inline" }, catalog, configuredOptions }), configuredOptions,
+      "a clear at the identity it spells keeps it");
+    assert.deepEqual(applyClearOption({ args: { option: "Pick.Inline" }, catalog, configuredOptions }), [], "and a global clear removes it");
+  });
+
+  test("an inline non-member is a scoped enable alone, verbatim", () => {
+
+    assertScopedEnable("Enable.Pick.Inline.dev1", "Pick.Inline", "dev1");
+  });
+
+  test("any segment on a source name is a scoped enable alone, verbatim, even one spelling a likely value", () => {
+
+    assertScopedEnable("Enable.Pick.Sourced.dev1", "Pick.Sourced", "dev1");
+    assertScopedEnable("Enable.Pick.Sourced.High", "Pick.Sourced", "High");
+  });
+
+  test("a source name registers no global value, so another device reads the default rather than the segment", () => {
+
+    const fo = featureOptionsWith(["Enable.Pick.Sourced.dev1"]);
+
+    assert.equal(fo.scope("Pick.Sourced", "other"), "none", "nothing configured applies to another device");
+    assert.equal(fo.test("Pick.Sourced", "other"), false, "so it reads the catalog default");
+    assert.equal(fo.value("Pick.Sourced", "other"), null, "and no value at all");
+  });
+
+  test("a segment on an option declaring no domain is the global value alone, and a save rewrites it", () => {
+
+    assertGlobalValue("Enable.Pick.Free.dev1", "Pick.Free", "dev1");
+    assert.deepEqual(normalizeConfiguredOptions(catalog, ["Enable.Pick.Free.dev1"]), ["Enable.Pick.Free=dev1"], "the rewrite states the value outright");
+  });
+
+  test("a scopes list carrying the global level reads the same way as no list at all", () => {
+
+    assertGlobalValue("Enable.Pick.FreeGlobal.dev1", "Pick.FreeGlobal", "dev1");
+    assert.deepEqual(normalizeConfiguredOptions(catalog, ["Enable.Pick.FreeGlobal.dev1"]), ["Enable.Pick.FreeGlobal=dev1"], "and a save rewrites it the same way");
+  });
+
+  test("the rewrite re-reads as the entry it rewrites", () => {
+
+    const entry = ["Enable.Pick.Free.dev1"];
+    const rewritten = normalizeConfiguredOptions(catalog, entry);
+    const before = featureOptionsWith(entry);
+    const after = featureOptionsWith(rewritten);
+
+    assert.deepEqual(rewritten, ["Enable.Pick.Free=dev1"], "the canonical spelling");
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions: rewritten, option: "Pick.Free" })],
+      [...enumerateConfiguredEntries({ catalog, configuredOptions: entry, option: "Pick.Free" })], "the spellings enumerate alike");
+    assert.equal(after.value("Pick.Free"), before.value("Pick.Free"), "the global value is the same");
+    assert.equal(after.value("Pick.Free", "dev1"), before.value("Pick.Free", "dev1"), "a device spelling it reads the same");
+    assert.equal(after.scope("Pick.Free", "dev1"), before.scope("Pick.Free", "dev1"), "and resolves at the same level");
+  });
+
+  test("an undeclared name spelling the raw tail of a global value enumerates nothing", () => {
+
+    assert.deepEqual(recordsOf("Enable.Pick.Free.dev1", "Pick.Free.dev1"), [], "the entry has no scope reading to yield against a name it merely spells");
+  });
+
+  test("the feature's line goes to the global logger when the segment is the global value", () => {
+
+    const deviceLog = capturingLog();
+    const pluginLog = capturingLog();
+
+    featureOptionsWith(["Enable.Pick.Free.dev1"]).logFeature({ device: { id: "dev1", log: deviceLog }, label: "Free", log: pluginLog, option: "Pick.Free" });
+
+    assert.deepEqual(pluginLog.entries, [{ level: "info", message: "%s enabled at %s.", params: [ "Free", "dev1" ] }], "the global level is what made the setting");
+    assert.deepEqual(deviceLog.entries, [], "and the device restates it");
+  });
+
+  test("an empty segment stands outside the order, under every declaration", () => {
+
+    for(const { key, option } of DECLARATIONS) {
+
+      const entry = "Enable." + option + ".";
+      const configuredOptions = [entry];
+
+      assert.deepEqual(indexOf(entry), [ [ key + ".", { enabled: true } ], [ key, { enabled: true, value: "" } ] ], "the raw tail and the empty value each register");
+      assert.equal(normalizeConfiguredOptions(catalog, configuredOptions), configuredOptions, "and a save leaves it as written");
+    }
+  });
+
+  test("a segment of whitespace alone stands outside the order, under every declaration", () => {
+
+    for(const { key, option } of DECLARATIONS.filter((declaration) => declaration.option !== "Pick.Inline")) {
+
+      const entry = "Enable." + option + ". ";
+      const configuredOptions = [entry];
+
+      assert.deepEqual(indexOf(entry), [ [ key + ". ", { enabled: true } ], [ key, { enabled: true, value: " " } ] ], "the raw tail and the value each register");
+      assert.equal(normalizeConfiguredOptions(catalog, configuredOptions), configuredOptions, "and a save leaves it as written");
+    }
+
+    const inline = "Enable.Pick.Inline. ";
+    const configuredInline = [inline];
+
+    assert.deepEqual(indexOf(inline), [[ "pick.inline. ", { enabled: true } ]], "an inline list reads it as the non-member it is");
+    assert.equal(normalizeConfiguredOptions(catalog, configuredInline), configuredInline, "and a save leaves that as written too");
+  });
+
+  test("a walk at the id a whitespace segment spells reports nothing, where the per-option clear at that id drops the entry", () => {
+
+    const entry = "Enable.Pick.Free. ";
+    const configuredOptions = [entry];
+
+    assert.deepEqual(walkOf(entry, " "), [], "the value key claims the option the raw tail decodes under, so the walk reads the global value");
+    assert.equal(applyClearScope({ args: { id: " " }, catalog, configuredOptions }), configuredOptions, "forgetting the identity keeps the entry");
+    assert.deepEqual(applyClearOption({ args: { id: " ", option: "Pick.Free" }, catalog, configuredOptions }), [],
+      "while the per-option clear removes what the index holds there");
+  });
+
+  test("the trailing dot, the multi-segment tail, a disable and the global delimiter form stay outside the order", () => {
+
+    assert.deepEqual(indexOf("Enable.Pick.Free.dev1."), [ [ "pick.free.dev1.", { enabled: true } ], [ "pick.free.dev1", { enabled: true, value: "" } ] ],
+      "an id and an empty value");
+    assert.deepEqual(normalizeConfiguredOptions(catalog, ["Enable.Pick.Free.dev1."]), ["Enable.Pick.Free.dev1."], "which a save leaves as written");
+    assert.deepEqual(normalizeConfiguredOptions(catalog, ["Enable.Pick.Free.dev1.V"]), ["Enable.Pick.Free.dev1=V"], "an id and a value rewrites to the scoped form");
+    assert.deepEqual(indexOf("Disable.Pick.Free.dev1"), [[ "pick.free.dev1", { enabled: false } ]], "a disable carries no value");
+    assert.deepEqual(normalizeConfiguredOptions(catalog, ["Disable.Pick.Free.dev1"]), ["Disable.Pick.Free.dev1"], "and stays as written");
+    assert.deepEqual(normalizeConfiguredOptions(catalog, ["Enable.Pick.Free="]), ["Enable.Pick.Free="], "the empty global payload stays as written");
+  });
+
+  test("the first entry wins between a rewritten and a canonical entry, whichever leads, before and after a save", () => {
+
+    const legacyFirst = [ "Enable.Pick.Free.X", "Enable.Pick.Free=Y" ];
+    const canonicalFirst = [ "Enable.Pick.Free=Y", "Enable.Pick.Free.X" ];
+    const savedLegacyFirst = normalizeConfiguredOptions(catalog, legacyFirst);
+    const savedCanonicalFirst = normalizeConfiguredOptions(catalog, canonicalFirst);
+
+    assert.equal(featureOptionsWith(legacyFirst).value("Pick.Free"), "X", "the legacy entry ahead of a canonical one answers");
+    assert.deepEqual(savedLegacyFirst, [ "Enable.Pick.Free=X", "Enable.Pick.Free=Y" ], "a save keeps the array's order");
+    assert.equal(featureOptionsWith(savedLegacyFirst).value("Pick.Free"), "X", "and the same entry answers after it");
+
+    assert.equal(featureOptionsWith(canonicalFirst).value("Pick.Free"), "Y", "the canonical entry ahead of a legacy one answers");
+    assert.deepEqual(savedCanonicalFirst, [ "Enable.Pick.Free=Y", "Enable.Pick.Free=X" ], "a save keeps the array's order here too");
+    assert.equal(featureOptionsWith(savedCanonicalFirst).value("Pick.Free"), "Y", "and the same entry answers after it");
+  });
+});
+
 // Saving a configuration also modernizes it. The mutation transforms run their results through the normalizer, so entries still in the legacy form are rewritten
 // into the canonical one as part of a save the user already asked for - and never merely because something read the configuration.
 describe("FeatureOptions - normalization on save", () => {
@@ -2568,20 +2844,20 @@ describe("FeatureOptions - normalization on save", () => {
       "the input array is never mutated");
   });
 
-  test("the legacy single-trailing-segment form is deliberately left as written", () => {
+  test("the legacy single-trailing-segment form modernizes into the global value it reads as", () => {
 
-    // Its trailing segment does double duty - the index registers it as the option's global value AND, through the primary key, as an enable at a scope of that
-    // same name - and no one canonical entry carries both readings. Rewriting it would settle an ambiguity that belongs to the user, so a save leaves it alone
-    // even while modernizing everything around it.
+    // On an option declaring no domain the trailing segment is the option's global value alone, so one canonical entry says exactly what it says and a save
+    // rewrites it along with everything around it.
     const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
     const before = [ "Enable.Audio.Volume.ABC123", "Enable.Network.Mtu.Attic.1500" ];
     const after = applySetOption({ args: { enabled: true, option: "Motion.Detect" }, catalog, configuredOptions: before });
 
-    assert.deepEqual(after, [ "Enable.Audio.Volume.ABC123", "Enable.Network.Mtu.Attic=1500", "Enable.Motion.Detect" ],
-      "the ambiguous single-segment entry survives verbatim while the unambiguous scoped one modernizes");
+    assert.deepEqual(after, [ "Enable.Audio.Volume=ABC123", "Enable.Network.Mtu.Attic=1500", "Enable.Motion.Detect" ],
+      "the single-segment entry modernizes beside the scoped one");
 
-    // The reading it would have lost had it been rewritten: the scope registration the primary key carries.
-    assert.equal(new FeatureOptions(CATEGORIES, OPTIONS, [...after]).test("Audio.Volume", "ABC123"), true, "the scope reading survives the save");
+    // The rewrite re-reads as the entry it rewrites.
+    assert.equal(new FeatureOptions(CATEGORIES, OPTIONS, [...after]).value("Audio.Volume"), "ABC123", "the global value survives the save");
+    assert.equal(new FeatureOptions(CATEGORIES, OPTIONS, [...after]).scope("Audio.Volume", "ABC123"), "global", "and no scope appears beside it");
   });
 
   test("entries the parser cannot fully account for pass through byte-verbatim", () => {
@@ -3304,19 +3580,17 @@ describe("FeatureOptions - pure functional core", () => {
         [ "Enable.Motion.Detect", "Enable.Audio.Volume.Kitchen=50" ], "the same upgrade-on-save a per-option clear performs");
     });
 
-    test("the ambiguous legacy entry survives here where the per-option clear drops it, which is the divergence by design", () => {
+    test("a bare segment read as a global value survives this clear and the per-option clear at that identity alike", () => {
 
-      /* Each verb is bound to the question it answers. This one forgets what the user wrote at an identity, so it reads a scope exactly as the enumeration does
-       * and `Enable.Audio.Volume.ABC` is that option's global value rather than anything at ABC. The per-option clear corrects the one control the user is
-       * looking at, so it removes whatever the lookup index resolves there - and the index does register that entry at ABC. Aligning either verb to the other
-       * would break the job it exists for.
-       */
+      // `Enable.Audio.Volume.ABC` is that option's global value rather than anything at ABC, so neither verb has an entry to forget there, and each modernizes it as
+      // the survivor it is.
       const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
       const before = ["Enable.Audio.Volume.ABC"];
 
-      assert.equal(applyClearScope({ args: { id: "ABC" }, catalog, configuredOptions: before }), before, "the scope clear leaves a global value in place");
-      assert.deepEqual(applyClearOption({ args: { id: "ABC", option: "Audio.Volume" }, catalog, configuredOptions: before }), [],
-        "where the per-option clear, faithful to the index it writes, drops it");
+      assert.deepEqual(applyClearScope({ args: { id: "ABC" }, catalog, configuredOptions: before }), ["Enable.Audio.Volume=ABC"],
+        "the scope clear leaves a global value in place");
+      assert.deepEqual(applyClearOption({ args: { id: "ABC", option: "Audio.Volume" }, catalog, configuredOptions: before }), ["Enable.Audio.Volume=ABC"],
+        "and so does the per-option clear, faithful to the index it writes");
     });
 
     test("an entry the arbitration assigns to a longer declared option is forgotten at the identity that option's entry names", () => {
@@ -3399,7 +3673,7 @@ describe("FeatureOptions - pure functional core", () => {
         ["Enable.Audio.Volume.B=1"], "the array's own first-write-wins rule carries over, and the later duplicate is forgotten with the source");
     });
 
-    test("the ambiguous legacy entry stays where it is, because the source carries nothing to move", () => {
+    test("a bare segment read as a global value stays where it is, because the source carries nothing to move", () => {
 
       const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
       const before = ["Enable.Audio.Volume.ABC"];
@@ -3535,10 +3809,10 @@ describe("FeatureOptions - pure functional core", () => {
  * selected" is a state a list can be in, so the grammar gives it the bare-delimiter spelling a scoped entry stores and a read answers as the empty list. Away
  * from that one point a list resolves like any other value option, which is the ground the rows below stand on - every value they store or read carries content.
  *
- * The exception is the legacy dot form's single trailing segment, which consults the declared members to settle whether it names this option's value or a scope
- * of it. It is confined to the one shape that has nothing else to settle it, and what it trades away is bounded: a hand-authored legacy entry whose segment a
- * declaration claims reads one way against the catalog that declares it and another against one that does not. The engine owes such an entry graceful degradation
- * and no more - one sensible reading, with the "=" form as the spelling that states either reading outright - and a row below asserts that difference as designed.
+ * The exception is the legacy dot form's single trailing segment, which consults the declaration to settle whether it names this option's value or a scope of
+ * it. It is confined to the one shape that has nothing else to settle it, and what it trades away is bounded: a hand-authored legacy entry reads one way against
+ * the catalog that declares a domain and another against one that does not. The engine owes such an entry graceful degradation and no more - one sensible reading,
+ * with the "=" form as the spelling that states a reading outright - and a row below asserts that difference as designed.
  *
  * The guard proves it by building the same catalog twice, once with the declarations and once without, and comparing every DERIVED map. The three members that
  * are not derived are excluded by construction rather than by exception: `categories` and `options` are the raw inputs preserved verbatim, and `optionsByName`
@@ -3605,15 +3879,14 @@ describe("FeatureOptions - the choices declarations are inert to the engine", ()
   test("the legacy dot form's trailing segment is the one reading a declaration settles", () => {
 
     // The stated exception, locked in as a design fact rather than left to contradict the rows above. The same entry resolves one way against a catalog that
-    // declares the member and another against one that does not, which is what a plugin accepts when it attaches a picker to an option its users configured by
+    // declares a domain and another against one that does not, which is what a plugin accepts when it attaches a picker to an option its users configured by
     // hand under the legacy grammar.
-    const configured = ["Enable.Motion.Quality.high"];
+    const configured = ["Enable.Motion.Quality.dev1"];
     const plain = new FeatureOptions(MOTION_CATEGORY, structuredClone(PLAIN), [...configured]);
     const pickers = new FeatureOptions(MOTION_CATEGORY, structuredClone(PICKERS), [...configured]);
 
-    assert.equal(pickers.scope("Motion.Quality", "high"), "global", "with the declaration the segment is the value, so a device spelling it has no entry of its own");
-    assert.equal(plain.scope("Motion.Quality", "high"), "device", "without one the same entry goes on doing double duty");
-    assert.equal(pickers.value("Motion.Quality"), plain.value("Motion.Quality"), "the value reading is the half the two catalogs agree on");
+    assert.equal(pickers.scope("Motion.Quality", "dev1"), "device", "with the declaration a segment naming no member is the scope it names");
+    assert.equal(plain.scope("Motion.Quality", "dev1"), "global", "without one the same entry is the global value");
   });
 });
 
@@ -3737,7 +4010,7 @@ describe("FeatureOptions - valueList", () => {
 
   test("substitutes a free-form list default and reads it through the list grammar", () => {
 
-    const options = featureOptionsWith(["Enable.Pick.FreeDefault.dev1"]);
+    const options = featureOptionsWith(["Enable.Pick.FreeDefault"]);
 
     assert.deepEqual(options.valueList({ defaultWhenUnset: true, device: "dev1", option: "Pick.FreeDefault" }), [ "x", "y" ],
       "with no domain to read it against, the substituted default parses as the list it is written as");
@@ -3958,10 +4231,10 @@ describe("FeatureOptions - enumerateScopeEntries", () => {
       "and the canonical spelling of the same configuration yields the identical record");
   });
 
-  test("an entry whose trailing segment stayed ambiguous is a global value, so no identity walk reports it", () => {
+  test("an entry whose trailing segment reads as a global value is at no identity, so no walk reports it", () => {
 
-    // The one place this walk and applyClearOption part company, and the reason is the question each answers: `Enable.Audio.Volume.ABC` reads as that option's
-    // global value here, exactly as the per-option enumeration reads it, so a walk of the identity ABC has nothing to report.
+    // `Enable.Audio.Volume.ABC` reads as that option's global value here, exactly as the per-option enumeration reads it, so a walk of the identity ABC has nothing
+    // to report.
     assert.deepEqual([...enumerateScopeEntries({ catalog, configuredOptions: ["Enable.Audio.Volume.ABC"], id: "ABC" })], [],
       "the segment is the option's value rather than an identity the user configured");
   });
@@ -3977,7 +4250,7 @@ describe("FeatureOptions - enumerateScopeEntries", () => {
     const configuredOptions = ["Enable.Video.Stream.High"];
 
     assert.deepEqual([...enumerateScopeEntries({ catalog: choiceCatalog, configuredOptions, id: "High" })], [],
-      "the declaration settles the segment as the value, so the narrowed entry has no identity reading to report");
+      "the declaration settles the segment as the value, so the entry carrying the mark has no identity reading to report");
     assert.deepEqual([...enumerateScopeEntries({ catalog: choiceCatalog, configuredOptions, id: "Medium" })], [],
       "and it reports nothing at any other identity either");
   });

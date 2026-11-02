@@ -45,9 +45,9 @@
  * option name plus a single dot-free id, and a scoped payload must carry content - at least one character that is not the delimiter itself (see
  * {@link hasValueContent}, which also explains why the value domain draws that line). An entry that fails either test reads under the legacy dot grammar
  * instead, with the "=" as ordinary value text: `Enable.Security.Key.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=` ends in a bare delimiter that carries
- * nothing, so the whole tail stays a legacy global value, trailing "=" intact. One consequence is that a value-centric option storing a single value and enabled
- * at a device or controller scope always carries a value - the grammar has no scoped spelling for "enabled here, nothing given" - so
- * {@link FeatureOptions.setOption | setOption} reduces that request to clearing the scope.
+ * nothing, so the whole tail stays a legacy global value, trailing "=" intact. One consequence is that {@link FeatureOptions.setOption | setOption} stores a
+ * value-centric option holding a single value at a device or controller scope only with a value - the composer writes no scoped spelling for "enabled here, nothing
+ * given" - so it reduces that request to clearing the scope.
  *
  * An option declaring {@link FeatureOptionEntry.multiple} is the exception, because for a list "on, with nothing selected" is a selection like any other and has
  * to be tellable from the bare enable that resolves the registered default. Its zero-length payload therefore reads canonically at either scope, so
@@ -60,9 +60,10 @@
  * ### Declared scopes
  *
  * A catalog entry may name the levels it belongs to through {@link FeatureOptionEntry.scopes}, in the `controller | device | global` vocabulary this module
- * already speaks. The declaration is enforced at every framework-owned surface: {@link resolveScope} walks only the declared levels, the webUI renders an option's
- * row only on views the declaration admits, and the webUI's inheritance probe consults it too, so a click-time prediction and resolution always agree. An entry
- * that declares nothing is valid at every level, which is what lets a plugin narrow its catalog one entry at a time.
+ * already speaks. The declaration is enforced at every framework-owned surface: {@link resolveScope} walks only the declared levels, the parser reads a legacy
+ * bare segment on an option declaring no global level as the scope it names, the webUI renders an option's row only on views the declaration admits, and the
+ * webUI's inheritance probe consults it too, so a click-time prediction and resolution always agree. An entry that declares nothing is valid at every level, which
+ * is what lets a plugin narrow its catalog one entry at a time.
  *
  * @module
  */
@@ -167,8 +168,10 @@ export const ALL_CHOICES = "*";
  *
  * @property choices         - Optional. The list of values this option offers, which makes its editor a picker rather than a free-text field. A string names a
  *                             source the plugin's webUI registers in its `ui.choices` bag; an array is a fixed list declared inline. Either way the editor offers
- *                             the list and the configuration stores the chosen value, or values for a `multiple` option. Editor-only, exactly as `secret` is:
- *                             parsing, storage, scope resolution, and {@link FeatureOptions.value} never consult it. A source resolver receives the controller,
+ *                             the list and the configuration stores the chosen value, or values for a `multiple` option. Storage, scope resolution, and
+ *                             {@link FeatureOptions.value} never consult it, and parsing consults it at one point alone: a legacy `Enable.Option.segment` entry reads
+ *                             its single trailing segment against the declaration, an inline member as the value and any other legal identifier as the scope it
+ *                             names, so declaring `choices` changes how such an entry parses. A source resolver receives the controller,
  *                             the device (undefined at global and controller scope), and the option, and returns the list for that context; it must be a pure,
  *                             cheap function of those three, since it runs on every projection recompute - the same cadence as the webUI's `validOption`. A
  *                             string naming a source no resolver answers to fails the webUI at catalog load. An inline list is validated here at catalog build,
@@ -207,7 +210,8 @@ export const ALL_CHOICES = "*";
  *                             device-view row stays with the plugin's `validOption`, refining the rows the declaration already admits. Declare consistent levels
  *                             across a group: a child's dependency check resolves the PARENT's option, so a parent declared narrower than its children ignores parent
  *                             configuration at exactly the levels the children are still editable from. The tuple is non-empty by construction, since an option
- *                             declaring no level at all would render nowhere and resolve nowhere.
+ *                             declaring no level at all would render nowhere and resolve nowhere. Dropping `"global"` from a declaration also changes how a legacy
+ *                             entry parses: a single trailing segment, `Enable.Option.ABC`, reads as the scope it names rather than as a global value.
  * @property secret          - Optional. True declares that the option's value is a secret the settings page must not display in clear text by default: the field
  *                             renders masked, with a reveal the user operates when they want to read or check what they typed. Presentation only - parsing, storage,
  *                             scope resolution, and the documentation renderer treat a secret option exactly like any other value option, and its value lands in
@@ -583,8 +587,8 @@ export interface LogFeatureOwner {
 
 // Internal parse result for a single configured-options entry. `primaryKey` is the raw lowercased tail, the address the entry spells, and every reader of it -
 // the index registration, the scope matcher, and the enumerator alike - passes over it when `valueOnly` says this entry has no scope reading to offer: a legacy
-// trailing segment naming one of the option's declared choices is that option's value, not an enable at a scope the value happens to spell. Honoring the mark at
-// each of them rather than at the one that writes the index is what keeps the readers from disagreeing about an entry whose tail also names an option outright.
+// trailing segment the parse reads as that option's value is not an enable at a scope the value happens to spell. Honoring the mark at each of them rather than at
+// the one that writes the index is what keeps the readers from disagreeing about one entry.
 // `valueKey` and `value` appear only when the tail decomposes as a known value-centric option plus a value - they tell the index where to also register the
 // extracted value for O(1) lookups, and `canonicalEntry` carries the same decoding re-composed in the canonical form. `tailOriginal` is that same tail with the
 // casing the entry was written in, which is what lets a reader hand back an identifier as the user typed it: the lookup keys are lowercased slices of this
@@ -1116,9 +1120,9 @@ function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: s
 // empty payload on an option declaring a list, which is how the empty selection is spelled at a scope. Anything else containing "=" reads under the legacy dot
 // grammar with the delimiter as ordinary value text,
 // keeping such an entry on the reading it was authored under. The legacy form, accepted for configurations hand-authored before the payload delimiter existed,
-// reads a multi-segment tail as an id followed by a value, and a single trailing segment as whatever the option's declared choices settle it to be - the global
-// value, the scope it names, or both at once where nothing settles it. A multi-segment tail that is itself an address the arbitration assigns to a declared option
-// is that option's own entry rather than an id and a value, however a shorter value option's name happens to prefix it.
+// reads a multi-segment tail as an id followed by a value, and a single trailing segment as the one thing the catalog settles it to be, in the order the arm below
+// states - another option's own entry, the scope it names, or the global value. A multi-segment tail that is itself an address the arbitration assigns to a declared
+// option is that option's own entry rather than an id and a value, however a shorter value option's name happens to prefix it.
 //
 // Greedy longest-prefix matching against the value-option registry handles the case where a shorter value-centric option name is a prefix of a longer option in
 // the catalog - the longer match wins, so an entry like `Enable.Audio.Volume.50` (when both `Audio` and `Audio.Volume` are value-centric) is unambiguously parsed
@@ -1234,29 +1238,45 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
     const extraOriginal = remainderOriginal.slice(1);
     const separatorIndex = extra.indexOf(".");
 
-    // The legacy dot form, accepted for configurations hand-authored before the payload delimiter existed. A single trailing segment reads against the option's
-    // own declaration, below; a multi-segment tail reads as an id followed by a free-form value. The legacy global form has to stay single-segment, because with
+    // The legacy dot form, accepted for configurations hand-authored before the payload delimiter existed. A single trailing segment reads against the catalog's
+    // declarations, below; a multi-segment tail reads as an id followed by a free-form value. The legacy global form has to stay single-segment, because with
     // no id to anchor on a dotted tail cannot be told apart from an id-and-value pair - expressing that unambiguously is exactly what the "=" form is for.
     if(separatorIndex === -1) {
 
-      /* A single trailing segment reads as what it names, and the option's own declaration is what settles which of two things that is. Only a value-centric
-       * option name brings the walk here, so a value reading is always available to weigh against the scope reading the same segment spells.
+      /* A single trailing segment gets one reading, and the first of these that matches is the one it gets. Only a value-centric option name brings the walk here, so
+       * a value reading is always available, and the order is what keeps it from claiming a segment the catalog says something else about.
        *
-       * A segment naming one of the members the option declares inline is that value: it is the domain's own text, so reading it as a scope would address a
-       * device the value merely happens to spell. Matching folds case, the one policy the engine matches values by everywhere. A segment naming no member but
-       * spelling a legal scope identifier is the scope its author addressed, and the option carries no global value at all - the reading dies by absence,
-       * through the value key this leaves unset.
+       * A segment containing "=" is the global value: the composer cannot address a scope whose id carries the delimiter, so no scope reading is writable, and the
+       * entry modernizes into the form that states the value outright.
        *
-       * Anything else keeps both readings live at once: the index registers the segment as this option's global value AND, through the primary key, as an enable
-       * at a scope carrying that same name. That is where a segment the identifier rule turns away lands, and where every option whose domain a webUI source
-       * derives or that declares none at all lands, since neither offers members to compare against. No canonical entry can carry both readings, and rewriting
-       * would settle an ambiguity in the user's file that only the user can settle, so such an entry stays exactly as written and the "=" form remains the
-       * spelling that states one reading outright.
+       * A tail that is a declared option's exact name is that option's entry, for the reason the multi-segment arm below gives: the dotted form is the only spelling
+       * that entry has, while the value has the "=" form to state itself.
        *
-       * A segment containing "=" is the one shape no ambiguity survives: the composer cannot address a scope whose id carries the delimiter, so the scope
-       * reading is unwritable, the global-value reading is the only live one, and the entry can modernize into the form that states it outright.
+       * An option declaring scopes without `global` has no global value for the segment to be, so it is the scope it names.
+       *
+       * An option declaring `choices` reads the segment against that declaration. A member the option lists inline is the value: it is the domain's own text, so
+       * reading it as a scope would address a device the value merely happens to spell, and matching folds case, the one policy the engine matches values by
+       * everywhere. A non-member spelling a legal identifier is the scope its author addressed. On a source name, whose members nothing on this side can enumerate,
+       * any segment is the scope it names, because reading one as a value would turn a device's enable into a setting for every device, and a save would write that
+       * down with no way back.
+       *
+       * Everything else - no declared domain, and scopes carrying `global` or none - is the global value alone, marked so no reader takes it for a scope, and a save
+       * rewrites it to the "=" form. A segment a declaration settled stays as written, since a plugin can revise what settled it.
+       *
+       * A segment with no content, empty or whitespace alone, stands outside this order and takes no rewrite. Whitespace is the reason: the composer trims it away, and
+       * what it wrote could not re-read as the same entry. An empty segment has nothing to trim and stays as written for parity. Neither takes the mark, apart from a
+       * whitespace segment an inline list declares as a member, which the membership test marks like any other.
        */
-      const declared = inlineChoices(catalog.optionsByName[optName]);
+      const entry = catalog.optionsByName[optName];
+      const declared = inlineChoices(entry);
+      const declaredScopes = catalog.scopes[optName];
+      const carriesDelimiter = extra.includes("=");
+      const plainSegment = !carriesDelimiter && hasValueContent(extra);
+
+      if(plainSegment && ((tail in catalog.defaults) || (declaredScopes && !declaredScopes.includes("global")) || (typeof entry?.choices === "string"))) {
+
+        break;
+      }
 
       if(declared !== undefined) {
 
@@ -1267,9 +1287,12 @@ function parseEntry(catalog: CatalogIndex, rawEntry: string): ParsedConfigEntry 
 
           break;
         }
+      } else if(plainSegment) {
+
+        parsed.valueOnly = true;
       }
 
-      if(extra.includes("=")) {
+      if(carriesDelimiter || (plainSegment && (declared === undefined))) {
 
         parsed.canonicalEntry = composeEntry({ enabled, option: optionOriginal, value: extraOriginal });
       }
@@ -1333,7 +1356,7 @@ function entryAddressesScope({ catalog, rawEntry, target }: { catalog: CatalogIn
     return false;
   }
 
-  // An entry whose segment its option's choices claim as a value addresses that option and no scope, so its primary key is not an address a target can match.
+  // An entry whose segment the parse read as its option's value addresses that option and no scope, so its primary key is not an address a target can match.
   return (!parsed.valueOnly && (parsed.primaryKey === target)) || (parsed.valueKey === target);
 }
 
@@ -1345,10 +1368,11 @@ function catalogError(detail: string, entry: string): Error {
   return new Error("FeatureOptions: " + detail + " declared on option \"" + entry + "\".");
 }
 
-// Validate a catalog entry's picker declarations, throwing on any combination the engine cannot honor. `choices` and `style` are editor vocabulary the engine
-// reads straight past, and `multiple` reaches the engine at one point only - the empty selection the grammar spells and value() answers - so what these
-// declarations mostly need is catalog integrity, which has one home: they are checked here beside the renderer declaration, and a plugin learns about a
-// malformed catalog when it builds one rather than when a user opens the settings page.
+// Validate a catalog entry's picker declarations, throwing on any combination the engine cannot honor. `style` is editor vocabulary the engine never reads. `choices`
+// reaches the parser at the legacy single trailing segment and valueList as the domain an inline list supplies, and `multiple` reaches the empty selection the
+// grammar spells, value() answers and logFeature words, along with the split valueList reads. What these declarations mostly need is catalog integrity, which has one
+// home: they are checked here beside the renderer declaration, and a plugin learns about a malformed catalog when it builds one rather than when a user opens the
+// settings page.
 //
 // A source-backed list is the one declaration this cannot fully check. The domain a source derives exists only on the page holding the device record, so neither
 // its members nor whether the default names one of them is knowable here; the webUI checks what it can see in turn, rejecting a source name no resolver answers to.
@@ -1710,7 +1734,7 @@ function readingAtScope({ catalog, idLower, parsed }: {
     return { key: valueKey, optionKey: valueAddress.optionKey, value };
   }
 
-  // A narrowed entry has no scope reading to report at all, the same short-circuit the per-option enumerator applies before it ever looks at the primary key.
+  // An entry carrying the mark has no scope reading to report at all, the same short-circuit the per-option enumerator applies before it ever looks at the primary key.
   if(valueOnly) {
 
     return undefined;
@@ -1719,8 +1743,8 @@ function readingAtScope({ catalog, idLower, parsed }: {
   const primaryAddress = decodeKey(catalog, primaryKey);
 
   /* The option comparison is the per-option enumerator's "the value key already addressed this option" test, stated with the option left open. A key addresses
-   * exactly one option under the arbitration, so asking whether the two decoded options are equal asks precisely that...and it is what keeps an entry like
-   * `Enable.Audio.Volume.ABC` - that option's global value, and an enable at a scope named ABC to the lookup index - out of a scope walk at ABC.
+   * exactly one option under the arbitration, so asking whether the decoded options are equal asks precisely that...and it is what keeps a segment of
+   * whitespace alone, `Enable.Audio.Volume. ` - that option's global value, and an enable at the scope " " to the lookup index - out of a scope walk at " ".
    */
   if((primaryAddress?.idLower === idLower) && (primaryAddress.optionKey !== valueAddress?.optionKey)) {
 
@@ -1794,9 +1818,8 @@ export function *enumerateConfiguredEntries({ catalog, category, configuredOptio
     const { primaryKey, tailOriginal, valueKey } = parsed;
 
     /* One entry can decode two ways - the raw tail, and for a value-centric Enable the extracted value key - and the value reading is the entry's meaning whenever
-     * it addresses this option. `Enable.Audio.Volume.50` is the Audio.Volume option carrying 50, so that is the record it yields; the lookup index also registers
-     * its raw tail (an enable at a scope named "50"), a second live reading the index keeps because no canonical entry can express both, but it is not what the
-     * entry says about this option.
+     * it addresses this option. `Enable.Audio.Volume.ABC==` is the Audio.Volume option carrying ABC==, so that is the record it yields; the lookup index also
+     * registers its raw tail, which is not what the entry says about this option.
      */
     if((valueKey !== undefined) && keyAddressesOption({ catalog, key: valueKey, optionKey })) {
 
@@ -1805,9 +1828,9 @@ export function *enumerateConfiguredEntries({ catalog, category, configuredOptio
       continue;
     }
 
-    // A narrowed entry has no scope reading to report at all, so the primary key is not an address this yields against. The key can still name an option
-    // outright - a boolean option the catalog carries beside the value option it narrows, which the value-option walk never considers - and honoring the mark
-    // here is what keeps this reader and the lookup index saying the same thing about one entry.
+    // An entry carrying the mark has no scope reading to report at all, so the primary key is not an address this yields against. The key can spell whatever name a
+    // caller asks after - `Enable.Audio.Volume.50` enumerated at the undeclared name `Audio.Volume.50` - and honoring the mark here is what keeps this reader and the
+    // lookup index saying the same thing about one entry.
     if(parsed.valueOnly || !keyAddressesOption({ catalog, key: primaryKey, optionKey })) {
 
       continue;
@@ -1826,18 +1849,18 @@ export function *enumerateConfiguredEntries({ catalog, category, configuredOptio
  * never rewritten, because a configuration file is a user's own text and we only reshape the parts whose meaning we can state exactly. Re-composing an entry that
  * is already canonical yields the identical string, so running this repeatedly is stable.
  *
- * The legacy single-trailing-segment form (`Enable.Audio.Volume.50`) is deliberately left alone for the same reason. That segment does double duty - the lookup
- * index registers it as the option's global value and, through the primary key, as an enable at a scope carrying that same name - and no single canonical entry
- * expresses both. Rewriting it would settle, on the user's behalf, an ambiguity only the user can settle, so it stays as written. A segment the option's declared
- * choices settle one way or the other stays as written too, since what settles it is a catalog declaration a plugin can revise rather than the grammar itself. A
- * segment containing "=" is the exception: the composer cannot address a scope whose id carries the delimiter, so only the global-value reading is live there,
- * and the entry modernizes like any other unambiguous legacy form.
+ * The legacy single-trailing-segment form (`Enable.Audio.Volume.50`) modernizes where the catalog declares nothing that says otherwise: the segment is the global
+ * value, so the entry rewrites to `Enable.Audio.Volume=50`, the form that states it outright. A segment containing "=" modernizes the same way, because the composer
+ * cannot address a scope whose id carries the delimiter. A tail naming a declared option exactly and a segment on an option declaring no global level stay as written,
+ * since each is an address whose dotted form is its spelling. A segment the option's declared choices settle one way or the other stays as written too, since what
+ * settles it is a catalog declaration a plugin can revise rather than the grammar itself. So does a segment of whitespace alone, which the composer would trim away,
+ * and an empty segment, for parity with it.
  *
  * {@link applySetOption} and {@link applyClearOption} run their results through this, which is the whole of the upgrade path: a stored configuration modernizes as
  * part of a save the user already asked for, and never merely because something read it. One consequence is worth stating plainly, since it becomes visible in the
  * saved file: a legacy entry whose dotted tail the engine reads as an id plus a value is rewritten to say so outright, so `Enable.Audio.Volume.St. Andrews` (read
  * as the id "St" carrying the value " Andrews") normalizes to `Enable.Audio.Volume.St=Andrews`, the value trimmed to the canonical domain. Resolution is unchanged
- * either way - the reading a user may not have intended stops being latent and becomes something they can see and correct.
+ * apart from that trim - the reading a user may not have intended stops being latent and becomes something they can see and correct.
  *
  * @param catalog           - The catalog index that defines which option names are value-centric.
  * @param configuredOptions - The configured-options array to normalize.
@@ -1877,8 +1900,8 @@ export function normalizeConfiguredOptions(catalog: CatalogIndex, configuredOpti
  *
  * A value always sits behind the payload delimiter, at either scope, which is what makes it free-form: periods, interior spaces, and even further "=" characters
  * need no escaping. Surrounding whitespace is trimmed first, and a value persists only when content survives the trim - see {@link hasValueContent}. At the
- * global scope an enable without content composes the bare entry, which resolution reads as "enabled, no value given". At a device or controller scope there is
- * no such spelling for an option storing a single value - a scoped entry carries one - so an enable without content reduces to clearing the scope: any entry
+ * global scope an enable without content composes the bare entry, which resolution reads as "enabled, no value given". At a device or controller scope this writes
+ * no such spelling for an option storing a single value - a scoped entry it composes carries one - so an enable without content reduces to clearing the scope: any entry
  * addressing it is dropped and resolution falls back to inheritance. The surviving entries are normalized on the way through, so the save the caller asked for
  * also modernizes anything still in the legacy form.
  *
@@ -1918,10 +1941,10 @@ export function applySetOption(
   const emptySelection = valued && (args.value !== undefined) && !trimmed.length && isMultipleOption(catalog.optionsByName[args.option.toLowerCase()]);
   const value = (valued && (hasValueContent(trimmed) || emptySelection)) ? trimmed : undefined;
 
-  // A value-centric option enabled at a scope persists only with a value, the empty selection above included. The grammar has no scoped spelling for "enabled
-  // here, nothing given" - the bare form would put the id where the legacy grammar reads a global value - so the request reduces to its observable meaning: any
-  // entry addressing the scope is dropped and resolution falls back to inheritance. Delegating states that reduction literally, and carries applyClearOption's
-  // reference-stable no-op with it.
+  // A value-centric option enabled at a scope persists only with a value, the empty selection above included. The writer composes no scoped spelling for "enabled
+  // here, nothing given" - on an option declaring no domain the bare form puts the id where the legacy grammar reads a global value - so the request reduces to its
+  // observable meaning: any entry addressing the scope is dropped and resolution falls back to inheritance. Delegating states that reduction literally, and carries
+  // applyClearOption's reference-stable no-op with it.
   if(valued && (value === undefined) && args.id?.length) {
 
     return applyClearOption({ args: { id: args.id, option: args.option }, catalog, configuredOptions });
@@ -1983,10 +2006,9 @@ export function applyClearOption(
  * exactly as the per-option enumerator weighs the two.
  *
  * The reading rule is {@link enumerateConfiguredEntries}' own, which is what lets a consumer's sweep and the scope transforms beside this agree entry for entry.
- * One consequence is worth stating: an entry whose trailing segment stayed ambiguous, `Enable.Audio.Volume.ABC`, is that option's global value here, so a walk of
- * the scope `ABC` does not report it and {@link applyClearScope} leaves it in place - where {@link applyClearOption} at that same identifier, faithful to the
- * lookup index it writes, drops it. Each verb is bound to the question it answers: this one reports what the user wrote at an identity, and the per-option clear
- * corrects the one control the user is looking at.
+ * An entry whose trailing segment reads as a global value, `Enable.Audio.Volume.ABC`, addresses no identity, so a walk of the scope `ABC` does not report it, and
+ * neither {@link applyClearScope} nor {@link applyClearOption} at that identifier removes it. Where a segment of whitespace alone reads as a global value, the lookup
+ * index also registers it at that id, so the per-option clear drops it while this walk reports nothing.
  *
  * An empty identifier addresses nothing and yields nothing. The global level belongs to {@link enumerateConfiguredEntries} one option at a time, because an empty
  * string matching every global entry would let a consumer's unset variable walk the whole configuration.
@@ -2059,8 +2081,8 @@ export function *enumerateScopeEntries({ catalog, configuredOptions, id }: {
  *
  * What counts as "at the scope" is {@link enumerateScopeEntries}' reading, so this and the sweep a consumer runs through that enumerator agree entry for entry.
  * The raw entry is the unit: an entry whose reading names the scope is dropped whole, exactly as {@link applyClearOption} drops such an entry whole, and an entry
- * reading at another identity or at none at all is left exactly as the user wrote it. Nothing is rewritten to carry part of what it said, which would settle, on
- * the user's behalf, a reading only the user can settle.
+ * reading at another identity or at none at all stays. Nothing is rewritten to carry part of what a dropped entry said, because a sweep forgets entries rather than
+ * editing them.
  *
  * An empty identifier addresses nothing and answers the input reference untouched. Nothing here throws: an identifier the address grammar has no spelling for
  * simply matches nothing, and an entry whose key the catalog claims as an option in its own right is at no scope at all by the arbitration.
@@ -2106,9 +2128,8 @@ export function applyClearScope(
  * configuration the user built for that thing follows it rather than being stranded under a name nothing resolves any more.
  *
  * What moves is what {@link enumerateScopeEntries} reads at `from`, written at `to` through {@link applySetOption}, so every form arrives in the destination's
- * canonical spelling: a disable moves as a disable, a value moves with its value, and a list's empty selection moves as the empty selection. A reading the
- * grammar has no scoped spelling for - a bare enable of an option storing a single value - reduces through that writer's own rule to nothing written, and the
- * source entry is forgotten with the rest.
+ * canonical spelling: a disable moves as a disable, a value moves with its value, and a list's empty selection moves as the empty selection. A reading that writer
+ * composes no scoped spelling for - a bare enable - reduces through its own rule to nothing written, and the source entry is forgotten with the rest.
  *
  * The destination outranks the source. An option the destination already carries an entry for keeps the entry it has, and the source's entry for that option is
  * forgotten rather than moved, because the settings built against the identity in use are the ones the user is looking at. The array's own first-write-wins rule
@@ -2690,8 +2711,8 @@ export class FeatureOptions {
     }
 
     // Enabled, value-centric option. The value axis deviates when the level resolves a value and it differs from the one it inherits. A level that resolves no
-    // value says nothing about the value axis, so it deviates only where its enabled state does - a device enabled bare beneath a global value restates the global
-    // setting rather than making one.
+    // value says nothing about the value axis, so it deviates only where its enabled state does - a device enabled through the trailing dot, on an option with no
+    // registered default, beneath a global value restates the global setting rather than making one.
     const valueDeviates = (state.value !== undefined) && (state.value !== inherited.value);
 
     if(!booleanDeviates && !valueDeviates) {
@@ -2865,7 +2886,7 @@ export class FeatureOptions {
    * @example
    *
    * ```ts
-   * // Remove any configured value for "Audio.Volume" on device ABC123 (drops both `Enable.Audio.Volume.ABC123` and `Enable.Audio.Volume.ABC123=50`).
+   * // Remove any configured value for "Audio.Volume" on device ABC123, in any spelling (`Enable.Audio.Volume.ABC123=50` or `Enable.Audio.Volume.ABC123.50`).
    * featureOpts.clearOption({ option: "Audio.Volume", id: "ABC123" });
    * ```
    */
@@ -2934,7 +2955,7 @@ export class FeatureOptions {
    * disabled option is silently dropped because the resulting entry would be meaningless under the resolution rules. A value is free-form at either scope - it is
    * written behind a payload delimiter and trimmed of surrounding whitespace - and persists only when content survives the trim (see {@link hasValueContent}).
    * At the global scope an enable without content composes the bare entry; at a device or controller scope it reduces to clearing the scope, because a scoped
-   * entry storing a single value always carries one. An option declaring {@link FeatureOptionEntry.multiple} persists a SUPPLIED empty value at either scope
+   * entry this composes for a single value always carries one. An option declaring {@link FeatureOptionEntry.multiple} persists a SUPPLIED empty value at any scope
    * instead, as the explicit empty selection; omitting the value keeps the behavior every other option gets.
    *
    * Saving also modernizes: any surviving entry still in the legacy dot form is rewritten into the canonical form as part of the same mutation. See

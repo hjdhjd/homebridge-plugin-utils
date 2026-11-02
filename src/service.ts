@@ -66,8 +66,8 @@ function initServiceUUIDSets(service: Service): void {
   // `!serviceRequires(...) && serviceHas(...)` to detect the optional-but-supported case.
   hasConfiguredNameUUIDs = new Set([
 
-    "AccessoryInformation", "ContactSensor", "InputSource", "Lightbulb", "MotionSensor", "OccupancySensor", "SmartSpeaker", "StatelessProgrammableSwitch", "Switch",
-    "Television", "Valve", "WiFiRouter"
+    "AccessoryInformation", "ContactSensor", "GarageDoorOpener", "InputSource", "Lightbulb", "LockMechanism", "MotionSensor", "OccupancySensor", "SmartSpeaker",
+    "StatelessProgrammableSwitch", "Switch", "Television", "Valve", "WiFiRouter", "WindowCovering"
   ].map(uuidOf));
 
   requiresNameUUIDs = new Set([ "AccessoryInformation", "Assistant", "InputSource" ].map(uuidOf));
@@ -973,8 +973,9 @@ export function getServiceName(service?: Service): string | undefined {
  * An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to two names. This writes all
  * of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName` owns the accessory display names (the
  * `PlatformAccessory`'s own and the HAP accessory's beneath it), and {@link setServiceName} owns the AccessoryInformation service's `ConfiguredName` and `Name`
- * characteristics. `ConfiguredName` is what makes a rename stick in the Home app, since it is the name a user can edit there, so whether to sync a device's name
- * at all stays the plugin's policy: a call with the device's name replaces a name the user gave the accessory.
+ * characteristics. `ConfiguredName` is the name a user edits in the Home app, so whether to sync a device's name at all stays the plugin's policy: a call with the
+ * device's name replaces a name the user gave the accessory. A tile whose own service carries a `ConfiguredName` takes its rename there rather than here, so a
+ * plugin names and watches that service through {@link setServiceName} and {@link watchServiceName}.
  *
  * Each name is compared before it is written, and only what differs is written, so a plugin calls this on every refresh of a device's name and saves the accessory
  * only when the answer is true, with no comparison of its own. A comparison of its own would misread a fresh accessory: HAP seeds the information service's `Name`

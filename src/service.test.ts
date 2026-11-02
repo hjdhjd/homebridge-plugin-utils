@@ -1610,6 +1610,26 @@ describe("setServiceName", () => {
     assert.equal(optionalCount(valve, "ConfiguredName"), 1, "and leaves ConfiguredName registered once");
   });
 
+  // The Home app writes a rename of one of these tiles to the service's own ConfiguredName rather than the information service's, so a service without one never tells
+  // the plugin about a rename. HAP's catalog leaves it out of their optional sets, so the rename registers it first.
+  for(const kind of [ "GarageDoorOpener", "LockMechanism", "WindowCovering" ] as const) {
+
+    test("a " + kind + " gains the ConfiguredName a Home app rename of its tile writes to, registered and written with no warning", () => {
+
+      const accessory = createAccessory();
+      const service = accessory.addService(hap.Service[kind], "First Name");
+
+      assert.equal(optionalIncludes(service, "ConfiguredName"), false, "precondition: the service's optional set lacks ConfiguredName");
+
+      accessory.clearObservations();
+
+      assert.equal(setServiceName(service, "Second Name"), true);
+      assert.equal(readNamedCharacteristic(service, "ConfiguredName"), "Second Name");
+      assert.equal(optionalIncludes(service, "ConfiguredName"), true, "the rename registered ConfiguredName before writing it");
+      assert.deepEqual(accessory.warnings.map(({ message }) => message), [], "and HAP warned of nothing added outside the catalog");
+    });
+  }
+
   test("a ConfiguredName whose maxLen the plugin set is written cut to that length with the end its cut exposes stripped, with no warning, and a repeat answers " +
     "false", () => {
 
@@ -1977,18 +1997,18 @@ describe("watchServiceName", () => {
     assert.equal(reads(), 3, "the owner was read once for each rename");
   });
 
-  test("attaches to a LockMechanism, whose Name alone gives the Home app nothing to write, without error", async () => {
+  test("attaches to a Fan, whose Name alone gives the Home app nothing to write, without error", async () => {
 
     const accessory = createAccessory();
-    const service = accessory.addService(hap.Service.LockMechanism, "Front Door");
+    const service = accessory.addService(hap.Service.Fan, "Ceiling Fan");
     const characteristics = service.characteristics.length;
-    const { reads } = watch({ owner: "Front Door", service });
+    const { reads } = watch({ owner: "Ceiling Fan", service });
 
     assert.equal(service.characteristics.length, characteristics, "the watch attached no characteristic");
-    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), undefined, "and the LockMechanism still carries no ConfiguredName");
+    assert.equal(readNamedCharacteristic(service, "ConfiguredName"), undefined, "and the Fan still carries no ConfiguredName");
 
-    await assert.rejects(triggerSet(service.getCharacteristic(hap.Characteristic.Name), "Back Door"), hapStatus(HAPStatus.READ_ONLY_CHARACTERISTIC),
-      "the Name a LockMechanism carries is read-only to a controller");
+    await assert.rejects(triggerSet(service.getCharacteristic(hap.Characteristic.Name), "Porch Fan"), hapStatus(HAPStatus.READ_ONLY_CHARACTERISTIC),
+      "the Name a Fan carries is read-only to a controller");
     await settle();
 
     assert.equal(reads(), 0, "so no rename reaches the watch");

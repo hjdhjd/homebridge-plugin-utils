@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.0 (2026-11-03)
+  * Breaking change: `logFeature` takes a single options bag and logs each setting once, at the level the user set it and through that level's logger. Each level is measured against what it inherits, so a device that turns off a global setting now gets its own line. Convert your calls when you rebuild against this release.
+  * Improvement: a legacy `Enable.Option.Value` entry has one reading - the global value, unless your catalog says otherwise - and a save rewrites it to `Enable.Option=Value`.
+  * Improvement: window coverings, garage door openers, and locks carry a `ConfiguredName`, so a rename in the Home app reaches your plugin.
+  * Fix: HomeKit's naming module works in Safari, answering every name exactly as your plugin does.
+  * Housekeeping.
+
 ## 2.6.0 (2026-10-31)
   * Breaking change: your settings page's modules are cache-busted automatically, so the webUI loader config's `bust` list is retired. `prepare-ui` finds your page's own modules by itself and refuses a config that still carries `bust`, so trim the loader config comment in your `index.html` to its `entry` alone and re-run `prepare-ui` when you rebuild against this release.
   * New feature: TypeScript for your settings page. Write its logic under `src/webui/` and your ordinary build compiles it beside the rest of your source, the new `copy-webui` command copies the compiled modules to your page, and your plugin can import those same modules, so the page and the plugin share one definition of what they have in common. The shared ESLint preset holds the folder browser-safe - a module that imports a value from outside it or reaches for a Node global fails the lint rather than the page - and each compiled module lands in a content-hashed folder your page's `./lib/webui/` imports are mapped to, so the browser caches a module until it actually changes.

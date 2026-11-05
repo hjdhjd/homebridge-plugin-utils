@@ -585,15 +585,15 @@ export interface LogFeatureOwner {
   log: HomebridgePluginLogging;
 }
 
-// Internal parse result for a single configured-options entry. `primaryKey` is the raw lowercased tail, the address the entry spells, and every reader of it -
-// the index registration, the scope matcher, and the enumerator alike - passes over it when `valueOnly` says this entry has no scope reading to offer: a legacy
+// Internal parse result for a single configured-options entry. `primaryKey` is the raw lowercased tail, the address the entry spells, and every reader of the
+// grammar passes over it when `valueOnly` says this entry has no scope reading to offer: a legacy
 // trailing segment the parse reads as that option's value is not an enable at a scope the value happens to spell. Honoring the mark at each of them rather than at
 // the one that writes the index is what keeps the readers from disagreeing about one entry.
 // `valueKey` and `value` appear only when the tail decomposes as a known value-centric option plus a value - they tell the index where to also register the
 // extracted value for O(1) lookups, and `canonicalEntry` carries the same decoding re-composed in the canonical form. `tailOriginal` is that same tail with the
 // casing the entry was written in, which is what lets a reader hand back an identifier as the user typed it: the lookup keys are lowercased slices of this
-// string, so a key's length is an offset into it. Shared between buildConfigIndex (writer), entryAddressesScope (reader), enumerateConfiguredEntries (reader),
-// and normalizeConfiguredOptions (rewriter) so none of them can disagree on what any given entry "means" under the storage format.
+// string, so a key's length is an offset into it. Every reader of the grammar shares this one result, the writers that rewrite through it included, so none of
+// them can disagree on what any given entry "means" under the storage format.
 interface ParsedConfigEntry {
 
   canonicalEntry?: string;
@@ -1093,14 +1093,41 @@ export function selectValues({ domain, multiple, value }: SelectValuesArgs): Val
     unknown: [...stored.values()].filter((entry) => !members.has(entry.toLowerCase())) };
 }
 
-// Compose a configured-options entry from its parts, and the single place in this module that knows how to write one. Everything up to the payload delimiter is
-// the address - the canonical action, the option name, and an optional scope id, joined by dots - and everything after it is the value. An absent value composes
-// the bare address; a present value composes behind the delimiter, trimmed first, so the canonical value domain excludes edge whitespace and the tolerant parse
-// of a hand-spaced entry lands on exactly this form. A present-but-empty value composes the bare delimiter, which the global form produces for any option and the
-// scoped form only for a list option storing its empty selection - every other scoped caller guards on hasValueContent first, because a scoped entry without
-// value content is a shape the parser hands to the legacy grammar. Pairing this with parseEntry as the single decoder keeps the reader and the writer of the
-// storage format from drifting apart.
-function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: string; option: string; value?: string }): string {
+/**
+ * Compose a configured-options entry from its parts. This is the one writer of the entry grammar: every transform here composes through it, and a consumer that
+ * states an entry of its own - a translation composing what a retired grammar meant - composes through it too rather than concatenating a second spelling.
+ *
+ * Everything up to the payload delimiter is the address - the canonical action, the option name, and an optional scope id, joined by dots - and everything after
+ * it is the value. An absent value composes the bare address; a present value composes behind the delimiter, trimmed first, so the canonical value domain excludes
+ * edge whitespace and the tolerant parse of a hand-spaced entry lands on exactly this form. A present-but-empty value composes the bare delimiter, which the global
+ * form produces for any option and the scoped form only for a list option storing its empty selection - every other scoped caller guards on
+ * {@link hasValueContent} first, because a scoped entry without value content is a shape the parser hands to the legacy grammar. Pairing this with the one decoder
+ * the readers share keeps the reader and the writer of the storage format from drifting apart.
+ *
+ * Nothing here consults a catalog: the composer spells exactly the parts it is handed, so a caller asking whether an id may address a scope at all asks
+ * {@link isValidScopeId} first, and one writing into a configuration through the engine's own rules reaches for {@link applySetOption} instead.
+ *
+ * @param args
+ * @param args.enabled - True composes an Enable entry, false a Disable entry.
+ * @param args.id      - Optional. The device or controller scope identifier, omitted or empty for the global scope.
+ * @param args.option  - The expanded option name, in the casing the entry should carry.
+ * @param args.value   - Optional. The value to compose behind the payload delimiter. Omit it for a bare entry.
+ *
+ * @returns The composed entry.
+ *
+ * @example
+ *
+ * ```ts
+ * // A scoped value, composed as "Enable.Audio.Volume.Kitchen=50".
+ * const scoped = composeEntry({ enabled: true, id: "Kitchen", option: "Audio.Volume", value: "50" });
+ *
+ * // A global disable, composed as "Disable.Motion.Detect".
+ * const disabled = composeEntry({ enabled: false, option: "Motion.Detect" });
+ * ```
+ *
+ * @category Feature Options
+ */
+export function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: string; option: string; value?: string }): string {
 
   const address = (enabled ? "Enable" : "Disable") + "." + option + (id?.length ? ("." + id) : "");
   const payload = value?.trim();
@@ -1110,9 +1137,8 @@ function composeEntry({ enabled, id, option, value }: { enabled: boolean; id?: s
 
 // Parse a single configured-options entry into the lookup keys it would register on the index. Returns null for non-canonical entries (no action prefix, or an
 // unknown action). Otherwise returns the primary (raw-tail) key, optionally accompanied by a derived value key with the extracted value for value-centric Enable
-// entries. This is the SSOT for entry decoding - buildConfigIndex (which uses it to populate the index), entryAddressesScope (which uses it to decide whether a
-// mutation should replace this entry), and normalizeConfiguredOptions (which uses it to rewrite an entry into canonical form) all consume the same result, so no
-// reader or writer of the storage format can disagree about what any given entry "means."
+// entries. This is the SSOT for entry decoding: every reader of the grammar consumes the same result, so no reader or writer of the storage format can disagree
+// about what any given entry "means."
 //
 // Two value forms decode here. The canonical one is `Enable.Option[.id]=value`, where the first "=" ends the address and everything behind it is the value: dots
 // address and "=" carries the payload, each delimiter with a single job. The delimiter claims an entry only when that reading holds together end to end - the
@@ -1695,7 +1721,8 @@ function originalId({ key, optionKey, tailOriginal }: { key: string; optionKey: 
 // Decode a lookup key into the catalog option it addresses and the scope identifier it names, or undefined when the arbitration assigns it to no declared
 // option. The grammar allows two candidates only - the key itself, which is an option's global address, and the key up to its last dot, which is a scoped
 // address whose identifier is dot-free - and keyAddressesOption stays the one rule that settles each, so this is a lookup over that rule rather than a second
-// statement of it. The scope walk is the only consumer: every per-option surface already knows which option it is asking about.
+// statement of it. Its consumers are the readers that do not yet know which option an address belongs to - the parser settling a dotted tail, the scope walk,
+// and the address decoder reading an entry on its own - while every per-option surface already knows which option it is asking about.
 function decodeKey(catalog: CatalogIndex, key: string): { idLower: string; optionKey: string } | undefined {
 
   if((key in catalog.optionsByName) && keyAddressesOption({ catalog, key, optionKey: key })) {
@@ -1838,6 +1865,50 @@ export function *enumerateConfiguredEntries({ catalog, category, configuredOptio
 
     yield { enabled: parsed.enabled, id: originalId({ key: primaryKey, optionKey, tailOriginal }) };
   }
+}
+
+/**
+ * Decode the address one configured entry spells - whether it enables or disables, the option it names, and the scope it names that option at - through the
+ * engine's own grammar. This is the reader for a caller holding an entry rather than an option: {@link enumerateConfiguredEntries} answers what the entries say
+ * about one option, while this answers what one entry addresses, under the same arbitration, so a dotted address that is itself a declared option's name reads as
+ * that option at the global scope and never as a shorter option scoped to an identifier the rest of the name happens to spell.
+ *
+ * It reads an entry's address and never its value. An entry carrying the payload delimiter answers undefined, and so does one the grammar reads a legacy value
+ * in, because what such an entry says about its option is the value reading the enumerator reports. A non-canonical entry, one opening with neither action,
+ * answers undefined, as does an address the arbitration assigns to no option the catalog declares.
+ *
+ * @param catalog  - The catalog index the address is decoded against.
+ * @param rawEntry - The configured-options entry to read.
+ *
+ * @returns The entry's enablement, the option it addresses as its lowercased expanded name, and the scope identifier in the casing the entry carried - the empty
+ *          string for the global scope - or undefined when the entry addresses no option of the catalog.
+ *
+ * @category Feature Options
+ */
+export function decodeEntryAddress(catalog: CatalogIndex, rawEntry: string): { enabled: boolean; id: string; option: string } | undefined {
+
+  if(rawEntry.includes("=")) {
+
+    return undefined;
+  }
+
+  const parsed = parseEntry(catalog, rawEntry);
+
+  // A value key is the parse's statement that the entry carries a legacy value, whose address is that value reading's to report rather than this decoder's.
+  if(!parsed || (parsed.valueKey !== undefined)) {
+
+    return undefined;
+  }
+
+  const address = decodeKey(catalog, parsed.primaryKey);
+
+  if(!address) {
+
+    return undefined;
+  }
+
+  return { enabled: parsed.enabled, id: originalId({ key: parsed.primaryKey, optionKey: address.optionKey, tailOriginal: parsed.tailOriginal }),
+    option: address.optionKey };
 }
 
 /**

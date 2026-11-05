@@ -7,10 +7,10 @@
  * first-write-wins rule for duplicate entries in configuredOptions, the scope hierarchy's "device overrides controller overrides global overrides default" contract,
  * and the edge-case surfaces of `value()` (null, undefined, fallback-to-default).
  */
-import { ALL_CHOICES, FeatureOptions, applyClearOption, applyClearScope, applyMoveScope, applySetOption, buildCatalogIndex, buildConfigIndex, composeScopeId,
-  enumerateConfiguredEntries, enumerateScopeEntries, expandOption, formatValueList, getDefaultValue, hasValueContent, isDependencyMet, isValidChoice,
-  isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList, removedListEntries, resolveScope, scopeSafeId,
-  selectValues } from "./featureOptions.ts";
+import { ALL_CHOICES, FeatureOptions, applyClearOption, applyClearScope, applyMoveScope, applySetOption, buildCatalogIndex, buildConfigIndex, composeEntry,
+  composeScopeId, decodeEntryAddress, enumerateConfiguredEntries, enumerateScopeEntries, expandOption, formatValueList, getDefaultValue, hasValueContent,
+  isDependencyMet, isValidChoice, isValidScopeId, isValueOption, normalizeConfiguredOptions, optionExists, parseValueList, removedListEntries, resolveScope,
+  scopeSafeId, selectValues } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionFormatter, RemovedListEntry } from "./featureOptions.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing/index.ts";
@@ -4198,6 +4198,88 @@ describe("FeatureOptions - enumerateConfiguredEntries", () => {
       { enabled: false, id: "" },
       { enabled: true, id: "" }
     ], "both entries the user wrote are reported; the first-write-wins rule belongs to the lookup index");
+  });
+});
+
+/* The entry grammar's one writer, exported so a consumer composing an entry of its own spells it the way the engine does. What it composes is what the readers read
+ * back, which is the pairing the rows below hold fixed.
+ */
+describe("FeatureOptions - composeEntry", () => {
+
+  test("composes the canonical action, the option, an optional scope, and a value behind the payload delimiter", () => {
+
+    assert.equal(composeEntry({ enabled: true, option: "Audio.Volume", value: "50" }), "Enable.Audio.Volume=50", "a global value");
+    assert.equal(composeEntry({ enabled: true, id: "Kitchen", option: "Audio.Volume", value: "50" }), "Enable.Audio.Volume.Kitchen=50", "a scoped value");
+    assert.equal(composeEntry({ enabled: false, option: "Motion.Detect" }), "Disable.Motion.Detect", "a global disable carries no payload");
+    assert.equal(composeEntry({ enabled: false, id: "ABC123", option: "Motion.Detect" }), "Disable.Motion.Detect.ABC123", "and neither does a scoped one");
+  });
+
+  test("an empty scope is the global address, and the option keeps the casing it was handed", () => {
+
+    assert.equal(composeEntry({ enabled: true, id: "", option: "motion.DETECT" }), "Enable.motion.DETECT", "an empty id names no scope");
+  });
+
+  test("trims the value, and composes an empty one as the bare delimiter", () => {
+
+    assert.equal(composeEntry({ enabled: true, id: "Kitchen", option: "Audio.Volume", value: "  50 " }), "Enable.Audio.Volume.Kitchen=50",
+      "edge whitespace is outside the canonical value domain");
+    assert.equal(composeEntry({ enabled: true, option: "Motion.Zones", value: "" }), "Enable.Motion.Zones=", "an empty value is the bare delimiter");
+  });
+
+  test("what it composes, the enumerator reads back as the parts it was handed", () => {
+
+    const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+    const configuredOptions = [ composeEntry({ enabled: true, id: "Kitchen", option: "Audio.Volume", value: "St. Cecilia's Mix" }),
+      composeEntry({ enabled: false, id: "ABC123", option: "Motion.Detect" }) ];
+
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Audio.Volume" })],
+      [{ enabled: true, id: "Kitchen", value: "St. Cecilia's Mix" }]);
+    assert.deepEqual([...enumerateConfiguredEntries({ catalog, configuredOptions, option: "Motion.Detect" })], [{ enabled: false, id: "ABC123" }]);
+  });
+});
+
+/* The address reader for a caller holding an entry rather than an option. It shares the grammar and the arbitration every other reader uses, and it reads only
+ * addresses: an entry carrying a value, behind the delimiter or in the legacy dot form, is the value reading's to report, so it answers nothing here.
+ */
+describe("FeatureOptions - decodeEntryAddress", () => {
+
+  const catalog = buildCatalogIndex(CATEGORIES, OPTIONS);
+
+  test("reads a global and a scoped address, the option lowered and the scope in the casing the entry carried", () => {
+
+    assert.deepEqual(decodeEntryAddress(catalog, "Enable.Motion.Detect"), { enabled: true, id: "", option: "motion.detect" });
+    assert.deepEqual(decodeEntryAddress(catalog, "Disable.Motion.Detect.AbC123"), { enabled: false, id: "AbC123", option: "motion.detect" });
+    assert.deepEqual(decodeEntryAddress(catalog, "ENABLE.motion.DETECT.Dev1"), { enabled: true, id: "Dev1", option: "motion.detect" },
+      "the action and the option fold case, and the scope keeps what the user typed");
+  });
+
+  test("an address that is itself a declared option is that option, never a shorter one at a scope", () => {
+
+    assert.deepEqual(decodeEntryAddress(catalog, "Enable.Audio.Mute"), { enabled: true, id: "", option: "audio.mute" },
+      "the catalog declares Audio.Mute, so the address is that option rather than Audio at a scope named Mute");
+    assert.deepEqual(decodeEntryAddress(catalog, "Enable.Audio"), { enabled: true, id: "", option: "audio" }, "while Audio alone is the category's own option");
+  });
+
+  test("a bare enable of a value option is an address like any other", () => {
+
+    assert.deepEqual(decodeEntryAddress(catalog, "Enable.Audio.Volume"), { enabled: true, id: "", option: "audio.volume" });
+  });
+
+  test("an entry carrying a value, behind the delimiter or in the legacy dot form, answers undefined", () => {
+
+    for(const entry of [ "Enable.Audio.Volume=50", "Enable.Audio.Volume.Kitchen=60", "Enable.Motion.Detect=on", "Enable.Audio.Volume.50",
+      "Enable.Audio.Volume.Kitchen.60", "Enable.Audio.Volume. " ]) {
+
+      assert.equal(decodeEntryAddress(catalog, entry), undefined, "a value entry's meaning is its value reading: " + JSON.stringify(entry));
+    }
+  });
+
+  test("a non-canonical entry, or one addressing no option the catalog declares, answers undefined", () => {
+
+    for(const entry of [ "", "Motion.Detect", "Toggle.Motion.Detect", "Enable", "Enable.Nobody.Declares.This", "Enable.Motion.Detect.a.b" ]) {
+
+      assert.equal(decodeEntryAddress(catalog, entry), undefined, "nothing to address: " + JSON.stringify(entry));
+    }
   });
 });
 

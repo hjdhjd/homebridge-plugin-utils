@@ -5,13 +5,13 @@
 "use strict";
 
 import { applyCategoryStates, captureCategoryStates, createElement } from "../utils.mjs";
-import { applyRowState, categoryShell, controlValueText, focusControl, optionRow, toggleSecretReveal, triStateTransition,
-  valueCommitTransition } from "../rendering.mjs";
+import { applyRowState, categoryShell, controlValueText, focusControl, optionRow, triStateTransition, valueCommitTransition } from "../rendering.mjs";
 import { configIndex, editsHeld, modelLoaded, projection, scopeCacheKey, scopingControllerId, selectedDeviceId, tablePresentation } from "../selectors.mjs";
 import { holdsController, renameHonored, settledFactsMoved } from "../state.mjs";
 import { FeatureOptionsCategoryState } from "../categoryState.mjs";
 import { effect } from "../store.mjs";
 import { hasValueContent } from "../../featureOptions.js";
+import { toggleSecretReveal } from "../../webUi-secret.mjs";
 
 // The marker class on the nothing-to-list notice. It is what the outgoing capture below recognizes to keep notice DOM out of the DOM cache, so the class is
 // structural rather than decorative, and every site that depends on agreeing about it reads one constant.

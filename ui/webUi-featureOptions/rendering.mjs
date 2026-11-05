@@ -4,6 +4,7 @@
  */
 "use strict";
 
+import { applySecretMasking, createSecretToggle } from "../webUi-secret.mjs";
 import { formatValueList, hasValueContent, isValueOption, optionExists, parseValueList, selectValues } from "../featureOptions.js";
 import { createElement } from "./utils.mjs";
 import { createSvgElement } from "../webUi-svg.mjs";
@@ -23,9 +24,6 @@ import { createSvgElement } from "../webUi-svg.mjs";
  *   - {@link controlValueText} - reads what a row's value control currently holds, in the form storing it would take. The single answer to that question, shared by
  *     the transitions below and by the view's abandonment check, so no caller has to know which controls answer to `.value` and which compose theirs from parts.
  *   - {@link focusControl} - hands focus to the part of a control a user would act in, which an arming gesture owes them.
- *   - {@link toggleSecretReveal} - flips a masked value input between hidden and shown, and re-labels its toggle to match. The one row-DOM write that answers to a
- *     gesture rather than to the projection: whether a secret is currently on screen is a property of how the page is being read at this moment, not of the
- *     configuration, so no action is computed and nothing is dispatched.
  *   - {@link triStateTransition} - the click-time state machine. Given the current DOM state of a checkbox plus the projection entry and configuration, computes only
  *     the action to dispatch. The resulting DOM state is not returned: the dispatch updates the store, and the view re-derives the row through {@link applyRowState}
  *     against the post-dispatch projection. Pure - takes data, returns data.
@@ -35,6 +33,10 @@ import { createSvgElement } from "../webUi-svg.mjs";
  * The functions take projection entries (the view-relative records built by {@link projection}), the current view's scope kind, and any view-context identifiers
  * they need (controllerId, deviceId). They do not read from a store, do not subscribe to events, do not call selectors. The view layer assembles the inputs and
  * applies the outputs.
+ *
+ * A secret option's reveal is the page's own secret primitive, `webUi-secret.mjs`, which a plugin's own fields share: the row builder takes its toggle from there
+ * and the row writer locks it through the same masking writer, while the flip a click asks for answers to a gesture rather than to the projection and lives there
+ * with the rest of it.
  *
  * Splitting the tri-state click logic out as a pure function ({@link triStateTransition}) means the inheritance state machine's action selection can be tested in
  * isolation with plain DOM stubs - no store, no view layer, no event scaffolding. The view layer calls it on the change event, dispatches the returned action, and
@@ -221,36 +223,6 @@ export const applyRowState = ({ armed = false, entry, row, scopeKind }) => {
       }
     }
   }
-};
-
-/**
- * Flip a secret option's value input between masked and revealed, and re-label its toggle to match.
- *
- * Everything here is local to the page. Whether a secret is on screen right now says nothing about the configuration, so the flip computes no action, dispatches
- * nothing, and leaves the committed value alone; the field carries the same text before and after. On a live row the reveal survives every re-derivation, since
- * {@link applyRowState} writes the field's masking only when the row is locked - at which point the value goes back behind the mask and the toggle goes disabled
- * together. A fresh render starts masked again, since the element the builder hands back is a masked one.
- *
- * The state is read off the input's current masking rather than a remembered flag, and the type, the label, and the pressed state are written by the one
- * {@link applySecretMasking} writer this shares with the lock path, so the toggle's accessible name always describes what the next click does and cannot drift
- * from what the field is showing.
- *
- * A toggle whose row carries no value field is a quiet no-op. The view reaches this function by matching a class on whatever the user clicked, so the element it
- * hands over comes from markup rather than from a call site that can be checked, and the webUI's posture toward markup it did not build is to do nothing rather
- * than to throw inside a delegated handler.
- *
- * @param {HTMLButtonElement} toggle - The reveal toggle the user activated.
- */
-export const toggleSecretReveal = (toggle) => {
-
-  const input = toggle.closest(".fo-option-row")?.querySelector(".fo-option-value");
-
-  if(!input) {
-
-    return;
-  }
-
-  applySecretMasking({ input, revealed: input.type === "password", toggle });
 };
 
 /**
@@ -742,7 +714,7 @@ const createListItem = (value) => createElement("span", { classList: ["fo-list-i
 // it takes the color and the scale of the text beside it.
 const REMOVE_GLYPH_PATH = "M4.5 4.5l7 7M11.5 4.5l-7 7";
 
-// Hidden from assistive tech for the same reason createEyeGlyph's glyph is: the button's own aria-label already names the action, so a decorative graphic beside
+// Hidden from assistive tech for the same reason the reveal toggle's eye is: the button's own aria-label already names the action, so a decorative graphic beside
 // it would only repeat what assistive tech has already read.
 const createRemoveGlyph = () => {
 
@@ -1023,67 +995,12 @@ const applyControlLock = ({ control, locked }) => {
   }
 };
 
-// The reveal toggle's two accessible names. Each names what the next click does rather than what the field is currently doing, which is what a control announced
-// as a button wants to say.
-const SECRET_HIDE_LABEL = "Hide the value.";
-const SECRET_SHOW_LABEL = "Show the value.";
-
-// The single writer for a secret field's masked presentation. The field's type and the toggle's labelling describe one state between them, so they are always
-// written together: no path can move one and leave the other saying something else. Both callers pass the state they want rather than a direction, so the writer
-// stays a plain projection of "is this value on screen" onto the DOM that says so.
-const applySecretMasking = ({ input, revealed, toggle }) => {
-
-  input.type = revealed ? "text" : "password";
-  toggle.setAttribute("aria-label", revealed ? SECRET_HIDE_LABEL : SECRET_SHOW_LABEL);
-  toggle.setAttribute("aria-pressed", revealed ? "true" : "false");
-};
-
-// The eye outline the reveal toggle wears: two symmetric curves meeting at the corners, with the pupil drawn separately as a circle.
-const EYE_OUTLINE_PATH = "M1 8c2-3.2 4.3-4.8 7-4.8s5 1.6 7 4.8c-2 3.2-4.3 4.8-7 4.8S3 11.2 1 8Z";
-
 // Build a secret option's field: the masked input and its reveal toggle side by side. The wrapper is what puts them side by side at all - the content cell stacks
-// its children vertically, so without it the toggle would land on its own line beneath the field. Only a secret option is built this way; every other value option
-// pushes its bare input straight into the cell, so an option that declares no secret carries no wrapper at all.
-const createSecretField = ({ option }) => createElement("div", { classList: ["fo-secret-field"] }, [ createValueInput({ option }), createSecretToggle() ]);
-
-// Build the reveal toggle. It starts masked, matching the field it accompanies, and carries its state on `aria-pressed` so assistive tech reads it as the two-state
-// control it is. Its appearance - the surrendered button chrome and the inherited text color the glyph draws against - belongs to the theme stylesheet's
-// `.fo-secret-toggle` rule, so the builder declares only what the control IS.
-const createSecretToggle = () => createElement("button", {
-
-  "aria-label": SECRET_SHOW_LABEL,
-  "aria-pressed": "false",
-  classList: ["fo-secret-toggle"],
-  type: "button"
-}, [createEyeGlyph()]);
-
-// Build the toggle's eye glyph. Every mark draws in currentColor and the graphic is sized in em, so the glyph takes both the color and the scale of the text around
-// it - the same way the sparkline strip wears whatever color its surroundings wear. It is hidden from assistive tech because the button's own label already names
-// the action, and a decorative graphic announced beside that label would only repeat it.
-const createEyeGlyph = () => {
-
-  const glyph = createSvgElement({
-
-    attributes: {
-
-      "aria-hidden": "true",
-      "fill": "none",
-      "height": "1em",
-      "stroke": "currentColor",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      "stroke-width": "1.25",
-      "viewBox": "0 0 16 16",
-      "width": "1em"
-    },
-    tag: "svg"
-  });
-
-  glyph.append(createSvgElement({ attributes: { "d": EYE_OUTLINE_PATH }, tag: "path" }),
-    createSvgElement({ attributes: { "cx": "8", "cy": "8", "r": "2.1" }, tag: "circle" }));
-
-  return glyph;
-};
+// its children vertically, so without it the toggle would land on its own line beneath the field - and it is the same wrapper a plugin's own secret field wears, so
+// the reveal finds a row's field through it as it finds a plugin's. Only a secret option is built this way; every other value option pushes its bare input straight
+// into the cell, so an option that declares no secret carries no wrapper at all.
+const createSecretField = ({ option }) => createElement("div", { classList: ["fo-secret-field"] },
+  [ createValueInput({ option }), createSecretToggle({ subject: "value" }) ]);
 
 // Render the catalog's `defaultValue` as the displayable string used by both the input element and the deviation comparison. Empty string is the consistent
 // representation across every consumer so the input reads empty when disabled and the deviation check treats an empty input as "matches default."

@@ -5,13 +5,13 @@
 "use strict";
 
 import { ALL_CHOICES, buildCatalogIndex, buildConfigIndex } from "../featureOptions.js";
-import { applyRowState, categoryShell, controlValueText, focusControl, optionRow, toggleSecretReveal, triStateTransition,
-  valueCommitTransition } from "./rendering.mjs";
+import { applyRowState, categoryShell, controlValueText, focusControl, optionRow, triStateTransition, valueCommitTransition } from "./rendering.mjs";
 import { describe, test } from "node:test";
 import { initialState, reducer } from "./state.mjs";
 import assert from "node:assert/strict";
 import { createTestDom } from "../ui.helpers.mjs";
 import { projection } from "./selectors.mjs";
+import { toggleSecretReveal } from "../webUi-secret.mjs";
 
 // Catalog fixture: covers the row archetypes (boolean, grouped boolean, value-centric options with and without an explicit inputSize, a default-on value-centric
 // option whose declared default is what an emptied field has to fall back to, and a secret value option) plus a controller-detectable device fixture for upstream

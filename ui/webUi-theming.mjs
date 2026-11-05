@@ -299,7 +299,8 @@ const buildBaseCss = () => [
 
   // A secret option's masked field and its reveal toggle share a horizontal wrapper inside the stacking content cell, which is what seats the control beside the
   // field rather than beneath it. The toggle carries none of the native button chrome and inherits the surrounding text color, so the eye glyph inside it - drawn
-  // in currentColor - takes whatever color the row's text carries in either mode, with no color rule of its own to keep in step.
+  // in currentColor - takes whatever color the row's text carries in light and dark mode alike, with no color rule of its own to keep in step. The same wrapper
+  // serves a plugin's own secret field, which is why it belongs to the page kit.
   ".fo-secret-field { align-items: center; display: flex; gap: var(--fo-space-xs); max-width: 100%; }",
   ".fo-secret-toggle { align-items: center; background: none; border: 0; color: inherit; cursor: pointer; display: inline-flex; " +
     "line-height: 1; padding: 0; }",
@@ -355,13 +356,14 @@ const buildBaseCss = () => [
 
   /* The page kit: the classes a plugin puts on its own custom views so they wear the framework's look. `.fo-card` is the accent-derived frame every framework container
    * already wears, `.fo-monospace` is the per-field monospace opt-in, and `.fo-page` is the marker that scopes the dark form-control corrections - a plugin puts it on a
-   * custom-page container and that container's plain form controls become dark-mode-correct, with nothing outside it touched. `.fo-action` rounds out the page kit,
+   * custom-page container and that container's plain form controls become dark-mode-correct, with nothing outside it touched. `.fo-action` belongs to the page kit too,
    * declared above beside the menu rules it shares its definition with: a plugin puts it on its own sidebar controls so they wear the framework's quiet action
    * treatment. That placement is deliberate, because the ghost is one definition serving both vocabularies and the source-order reasoning that keeps the active tab's
    * fill intact reads as one piece. The vocabulary rule a consumer needs is the whole of it: the solid accent means "where you are", so it belongs to the page's own
    * navigation, while the ghost means "something you can do". The dark form-control corrections tied to `.fo-page` are needed because the host retints a plugin frame's
    * theme classes but never restyles a plain form control, so an unthemed field stays light on a dark page; light mode is deliberately left to Bootstrap, exactly as the
-   * framework treats its own fields.
+   * framework treats its own fields. `.fo-secret-field`, declared above as well, belongs to the page kit too: the wrapper that seats a secret option's reveal beside
+   * its masked field serves a plugin's own secret field the same way, given its toggle by `mountSecretReveals`.
    *
    * Every value reads a token with no literal fallback beside it. The registration surface that adopts this sheet adopts the token sheet first, so the tokens are
    * in force wherever these rules are, by that surface's own construction.

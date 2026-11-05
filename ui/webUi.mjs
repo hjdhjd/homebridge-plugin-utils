@@ -184,6 +184,9 @@ export class webUi {
    *   - `.fo-page` - the marker that scopes the dark-mode form-control corrections. Put it on a custom-page container and that container's plain form controls
    *     become dark-mode-correct: surface, border, text, placeholder, and focus state together. Nothing outside the marked container is touched, and light mode is
    *     left to Bootstrap, exactly as the framework treats its own fields.
+   *   - `.fo-secret-field` - the reveal a feature option's secret value wears, for a plugin's own secret field. Wrap the field and name what it holds,
+   *     `<div class="fo-secret-field" data-secret-subject="API token"><input class="form-control" type="password"></div>`, and `mountSecretReveals` from
+   *     `webUi-secret.mjs` seats the eye toggle beside it, named "Show the API token." until it is pressed; `maskSecrets` masks every revealed field again.
    *
    * @example
    *

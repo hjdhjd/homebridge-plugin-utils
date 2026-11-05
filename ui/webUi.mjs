@@ -179,14 +179,23 @@ export class webUi {
    *
    * The PAGE KIT is the class contract a plugin's own markup opts into, and it is in force wherever this registration is:
    *
+   *   - `.fo-action` - the quiet ghost the framework's menu tabs wear when inactive, for a plugin's own sidebar controls: it says "something you can do", where the
+   *     solid accent of the active tab says "where you are".
    *   - `.fo-card` - the accent-derived frame every framework container wears, for grouping a plugin's own content into a card.
+   *   - `.fo-compact-card` - a card whose own buttons take the compact control treatment and whose disclosure summary reads a step down from body text, for a
+   *     card of small actions beside a sidebar.
    *   - `.fo-monospace` - the monospace stack the framework gives value-bearing inputs, as a per-element opt-in.
    *   - `.fo-page` - the marker that scopes the dark-mode form-control corrections. Put it on a custom-page container and that container's plain form controls
    *     become dark-mode-correct: surface, border, text, placeholder, and focus state together. Nothing outside the marked container is touched, and light mode is
    *     left to Bootstrap, exactly as the framework treats its own fields.
+   *   - `.fo-result` - a line that reserves its own height, for the result or status text a control writes beneath itself, so the text appearing does not shift
+   *     the layout under the user.
    *   - `.fo-secret-field` - the reveal a feature option's secret value wears, for a plugin's own secret field. Wrap the field and name what it holds,
    *     `<div class="fo-secret-field" data-secret-subject="API token"><input class="form-control" type="password"></div>`, and `mountSecretReveals` from
    *     `webUi-secret.mjs` seats the eye toggle beside it, named "Show the API token." until it is pressed; `maskSecrets` masks every revealed field again.
+   *   - `.fo-sidebar-column` - a column held at the framework's own sidebar width, so a plugin's own sidebar lines up with the feature options one.
+   *   - `.fo-sidebar-control` - the compact treatment for a control in that sidebar: the extra-small type and tight padding, wrapping a long label rather than
+   *     widening the column. Pair it with `.fo-action` for the ghost.
    *
    * @example
    *

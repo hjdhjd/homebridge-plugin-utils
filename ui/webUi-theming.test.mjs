@@ -575,6 +575,63 @@ describe("buildBaseCss - the page kit", () => {
     assert.ok(pageFormRules.length > 0, "precondition: the kit does declare form-control rules");
     assert.ok(pageFormRules.every((rule) => rule.startsWith(":root.fo-dark ")), "and every one of them is dark-qualified");
   });
+
+  test("a compact card's buttons and a sidebar control share one compact treatment, read from the type and spacing tokens", async () => {
+
+    using dom = createTestDom();
+
+    // One rule serves a compact card's buttons and a plugin's sidebar controls alike, so the compact treatment cannot drift into slightly different copies.
+    const rule = ruleFor(await baseSheet(), ".fo-compact-card .btn, .fo-sidebar-control");
+
+    assert.equal(rule.style.getPropertyValue("font-size"), "var(--fo-font-size-xs)", "the extra-small type step");
+    assert.equal(rule.style.getPropertyValue("padding"), "var(--fo-space-xs) var(--fo-space-md)", "the tight padding, from the spacing scale");
+    assert.equal(rule.style.getPropertyValue("line-height"), "1.2", "and a line height no token names, as the literal it is");
+  });
+
+  test("a compact card's disclosure summary reads a step down from body text", async () => {
+
+    using dom = createTestDom();
+
+    assert.equal(ruleFor(await baseSheet(), ".fo-compact-card summary").style.getPropertyValue("font-size"), "0.9375rem");
+  });
+
+  test("a result line reserves its own height, so the text a control writes beneath itself does not shift the layout", async () => {
+
+    using dom = createTestDom();
+
+    assert.equal(ruleFor(await baseSheet(), ".fo-result").style.getPropertyValue("min-height"), "1.25em");
+  });
+
+  test("the sidebar column is held at the framework's own sidebar width from every side", async () => {
+
+    using dom = createTestDom();
+
+    const rule = ruleFor(await baseSheet(), ".fo-sidebar-column");
+
+    // Holding the width, the minimum, and the maximum together is what keeps the column from growing with a long label or shrinking beside a wide card.
+    for(const property of [ "max-width", "min-width", "width" ]) {
+
+      assert.equal(rule.style.getPropertyValue(property), "var(--fo-sidebar-width)", property + " reads the sidebar width token");
+    }
+  });
+
+  test("a sidebar control wraps a long label rather than widening its column", async () => {
+
+    using dom = createTestDom();
+
+    assert.equal(ruleFor(await baseSheet(), ".fo-sidebar-control").style.getPropertyValue("white-space"), "normal");
+  });
+
+  test("a token the sidebar and compact rules read carries no literal fallback beside it", async () => {
+
+    using dom = createTestDom();
+
+    const sheet = await baseSheet();
+    const rules = [ ".fo-compact-card .btn, .fo-sidebar-control", ".fo-compact-card summary", ".fo-result", ".fo-sidebar-column", ".fo-sidebar-control" ]
+      .map((selector) => ruleFor(sheet, selector).cssText);
+
+    assert.ok(rules.every((text) => !/var\(--fo-[\w-]+\s*,/.test(text)), "a fallback would be a second definition of a value the tokens module owns");
+  });
 });
 
 describe("paintMenuTabs", () => {

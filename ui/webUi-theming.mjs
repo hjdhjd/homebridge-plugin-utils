@@ -365,10 +365,22 @@ const buildBaseCss = () => [
    * framework treats its own fields. `.fo-secret-field`, declared above as well, belongs to the page kit too: the wrapper that seats a secret option's reveal beside
    * its masked field serves a plugin's own secret field the same way, given its toggle by `mountSecretReveals`.
    *
-   * Every value reads a token with no literal fallback beside it. The registration surface that adopts this sheet adopts the token sheet first, so the tokens are
-   * in force wherever these rules are, by that surface's own construction.
+   * The rest of the kit lays out a plugin's own sidebar and the compact cards beside it. `.fo-sidebar-column` holds a column at the framework's own sidebar width,
+   * so a plugin's sidebar lines up with the feature options one, and `.fo-sidebar-control` is the compact treatment for a control in it - the extra-small type and
+   * tight padding, wrapping a long label rather than widening the column - which pairs with `.fo-action` for the ghost. `.fo-compact-card` gives a card's own
+   * buttons that same compact treatment and its disclosure summary a step down from body text, and `.fo-result` reserves a line's height for the result or status
+   * text a control writes beneath itself, so the text appearing does not shift the layout under the user.
+   *
+   * A value the tokens module names reads its token with no literal fallback beside it. The registration surface that adopts this sheet adopts the token sheet
+   * first, so the tokens are in force wherever these rules are, by that surface's own construction. A value no token names - a line height, a type size between
+   * the token steps, a reserved height, a wrapping rule - is written as the plain literal it is.
    */
   ".fo-card { border: 1px solid var(--fo-border-accent); border-radius: var(--fo-radius-md); }",
+  ".fo-compact-card .btn, .fo-sidebar-control { font-size: var(--fo-font-size-xs); line-height: 1.2; padding: var(--fo-space-xs) var(--fo-space-md); }",
+  ".fo-compact-card summary { font-size: 0.9375rem; }",
+  ".fo-result { min-height: 1.25em; }",
+  ".fo-sidebar-column { max-width: var(--fo-sidebar-width); min-width: var(--fo-sidebar-width); width: var(--fo-sidebar-width); }",
+  ".fo-sidebar-control { white-space: normal; }",
   ".fo-monospace { font-family: var(--fo-font-monospace); }",
   ":root.fo-dark .fo-page .form-control { background-color: var(--fo-form-control-bg); border-color: var(--fo-form-control-border); " +
     "color: var(--fo-text-on-elevated); }",

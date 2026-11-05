@@ -470,11 +470,13 @@ const viewAdmitsOption = (scopes, viewKind) => {
  * A resolver answering in the wrong shape is a plugin bug and surfaces as a throw, which is the stance the validators already take: a picker rendering an empty or
  * malformed list would leave the user looking at a control that cannot express anything, with nothing on screen saying why.
  *
- * The offered members come first, each marked with whether the shown value selects it, and every stored value the list does not carry follows, marked unknown and
- * selected. That is what keeps a choice the device stopped reporting on screen instead of silently dropping out of the configuration the next time the row is
- * written.
+ * The offered members come first, each marked with whether the shown value selects it, and a value the list does not carry follows, marked unknown and selected,
+ * wherever the row could otherwise write it away. A single choice keeps its unknown member at every scope, because the value it inherits is what the row reads
+ * and the user can change it. A list keeps its unknown members only where the row's value is stored at the scope in view: that is what keeps a choice the device
+ * stopped reporting on screen instead of silently dropping out of the configuration the next time the row is written. An inherited or default list member the
+ * device does not offer is absent - it has no box, so the group cannot write it onto this scope when the user edits the members it does offer.
  */
-const resolveChoices = ({ catalog, controller, device, option, shown }) => {
+const resolveChoices = ({ catalog, controller, device, option, shown, storedHere }) => {
 
   let declared = option.choices;
 
@@ -500,6 +502,11 @@ const resolveChoices = ({ catalog, controller, device, option, shown }) => {
 
   const selection = selectValues({ domain: declared.map((choice) => choice.value), multiple: option.multiple === true, value: shown });
   const choices = declared.map((choice) => ({ label: choice.label, selected: selection.selected.includes(choice.value), unknown: false, value: choice.value }));
+
+  if((option.multiple === true) && !storedHere) {
+
+    return choices;
+  }
 
   for(const entry of selection.unknown) {
 
@@ -611,12 +618,17 @@ const computeProjection = (state) => {
        *
        * The selection is settled here, once, so the renderer and the deviation rule read one answer rather than each deriving their own. The one selection this
        * does NOT describe is an armed row's, which is empty by the arming gesture's own rule and is written from the armed flag at render time.
+       *
+       * The row's value is stored at the scope in view exactly when resolution found a stored value and found it at the scope the page presents. An entry at a
+       * broader scope is inherited, the catalog default is no entry at all, and an entry here carrying no value - a Disable, or a bare enable - shows the default,
+       * so none of those stores the value the row shows.
        */
       let choices;
 
       if(option.choices !== undefined) {
 
-        choices = resolveChoices({ catalog, controller, device, option, shown: value ?? String(option.defaultValue ?? "") });
+        choices = resolveChoices({ catalog, controller, device, option, shown: value ?? String(option.defaultValue ?? ""),
+          storedHere: (entryScope === viewScope) && (resolved.optionValue !== undefined) });
       }
 
       counts.total++;

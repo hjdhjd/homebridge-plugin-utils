@@ -9,7 +9,9 @@ import { configIndex, editsHeld, modelLoaded, projection, scopeCacheKey, scoping
   stagingPending, tablePresentation } from "./selectors.mjs";
 import { controllerNoticeCopy, initialState, reducer } from "./state.mjs";
 import { describe, test } from "node:test";
+import { optionRow, valueCommitTransition } from "./rendering.mjs";
 import assert from "node:assert/strict";
+import { createTestDom } from "../ui.helpers.mjs";
 
 // Catalog fixture: a small set of categories with a mix of boolean, grouped, value-centric, and ungrouped options. Drives visibility, modification,
 // dependency, and value resolution paths.
@@ -1227,5 +1229,131 @@ describe("projection - resolved choices", () => {
 
     assert.deepEqual(pickerEntry(refreshed, "Named").choices.map((c) => c.value), ["new"],
       "a controller-list refresh moves the controllers slice, which the projection memo watches");
+  });
+});
+
+/* A member a device does not offer, at the scopes a row can read it from. The device's source offers its own members and never "zzz", which stands for a value the
+ * configuration or the catalog default names and the device in view does not carry. A list keeps such a member on screen only where its row's value is stored at
+ * the scope in view, while a single choice keeps it everywhere, since the inherited value is what that row reads and the user can change it.
+ */
+describe("projection - a list member the device does not offer", () => {
+
+  const LIST_CATEGORIES = [{ description: "List Options", name: "List" }];
+
+  const LIST_OPTIONS = {
+
+    List: [
+
+      { choices: "types", default: true, defaultValue: ALL_CHOICES, description: "Detected types.", multiple: true, name: "Types" },
+      { choices: "types", default: true, defaultValue: "a,zzz", description: "Types with a default naming one the device lacks.", multiple: true, name: "Preset" },
+      { choices: "types", default: true, defaultValue: "a", description: "One type.", name: "Single" }
+    ]
+  };
+
+  const DEVICES = [
+
+    { firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Controller A", serialNumber: "ctrl-a" },
+    { firmwareRevision: "1.0", manufacturer: "X", model: "Y", name: "Device A", serialNumber: "dev-a" }
+  ];
+
+  const CONTROLLER_VIEW = { controllerId: "ctrl-a", kind: "controller" };
+  const DEVICE_VIEW = { controllerId: "ctrl-a", deviceId: "dev-a", kind: "device" };
+
+  // Build a ready state over the list catalog at the requested scope, the device list landing through the request/outcome pairing the reducer guards.
+  const listState = ({ configuredOptions = [], scope }) => {
+
+    const catalog = {
+
+      ...buildCatalogIndex(LIST_CATEGORIES, LIST_OPTIONS),
+
+      choiceSources: { types: () => [ { label: "A", value: "a" }, { label: "B", value: "b" } ] },
+      validators: { isController: (device) => device?.serialNumber === "ctrl-a", validOption: () => true, validOptionCategory: () => true }
+    };
+
+    const base = reducer(initialState(), { catalog, configuredOptions, controllers: [{ address: "10.0.0.1", name: "Controller A", serialNumber: "ctrl-a" }],
+      mode: "controller-based", type: "model:loaded" });
+    const requested = reducer(base, { controllerId: "ctrl-a", type: "devices:requested" });
+    const withDevices = reducer(requested, { controllerId: "ctrl-a", devices: DEVICES, error: "", seq: requested.devicesRequest.seq, type: "devices:loaded" });
+
+    return reducer(withDevices, { origin: "user", scope, type: "scope:changed" });
+  };
+
+  const listEntry = (state, optionName) => projection(state).categories[0].entries.find((e) => e.name === optionName);
+  const values = (entry) => entry.choices.map((choice) => choice.value);
+
+  test("a device inheriting a global list with a member outside its domain shows no such box", () => {
+
+    const entry = listEntry(listState({ configuredOptions: ["Enable.List.Types=a,zzz"], scope: DEVICE_VIEW }), "Types");
+
+    assert.equal(entry.scope, "global", "precondition: the device inherits the global list");
+    assert.deepEqual(entry.choices, [ { label: "A", selected: true, unknown: false, value: "a" }, { label: "B", selected: false, unknown: false, value: "b" } ],
+      "the inherited member the device lacks has no box, while what the device offers reads the inherited selection");
+  });
+
+  test("a controller view inheriting a global list shows no box for a member outside its domain", () => {
+
+    const entry = listEntry(listState({ configuredOptions: ["Enable.List.Types=a,zzz"], scope: CONTROLLER_VIEW }), "Types");
+
+    assert.equal(entry.scope, "global", "precondition: the controller inherits the global list");
+    assert.deepEqual(values(entry), [ "a", "b" ]);
+  });
+
+  test("a default list member outside the domain is absent, wherever the row shows the default", () => {
+
+    assert.deepEqual(values(listEntry(listState({ scope: DEVICE_VIEW }), "Preset")), [ "a", "b" ], "a device view shows only what the device offers");
+    assert.deepEqual(values(listEntry(listState({ scope: { kind: "global" } }), "Preset")), [ "a", "b" ], "and so does the global view, with nothing stored");
+  });
+
+  test("a row whose own entry stores no value shows its default without the member the device lacks", () => {
+
+    // A Disable and a bare enable at the device are entries at the scope in view, and neither stores a value: the row shows the default, which is no list the
+    // user wrote here, so a member it names that the device lacks gets no box to be written back onto this scope from.
+    for(const configuredOptions of [ ["Disable.List.Preset.dev-a"], ["Enable.List.Preset.dev-a"] ]) {
+
+      const entry = listEntry(listState({ configuredOptions, scope: DEVICE_VIEW }), "Preset");
+
+      assert.equal(entry.scope, "device", "precondition: the row's own entry sits at the device: " + configuredOptions[0]);
+      assert.deepEqual(values(entry), [ "a", "b" ], configuredOptions[0]);
+    }
+  });
+
+  test("a value stored at the device beside an inherited one keeps its box", () => {
+
+    const entry = listEntry(listState({ configuredOptions: [ "Enable.List.Types=a,yyy", "Enable.List.Types.dev-a=b,zzz" ], scope: DEVICE_VIEW }), "Types");
+
+    assert.equal(entry.scope, "device", "precondition: the device's own entry is the one the row reads");
+    assert.deepEqual(entry.choices, [ { label: "A", selected: false, unknown: false, value: "a" }, { label: "B", selected: true, unknown: false, value: "b" },
+      { label: "zzz", selected: true, unknown: true, value: "zzz" } ], "the device's own stored member stays on screen, chosen, and the global one never appears");
+  });
+
+  test("a single-choice row keeps its inherited unknown member", () => {
+
+    const entry = listEntry(listState({ configuredOptions: ["Enable.List.Single=zzz"], scope: DEVICE_VIEW }), "Single");
+
+    assert.equal(entry.scope, "global", "precondition: the device inherits the global choice");
+    assert.deepEqual(entry.choices.at(-1), { label: "zzz", selected: true, unknown: true, value: "zzz" },
+      "the value the row reads stays on screen for the user to change");
+  });
+
+  test("an edit to the inheriting row writes only offered members", () => {
+
+    using dom = createTestDom();
+
+    // The default-on list row inherits its catalog default, so it is live at the device with the default's selection checked. Checking the second member is the
+    // edit, and what it writes is composed from the boxes the group holds.
+    const state = listState({ scope: DEVICE_VIEW });
+    const entry = listEntry(state, "Preset");
+    const row = optionRow({ deviceId: "dev-a", entry, scopeKind: projection(state).viewScope });
+    const control = row.querySelector(".fo-option-value");
+
+    assert.equal(entry.scope, "none", "precondition: the row reads the catalog default");
+
+    control.querySelector(".fo-choice-checkbox[value=b]").checked = true;
+
+    const { action } = valueCommitTransition({ catalog: state.catalog, configIndex: configIndex(state), control, controllerId: scopingControllerId(state),
+      deviceId: "dev-a", entry });
+
+    assert.deepEqual(action, { args: { enabled: true, id: "dev-a", option: "List.Preset", value: "a,b" }, type: "option:set" },
+      "the edit stores the members the device offers, and nothing it never offered");
   });
 });

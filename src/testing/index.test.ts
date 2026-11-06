@@ -1,14 +1,14 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * testing/index.test.ts: Unit tests for the cross-cutting test helpers in testing/index.ts - expectAt, present, silentLog, capturingLog, formatLogEntry, linesAt,
- * loggedAt, logCount, assertNoUnhandledRejections, waitUntil, settle, settleUntil, advanceThroughSchedule, drainClock, freePort, listenOnLoopback, stopListening,
- * errnoError, makeScratchRoot.
+ * loggedAt, logCount, assertNoUnhandledRejections, waitUntil, settle, settleUntil, advanceThroughSchedule, drainClock, advanceUntil, freePort, listenOnLoopback,
+ * stopListening, errnoError, makeScratchRoot.
  * Helpers earn the same enumerated-criteria coverage as production code per the testing convention - every branch, every error path, every async outcome - because a
  * bug in a shared helper cascades into every test that consumes it.
  */
 import type { CapturingLog, TestLogEntry } from "./index.ts";
-import { advanceThroughSchedule, assertNoUnhandledRejections, capturingLog, drainClock, errnoError, expectAt, formatLogEntry, freePort, linesAt, listenOnLoopback,
-  logCount, loggedAt, makeScratchRoot, present, settle, settleUntil, silentLog, stopListening, waitUntil } from "./index.ts";
+import { advanceThroughSchedule, advanceUntil, assertNoUnhandledRejections, capturingLog, drainClock, errnoError, expectAt, formatLogEntry, freePort, linesAt,
+  listenOnLoopback, logCount, loggedAt, makeScratchRoot, present, settle, settleUntil, silentLog, stopListening, waitUntil } from "./index.ts";
 import { basename, dirname, join } from "node:path";
 import { createConnection, createServer } from "node:net";
 import { describe, test } from "node:test";
@@ -731,6 +731,134 @@ describe("drainClock", () => {
     assert.equal(steps, 1, "the leading yield must let a late registration reach the clock before the drain asks for a deadline");
     assert.equal(finished, true, "the drain must leave the body finished");
     assert.equal(clock.pending, 0, "the drain must end with nothing pending");
+  });
+});
+
+describe("advanceUntil", () => {
+
+  test("steps a poll loop whose waits double until the poll the predicate names lands, and stops there", async () => {
+
+    /* The reason the walk exists: a poll loop re-arms forever, so a drain never ends, and its waits come from a formula, so a written-down schedule would copy the
+     * backoff into the test. Waiting for the third poll lands the clock where that poll's wait comes due, and the next wait left pending at its own deadline is what
+     * proves the walk stopped the moment the predicate held rather than stepping on. The loop never ends, as a poll loop does not, and it holds nothing outside this
+     * clock, so the row leaves it at its next wait.
+     */
+    const clock = new TestClock();
+
+    let polls = 0;
+
+    void (async (): Promise<void> => {
+
+      for(let wait = 10; ; wait *= 2) {
+
+        // A poll loop waits out one interval before it arms the next, so these awaits are sequential by design.
+        // eslint-disable-next-line no-await-in-loop
+        await clock.delay(wait);
+
+        polls++;
+      }
+    })();
+
+    await advanceUntil(clock, () => polls === 3, { description: "the third poll to land" });
+
+    assert.equal(polls, 3, "the walk must stop on the poll the predicate names");
+    assert.equal(clock.now(), 70, "virtual time must land where the third poll's wait comes due");
+    assert.equal(clock.pending, 1, "the poll loop's next wait must still be pending");
+    assert.equal(clock.nextDeadline, 150, "the pending wait must be the fourth, doubled from the third");
+  });
+
+  test("settles before each read, so the continuation a step released has run when the predicate is asked", async () => {
+
+    // A step that resolves a wait only releases its continuation, and a real continuation runs more than one microtask deep before it acts. A walk that asked the
+    // predicate straight after the step would read the state from before the body ran and then find the clock empty, so each read has to follow a full turn.
+    const clock = new TestClock();
+
+    let finished = false;
+
+    void (async (): Promise<void> => {
+
+      await clock.delay(10);
+      await Promise.resolve();
+
+      finished = true;
+    })();
+
+    await advanceUntil(clock, () => finished, { description: "the continuation after the wait to run" });
+
+    assert.equal(clock.now(), 10, "the walk must take the one step the body's wait asked for");
+  });
+
+  test("settles before the first read, so a body that reaches the clock a microtask late is still stepped", async () => {
+
+    // A subject does not always register its first wait synchronously...a body that awaits anything on its way to the clock registers a turn later. The yield ahead
+    // of the first read is what lets the walk see that wait, rather than finding an empty clock and failing as though the subject had never armed it.
+    const clock = new TestClock();
+
+    let finished = false;
+
+    void (async (): Promise<void> => {
+
+      await Promise.resolve();
+      await clock.delay(10);
+
+      finished = true;
+    })();
+
+    await advanceUntil(clock, () => finished, { description: "the late-registered wait to come due" });
+
+    assert.equal(clock.now(), 10, "the leading yield must let a late registration reach the clock before the walk asks for a deadline");
+  });
+
+  test("moves no time when the predicate already holds", async () => {
+
+    // A state that already holds must cost no step: the walk reads before it advances, so a timer already pending stays armed and the clock stays at its start.
+    const clock = new TestClock();
+
+    clock.schedule(() => undefined, 10);
+
+    await advanceUntil(clock, () => true, { description: "a condition that already holds" });
+
+    assert.equal(clock.now(), 0, "a predicate that already holds must move no virtual time");
+    assert.equal(clock.pending, 1, "a predicate that already holds must leave the pending timer armed");
+  });
+
+  test("throws naming the step budget when a repeating timer keeps the clock busy", async () => {
+
+    /* A repeating timer always has a next deadline, so a walk over it with a predicate that never holds would step forever, and the bound turns that hang into a
+     * message naming the state and the budget. The message is built from the option rather than from anything measured, so it reads the same whether the walk took
+     * a step too few or a step too many...only the clock landing on the third fire shows the walk took exactly the budgeted steps. The read count is what shows the
+     * walk read the state the last step produced before it gave up: a walk that checked its budget ahead of the read would take the same steps and throw the same
+     * message, yet report a state that landed on the final step as one that never arrived.
+     */
+    const clock = new TestClock();
+    const handle = clock.schedule(() => undefined, 10, { repeat: true });
+
+    let reads = 0;
+
+    try {
+
+      await assert.rejects(async () => advanceUntil(clock, () => {
+
+        reads++;
+
+        return false;
+      }, { description: "a condition that never holds", steps: 3 }),
+      { constructor: Error, message: "advanceUntil: a condition that never holds did not hold within 3 clock steps." });
+
+      assert.equal(clock.now(), 30, "the walk must take exactly the budgeted steps before it throws");
+      assert.equal(reads, 4, "the walk must read the state once before its first step and once after each step, the last included");
+    } finally {
+
+      handle[Symbol.dispose]();
+    }
+  });
+
+  test("throws naming the empty clock when nothing is pending", async () => {
+
+    // A clock with nothing pending is a different bug from a wait that never produced the state: the subject never armed the wait the test expected, and no number of
+    // steps would change that, so the walk says so rather than reporting a budget it never spent.
+    await assert.rejects(async () => advanceUntil(new TestClock(), () => false, { description: "a condition that never holds" }),
+      { constructor: Error, message: "advanceUntil: a condition that never holds did not hold, and the clock had nothing pending." });
   });
 });
 

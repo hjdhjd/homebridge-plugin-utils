@@ -9,9 +9,9 @@
  * The package publishes one subpath per concern - the log client, the explicit-resource-management polyfills, the ESLint preset - and this is the concern named test
  * support. A consumer reaches all of it through `homebridge-plugin-utils/testing`: the cross-cutting helpers defined below - the capturing logger and its entry
  * finders, the unhandled-rejection assertion, the shared poll-with-deadline and the turn-budgeted poll beside it, the macrotask yield with the `TestClock` walks built on
- * it (`advanceThroughSchedule` through a known schedule of waits, `drainClock` until nothing is pending), the real-socket family that reserves a port and binds and
- * stops a loopback server, and the scratch folder an `await using` scope removes - the runtime-floor guard machinery in `runtime-floor.ts` beside this file, and the
- * test doubles that stand in for the library's own dependency-inversion boundaries.
+ * it (`advanceThroughSchedule` through a known schedule of waits, `drainClock` until nothing is pending, `advanceUntil` until a condition holds), the real-socket
+ * family that reserves a port and binds and stops a loopback server, and the scratch folder an `await using` scope removes - the runtime-floor guard machinery in
+ * `runtime-floor.ts` beside this file, and the test doubles that stand in for the library's own dependency-inversion boundaries.
  *
  * The doubles are aggregated here, not relocated. Each one still sits beside the production module it stands in for - `clock-double.ts` beside `clock.ts`,
  * `recording-process-double.ts` beside `record.ts`, `socket-double.ts` beside `socket.ts`, `mqtt-client-double.ts` beside `mqttClient.ts` - because a double and its
@@ -595,6 +595,78 @@ export async function drainClock(clock: TestClock, limit = 1000): Promise<number
 
       throw new Error("drainClock: the clock still had entries pending after " + limit.toString() + " steps.");
     }
+  }
+}
+
+/**
+ * Step `clock` from deadline to deadline until `predicate()` reads `true`, letting the queue come to rest before every read, and throw when the step budget is spent
+ * or the clock has nothing left to step to with the predicate still false.
+ *
+ * This is the walk for a subject that keeps arming waits and computes the ones it arms: a poll loop that re-arms after every poll, a backoff whose next wait comes
+ * from a formula. {@link advanceThroughSchedule} is the walk when the test knows the schedule, but it needs every wait written down, which copies the subject's
+ * timing into the test. {@link drainClock} is the walk for a subject that runs out of work, but it ends only when nothing is pending, which a poll loop never
+ * reaches. This one asks the subject's state instead of its schedule, so the test names the outcome it is waiting for and leaves the timing to the subject.
+ *
+ * It is the virtual-time sibling of {@link settleUntil}: that one budgets macrotask turns and this one budgets clock steps. The budget is a ceiling that fails loudly
+ * naming the state that never arrived rather than a measurement of how far the clock had to go...it costs nothing on a run that reaches the state early, and it
+ * still ends a run whose subject would otherwise step forever. A step is the next deadline of anything on the clock, not only the subject's own waits, so a fast
+ * repeating timer beside the awaited wait spends the budget on its own fires.
+ *
+ * Every read follows a yield, the first one included. Work an earlier advance released, and a wait a body registers only after awaiting something on its way to
+ * the clock, each need one turn before the predicate or the clock can see them, so a read taken before the yield would miss the state the last step produced and
+ * would find an empty clock that was about to be armed.
+ *
+ * Each failure names a different bug. Spending the budget means the subject kept waiting and its waits never produced the state. Finding nothing pending means the
+ * subject never armed the wait the walk was meant to step through, or stopped arming it. A subject that crosses a macrotask boundary of its own before arming its
+ * next wait reads the same way, because each step settles one turn, so a subject like that is stepped by hand with `advanceToNext` and `settle`.
+ *
+ * @param clock               - The clock whose virtual time the walk moves.
+ * @param predicate           - The condition to read. Read once before the first step, so a state that already holds moves no time at all, and once after each step.
+ * @param options             - Walk options.
+ * @param options.description - What the walk is for, in the grammar of "waiting for _____". It is the whole of the failure message, so name the state rather than
+ *                              the assertion.
+ * @param options.steps       - The most clock steps to take. Defaults to 100.
+ *
+ * @throws `Error` when `steps` advances have run with the predicate still false.
+ * @throws `Error` when the clock has nothing pending with the predicate still false.
+ *
+ * @example
+ *
+ * ```ts
+ * // A poller that backs off between attempts and re-arms its wait after each one, walked until the attempt that reaches the device lands.
+ * await advanceUntil(clock, () => poller.connected, { description: "the poller to reach the device" });
+ *
+ * assert.equal(poller.attempts, 3);
+ * ```
+ *
+ * @category Testing
+ */
+export async function advanceUntil(clock: TestClock, predicate: () => boolean, { description, steps = 100 }: { description: string; steps?: number }): Promise<void> {
+
+  let advances = 0;
+
+  for(;;) {
+
+    // Each pass has to let the work the last step released run before the predicate or the clock is asked, so these awaits are sequential like the drain's.
+    // eslint-disable-next-line no-await-in-loop
+    await settle();
+
+    if(predicate()) {
+
+      return;
+    }
+
+    if(advances === steps) {
+
+      throw new Error("advanceUntil: " + description + " did not hold within " + steps.toString() + " clock steps.");
+    }
+
+    if(!clock.advanceToNext()) {
+
+      throw new Error("advanceUntil: " + description + " did not hold, and the clock had nothing pending.");
+    }
+
+    advances++;
   }
 }
 

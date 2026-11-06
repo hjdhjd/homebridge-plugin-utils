@@ -237,7 +237,7 @@ export class MqttLastPayloads {
 
   /**
    * Forget every topic, so the next change-gated publish on each one goes out. The client clears its memory on every connect and at teardown, and the double clears
-   * its own when a session is restored and at abort.
+   * its own when a session is established and at abort.
    */
   public clear(): void {
 

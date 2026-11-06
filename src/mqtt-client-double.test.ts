@@ -16,7 +16,9 @@
  *   at release only while the entry still carries its own token, the lever's false-to-true transition clearing the memory where a re-assert does not, and a suppressed
  *   call saying nothing at all.
  * - Connection state: `connected` true on a fresh double, a publish refused and counted while it is false, the refusal answering ahead of the arbitrary refusal
- *   lever, the getter's republish absorbing the same refusal, and `connected` reading false once the double aborts.
+ *   lever, the getter's republish absorbing the same refusal, and `connected` reading false once the double aborts; the `connected` option set false refusing a
+ *   publish until the first true, which states availability and runs a connect registration, set true or omitted holding a session, and no constructed double
+ *   recording anything.
  * - The connect notification: the lever's false-to-true edge invoking every registration once and in order, after the memory clear and with the session reading
  *   live; a write that is not that edge invoking nothing; a registration joining a session already held waiting for the edge after it; the releases - a signal, a
  *   pre-aborted signal, the abort - leaving the edge nothing to invoke; a faulting handler reaching the sentence the client logs while the registration beside it
@@ -56,14 +58,19 @@
  *   and an empty id stay no-ops rather than reaching it.
  * - The factory: a broker URL or topic prefix absent, null or empty answering null, recorded with its config and init and logging nothing; with no init clock, a
  *   word that never settles refused at the grace on the factory's TestClock alone, and an init clock winning over the factory's; the double logging on the
- *   config's logger; and a signal already aborted answering a double that has already ended with its reason, and a later abort ending it with its reason.
+ *   config's logger; a signal already aborted answering a double that has already ended with its reason, and a later abort ending it with its reason; the
+ *   `connected` option reaching each double it answers, and omitted leaving the double's own default; with `holdEnd`, the hold invoked ahead of the consumer's
+ *   own end registration, which reads `holdReached` true, `holdReached` false before any end and with no hold, and still true once the end has finished and
+ *   the factory has answered another double; and a held end still open a millisecond short of the grace, finishing only once its promise settles.
+ * - The settle past an end: an end nothing holds, begun with a word registered, finished once `settlePastMqttEnd` resolves, and one the suite's hold keeps open
+ *   on the system clock's default grace not finished.
  */
 import type { Assert, Equal } from "./testing/index.ts";
 import { HbpuAbortError, composeSignals, isTimeoutReason, onAbort } from "./util.ts";
 import { MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC } from "./mqtt-topics.ts";
 import { MQTT_CONNECT_HANDLER_CANCELLED, MQTT_UNSAID_WORDS_WARNING, MqttOfflineError, guardedPublishReason } from "./mqtt-publish.ts";
 import type { MqttClient, MqttClientConfigCandidate, MqttClientInit, createMqttClient } from "./mqttClient.ts";
-import { TestMqttClient, TestMqttClientFactory } from "./mqtt-client-double.ts";
+import { TestMqttClient, TestMqttClientFactory, settlePastMqttEnd } from "./mqtt-client-double.ts";
 import { assertNoUnhandledRejections, capturingLog, errnoError, expectAt, linesAt, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import { format, promisify } from "node:util";
@@ -853,11 +860,53 @@ describe("TestMqttClient - connection state", () => {
     assert.equal(mqtt.connected, false);
     assert.equal(mqtt.aborted, true);
   });
+
+  test("constructed with connected false, a publish is refused offline, and the first true states availability and runs a connect registration", async () => {
+
+    // A real client holds no session until the broker's first CONNACK, so a double constructed with `connected: false` starts there, and the lever's first move
+    // to true is that connect: the statement is recorded and the registration runs, as the client's first connect states and runs them.
+    const mqtt = new TestMqttClient({ connected: false });
+
+    let connects = 0;
+
+    mqtt.onConnect(() => { connects++; });
+
+    assert.equal(mqtt.connected, false, "the option must start the double with no session");
+
+    await assert.rejects(mqtt.publish("device1/status", "on"), MqttOfflineError);
+
+    assert.equal(mqtt.rejectedPublishes, 1, "and the refusal is counted like any other");
+
+    mqtt.connected = true;
+
+    await settle();
+
+    assert.deepEqual(mqtt.published, [AVAILABILITY_RECORD], "the first true must record the statement the client's first connect makes, and nothing before it");
+    assert.equal(connects, 1, "and run the connect registration once");
+  });
+
+  test("constructed with connected true or with no option, the double holds a session, and no constructed double records anything", async () => {
+
+    // Construction crosses no session edge wherever the option starts the lever, so a double built with the option set true, set false or left out has recorded no
+    // statement and counted no refusal once its construction has settled.
+    const doubles = { bare: new TestMqttClient(), connected: new TestMqttClient({ connected: true }), disconnected: new TestMqttClient({ connected: false }) };
+
+    await settle();
+
+    assert.equal(doubles.connected.connected, true, "the option set true must hold a session");
+    assert.equal(doubles.bare.connected, true, "and so must a double constructed with no option");
+
+    for(const [ name, mqtt ] of Object.entries(doubles)) {
+
+      assert.deepEqual(mqtt.published, [], "the " + name + " double must record nothing at construction");
+      assert.equal(mqtt.rejectedPublishes, 0, "and count no refusal");
+    }
+  });
 });
 
 describe("TestMqttClient - connect notification", () => {
 
-  /* The lever's false-to-true edge is the double's session restored, and it is what a scenario moves to make a consumer restate its held state. The rows here hold
+  /* The lever's false-to-true edge is the double's connect, and it is what a scenario moves to make a consumer restate its held state. The rows here hold
    * the edge to the client's own contract: which registrations it invokes, in what order, what they read while they run, and what a faulting one does to the
    * registrations beside it. A property write cannot be awaited, so every row that asserts on an asynchronous handler's effect awaits a turn first.
    */
@@ -2758,5 +2807,120 @@ describe("TestMqttClientFactory", () => {
 
     assert.equal(mqtt.aborted, true, "the signal's abort must end the double");
     assert.equal(mqtt.signal.reason, reason, "with the signal's own reason");
+  });
+
+  test("the connected option reaches each double the factory answers, and omitted it leaves the double's own default", async () => {
+
+    // The fitted factory answers more than one double, so the option is read on every create rather than on the first alone, and a factory with no option
+    // answers a double that has to fall back on its own default of a session already held.
+    const fitted = new TestMqttClientFactory({ connected: false });
+    const first = created(fitted, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX });
+    const second = created(fitted, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX });
+    const bare = created(new TestMqttClientFactory(), { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX });
+
+    assert.deepEqual([ first.connected, second.connected ], [ false, false ], "the option must start each double with no session");
+
+    await assert.rejects(second.publish("device1/status", "on"), MqttOfflineError);
+
+    assert.equal(bare.connected, true, "and a factory with no option must leave the double holding one");
+  });
+
+  test("the hold runs ahead of the consumer's end registration, which reads holdReached true, and it reads false before any end and with no hold", async () => {
+
+    // The consumer registers its word after create returns, as a platform does, so the word can only find the mark set if the hold was registered inside create
+    // and marked the factory as it was invoked rather than after the promise it waits on. The held factory's TestClock is never advanced, so no grace ends the hold.
+    // The mark is the factory's own, so it must still stand once the end has finished and once the factory has answered another double.
+    const hold: PromiseWithResolvers<void> = Promise.withResolvers();
+    const held = new TestMqttClientFactory({ clock: new TestClock(), holdEnd: hold.promise });
+    const unheld = new TestMqttClientFactory();
+    const heldMqtt = created(held, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX });
+    const unheldMqtt = created(unheld, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX });
+    const readings: { held: boolean[]; unheld: boolean[] } = { held: [], unheld: [] };
+
+    heldMqtt.onEnd(() => { readings.held.push(held.holdReached); });
+    unheldMqtt.onEnd(() => { readings.unheld.push(unheld.holdReached); });
+
+    assert.equal(held.holdReached, false, "no end has begun, so the hold must not read reached");
+
+    const ending = heldMqtt.end();
+
+    assert.deepEqual(readings.held, [true], "the consumer's word must find the hold already reached in the turn the end began");
+    assert.deepEqual(await unheldMqtt.end(), []);
+    assert.deepEqual(readings.unheld, [false], "and a factory with no hold must read false through an end");
+
+    hold.resolve();
+
+    assert.deepEqual(await ending, [], "the held end finishes once the row settles the promise");
+    assert.equal(held.holdReached, true, "and the mark must outlast the end that set it");
+
+    created(held, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX });
+
+    assert.equal(held.holdReached, true, "and a further double the factory answers must leave it standing");
+  });
+
+  test("an end the hold keeps open finishes only once the holdEnd promise settles", async () => {
+
+    // The factory's TestClock stops a millisecond short of the grace, so the grace cannot end the wait, and the end can only finish by the hold's promise settling.
+    // Settling past the turns an unheld end takes, and again once the clock has moved, is what makes the open end the hold's doing rather than an end that has
+    // simply not finished yet, or a hold that lets go of its own accord after a few turns or some time short of the grace.
+    const clock = new TestClock();
+    const hold: PromiseWithResolvers<void> = Promise.withResolvers();
+    const factory = new TestMqttClientFactory({ clock, holdEnd: hold.promise });
+    const mqtt = created(factory, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX });
+    const ending = mqtt.end({ grace: 500 });
+
+    await settlePastMqttEnd();
+
+    assert.equal(mqtt.aborted, false, "past the turns an unheld end takes, the held end must still be open");
+
+    clock.advance(499);
+
+    await settlePastMqttEnd();
+
+    assert.equal(mqtt.aborted, false, "and a millisecond short of the grace, it must still be open");
+
+    hold.resolve();
+
+    assert.deepEqual(await ending, [], "and once the promise settles the end must finish with no refusal");
+    assert.equal(mqtt.aborted, true, "and with its own abort");
+  });
+});
+
+describe("settlePastMqttEnd", () => {
+
+  /* The helper is called in the turn an end begins, and it has to carry a row past the turns an unheld end takes while resolving well inside the grace: an end
+   * with a word registered has finished once it resolves, and an end the suite's hold keeps open on the system clock's default grace has not.
+   */
+  test("an end nothing holds, begun in the caller's turn with a word registered, has finished once the helper resolves", async () => {
+
+    const mqtt = new TestMqttClient();
+
+    mqtt.onEnd((signal) => mqtt.publish("device1/availability", "offline", { retain: true, signal }));
+
+    const ending = mqtt.end();
+
+    await settlePastMqttEnd();
+
+    assert.equal(mqtt.aborted, true, "the end must have finished with its own abort by the time the helper resolves");
+    assert.deepEqual(mqtt.published, [{ payload: "offline", retain: true, topic: "device1/availability" }], "after stating its word");
+    assert.deepEqual(await ending, []);
+  });
+
+  test("an end the suite's hold keeps open on the default grace has not finished once the helper resolves", async () => {
+
+    // The double runs on the system clock with the default grace, so a helper that waited past the grace would find the deadline had refused the held word and
+    // the end had finished. The window still open is what shows the helper resolved inside the grace.
+    const mqtt = new TestMqttClient();
+    const { release, windows } = holdEnd(mqtt);
+    const ending = mqtt.end();
+
+    await settlePastMqttEnd();
+
+    assert.equal(mqtt.aborted, false, "the held end must still be open");
+    assert.equal(expectAt(windows, 0, "the window the end handed its word").aborted, false, "with its window not yet closed by the grace");
+
+    release();
+
+    assert.deepEqual(await ending, []);
   });
 });

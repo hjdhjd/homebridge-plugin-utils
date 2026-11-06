@@ -1,6 +1,6 @@
 {
   "name": "homebridge-plugin-utils",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "displayName": "Homebridge Plugin Utilities",
   "description": "Opinionated utilities to provide common capabilities and create rich configuration webUI experiences for Homebridge plugins.",
   "author": {
@@ -88,6 +88,6 @@
   },
   "dependencies": {
     "mqtt": "5.16.1",
-    "undici": "8.12.3"
+    "undici": "8.12.4"
   }
 }

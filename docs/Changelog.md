@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.1 (2026-11-05)
+  * New feature: `createRetiredOptions`, for the plugin that's folded a set of on/off options - one per detection type, button, or logging category - into a single option. Declare each retired option family once, and `migrate` rewrites a user's configuration from your settings page while `translate` lets your plugin read an older one correctly at startup.
+  * New feature: show-and-hide toggles for your own secret fields. Wrap a field in `.fo-secret-field`, say what it holds with `data-secret-subject`, and `mountSecretReveals` adds the same eye toggle that secret feature options use, labeled for screen readers by what the field holds ("Show the API token."). `maskSecrets` hides every revealed field again.
+  * New feature: `advanceUntil` on the testing entry, which steps the test clock until your condition holds, so a test waiting on a poll loop or a backoff never restates your plugin's timing.
+  * Improvement: new page kit classes for laying out your own settings pages. `.fo-sidebar-column` keeps your sidebar the same width as the feature options sidebar, `.fo-sidebar-control` gives its controls a compact look that wraps a long label instead of widening the column, `.fo-compact-card` does the same for a card's buttons, and `.fo-result` reserves room for the result or status line beneath a control so the page doesn't jump when it appears.
+  * Fix: on the feature-options page, a checkbox group only shows the choices a device actually offers, plus any already saved at the level you're viewing, so editing a device's choices no longer quietly saves an inherited choice the device doesn't support onto that device.
+  * Housekeeping.
+
 ## 2.7.0 (2026-11-03)
   * Breaking change: `logFeature` takes a single options bag and logs each setting once, at the level the user set it and through that level's logger. Each level is measured against what it inherits, so a device that turns off a global setting now gets its own line. Convert your calls when you rebuild against this release.
   * Improvement: a legacy `Enable.Option.Value` entry has one reading - the global value, unless your catalog says otherwise - and a save rewrites it to `Enable.Option=Value`.

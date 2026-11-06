@@ -253,19 +253,19 @@ export type MqttTopicCatalog<TDevice extends string = string, V extends Readonly
   MqttTopicEntries<TDevice> & { readonly [MQTT_DEVICE_COLUMN]?: MqttTopicDeviceColumn<V> };
 
 /**
- * One of the two words an availability statement carries as its payload: the writer cannot reach what the statement speaks for.
+ * One of the two words an availability statement carries as its payload: the writer cannot vouch for what the statement speaks for.
  *
  * It is a named constant for the reason {@link MQTT_AVAILABILITY_TOPIC} is - the word is a wire protocol at a boundary, so a subscriber comparing a payload against
  * the constant cannot typo it, and a publisher spells the same word the reader tests for. The vocabulary is these two words and no third: every source of
- * availability in this family is a boolean composed from reachability flags, so a word for "not known" would have no producer and would document a state the rail
- * cannot reach.
+ * availability in this family is a boolean the plugin composes from its own state, so a word for "not known" would have no producer and would document a state no
+ * statement can carry.
  *
  * @category Utilities
  */
 export const MQTT_AVAILABILITY_OFFLINE = "offline";
 
 /**
- * The other of the two words an availability statement carries as its payload: the writer can reach what the statement speaks for.
+ * The other of the two words an availability statement carries as its payload: the writer can vouch for what the statement speaks for.
  *
  * Named for the reason its counterpart is, and read the same way. A consumer publishing a device's availability spells the word through this constant rather than
  * retyping it, which is what keeps a plugin's own statement and its devices' statements speaking the same vocabulary.
@@ -325,7 +325,7 @@ export type MqttAvailabilityPayload = typeof MQTT_AVAILABILITY_OFFLINE | typeof 
  * export const flatTopics = mqttTopicCatalog({ availability: mqttAvailabilityEntry, lock: { label: "lock", publish: "`true` when locked.", topic: "lock" } });
  * ```
  *
- * A plugin whose availability is about something other than a device, a price feed or a hub, composes the same entry with its own nouns through
+ * A plugin whose availability is about something other than a device, a price feed or a hub, composes the same entry with its own subject through
  * {@link mqttAvailabilityEntryFor}, so its document states availability in the family's words without copying the sentence.
  *
  * @category Utilities
@@ -344,12 +344,9 @@ export interface MqttAvailabilityEntry {
 }
 
 /**
- * The nouns {@link mqttAvailabilityEntryFor} composes the availability sentence from.
+ * The subject {@link mqttAvailabilityEntryFor} composes the availability sentence around.
  */
 export interface MqttAvailabilityEntryOptions {
-
-  /** What the plugin reaches, as the noun phrase that completes "when the plugin can reach ...": the shipped entry's is "the device". */
-  readonly reaches?: string;
 
   /** What the sentence declares available, with its article, as the subject that opens "... is available only when": the shipped entry's is "A device". */
   readonly subject?: string;
@@ -358,10 +355,11 @@ export interface MqttAvailabilityEntryOptions {
 /**
  * Compose the per-device availability entry for a consumer's own subject.
  *
- * The family states availability in one sentence, and the library owns that sentence: what changes between plugins is only what the plugin reaches and what it
- * declares available. A device plugin spreads {@link mqttAvailabilityEntry}, which is this factory at its defaults. A plugin whose availability is about a feed or
- * a hub names its nouns here and gets the same sentence with them in place, so a rewording of the sentence reaches every plugin's document at its next build
- * rather than leaving a copied sentence behind.
+ * The family states availability in one sentence, and the library owns that sentence: what changes between plugins is only what it declares available. The
+ * sentence says the plugin vouches for the state it reports rather than that it reaches the device, because no plugin probes the device for it: each answers from
+ * its own connection and the device's own record. A device plugin spreads {@link mqttAvailabilityEntry}, which is this factory at its defaults. A plugin whose
+ * availability is about a feed or a hub names its subject here and gets the same sentence with it in place, so a rewording of the sentence reaches every plugin's
+ * document at its next build rather than leaving a copied sentence behind.
  *
  * @example
  *
@@ -370,23 +368,23 @@ export interface MqttAvailabilityEntryOptions {
  *
  * export const mqttTopics = mqttTopicCatalog({
  *
- *   availability: mqttAvailabilityEntryFor({ reaches: "the ComEd price feed", subject: "The price" }),
+ *   availability: mqttAvailabilityEntryFor({ subject: "The price" }),
  *   price: { label: "Hourly price", publish: "The status JSON, published on every poll.", topic: "price" }
  * });
  * ```
  *
- * @param options - The consumer's nouns, each defaulting to the device plugin's.
+ * @param options - The consumer's subject, defaulting to the device plugin's.
  * @returns The availability entry, ready to spread into a catalog.
  * @category Utilities
  */
-export function mqttAvailabilityEntryFor({ reaches = "the device", subject = "A device" }: MqttAvailabilityEntryOptions = {}): MqttAvailabilityEntry {
+export function mqttAvailabilityEntryFor({ subject = "A device" }: MqttAvailabilityEntryOptions = {}): MqttAvailabilityEntry {
 
   return {
 
     label: "availability",
-    publish: "`" + MQTT_AVAILABILITY_ONLINE + "` when the plugin can reach " + reaches + ", `" + MQTT_AVAILABILITY_OFFLINE + "` when it cannot. Retained, so a " +
-      "subscriber attaching later reads the last statement. " + subject + " is available only when this topic and the plugin-level `" + MQTT_AVAILABILITY_TOPIC +
-      "` topic both read `" + MQTT_AVAILABILITY_ONLINE + "`.",
+    publish: "`" + MQTT_AVAILABILITY_ONLINE + "` when the plugin can vouch for the state it reports, `" + MQTT_AVAILABILITY_OFFLINE + "` when it cannot. " +
+      "Retained, so a subscriber attaching later reads the last statement. " + subject + " is available only when this topic and the plugin-level `" +
+      MQTT_AVAILABILITY_TOPIC + "` topic both read `" + MQTT_AVAILABILITY_ONLINE + "`.",
     topic: MQTT_AVAILABILITY_TOPIC
   } as const satisfies MqttTopicEntry;
 }

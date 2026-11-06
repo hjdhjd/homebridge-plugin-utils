@@ -151,7 +151,7 @@ const _catalogShapeExercises = (): void => {
   const fromShippedEntry = mqttTopicCatalog({ availability: mqttAvailabilityEntry, lock: { label: "lock", publish: "The lock state.", topic: "lock" } });
   const _shippedKept: typeof MQTT_AVAILABILITY_TOPIC = fromShippedEntry.availability.topic;
 
-  const fromFactory = mqttTopicCatalog({ availability: mqttAvailabilityEntryFor({ reaches: "the feed", subject: "The price" }),
+  const fromFactory = mqttTopicCatalog({ availability: mqttAvailabilityEntryFor({ subject: "The price" }),
     lock: { label: "lock", publish: "The lock state.", topic: "lock" } });
   const _factoryKept: typeof MQTT_AVAILABILITY_TOPIC = fromFactory.availability.topic;
 
@@ -205,16 +205,16 @@ describe("the availability vocabulary and the shipped entry", () => {
     // The one row in this file that types the words by hand. Every other reader composes from the constants, so this is where a change to the wire vocabulary
     // has to be stated, and it is what stands between a renamed constant and a silent protocol break at every consumer.
     assert.equal(MQTT_AVAILABILITY_TOPIC, "availability", "the tail is the wire text a subscriber matches an availability statement on");
-    assert.equal(MQTT_AVAILABILITY_ONLINE, "online", "the reachable word is the wire text a subscriber compares an availability payload against");
-    assert.equal(MQTT_AVAILABILITY_OFFLINE, "offline", "the unreachable word is the wire text a subscriber compares an availability payload against");
+    assert.equal(MQTT_AVAILABILITY_ONLINE, "online", "the online word is the wire text a subscriber compares an availability payload against");
+    assert.equal(MQTT_AVAILABILITY_OFFLINE, "offline", "the offline word is the wire text a subscriber compares an availability payload against");
 
     // The entry's own fields, read directly rather than through a catalog round trip. The builder hands its entries back as declared, so a wrong label or a
     // garbled message survives a spread perfectly and only a direct read catches it. The message is asserted by containment, so rewording the sentence is not a
     // test change while a lost word still reddens.
     assert.equal(mqttAvailabilityEntry.label, "availability", "the label is what a consumer's availability verbs log under");
     assert.equal(mqttAvailabilityEntry.topic, "availability", "the entry's tail is the same word the plugin-level statement is published on");
-    assert.ok(mqttAvailabilityEntry.publish.includes(MQTT_AVAILABILITY_ONLINE), "the message text must name the word a reachable device publishes");
-    assert.ok(mqttAvailabilityEntry.publish.includes(MQTT_AVAILABILITY_OFFLINE), "the message text must name the word an unreachable device publishes");
+    assert.ok(mqttAvailabilityEntry.publish.includes(MQTT_AVAILABILITY_ONLINE), "the message text must name the word published while the plugin vouches for a device");
+    assert.ok(mqttAvailabilityEntry.publish.includes(MQTT_AVAILABILITY_OFFLINE), "the message text must name the word published when it cannot");
     assert.ok(mqttAvailabilityEntry.publish.includes("Retained"), "the message text must tell a subscriber that the statement is retained");
   });
 
@@ -241,17 +241,17 @@ describe("the availability vocabulary and the shipped entry", () => {
     // The shipped entry is the factory's default output and nothing else, so a rewording of the sentence can never leave the two apart.
     assert.deepEqual(mqttAvailabilityEntryFor(), mqttAvailabilityEntry, "the shipped entry is the factory at its defaults");
 
-    const feed = mqttAvailabilityEntryFor({ reaches: "the ComEd price feed", subject: "The price" });
+    const feed = mqttAvailabilityEntryFor({ subject: "The price" });
 
-    // The consumer's nouns land where the device plugin's nouns sat, and nothing else moves: the label, the tail, the payload words and the retained clause read
-    // exactly as the shipped entry's.
+    // The consumer's subject lands where the device plugin's sat, and nothing else moves: the label, the tail, the payload words, the vouching clause and the
+    // retained clause read exactly as the shipped entry's.
     assert.equal(feed.label, mqttAvailabilityEntry.label, "the label is the family's, whatever the subject");
     assert.equal(feed.topic, mqttAvailabilityEntry.topic, "the tail is the family's, whatever the subject");
-    assert.ok(feed.publish.includes("when the plugin can reach the ComEd price feed,"), "the reach phrase completes the reachability clause, observed: " + feed.publish);
+    assert.ok(feed.publish.includes("when the plugin can vouch for the state it reports,"), "the vouching clause is the family's, observed: " + feed.publish);
     assert.ok(feed.publish.includes("The price is available only when this topic"), "the subject opens the availability clause, observed: " + feed.publish);
-    assert.ok(!feed.publish.includes("the device") && !feed.publish.includes("A device"), "no device noun survives a consumer's own subject");
-    assert.equal(feed.publish.replace("the ComEd price feed", "the device").replace("The price", "A device"), mqttAvailabilityEntry.publish,
-      "the sentence around the nouns is the shipped entry's own, word for word");
+    assert.ok(!feed.publish.includes("A device"), "no device noun survives a consumer's own subject");
+    assert.equal(feed.publish.replace("The price", "A device"), mqttAvailabilityEntry.publish,
+      "the sentence around the subject is the shipped entry's own, word for word");
   });
 });
 

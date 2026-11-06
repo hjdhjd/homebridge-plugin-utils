@@ -272,6 +272,53 @@ has no meaning on an option that is not `multiple` or declares no choices, and [
 
 ***
 
+### composeEntry()
+
+```ts
+function composeEntry(args): string;
+```
+
+Compose a configured-options entry from its parts. This is the one writer of the entry grammar: every transform here composes through it, and a consumer that
+states an entry of its own - a translation composing what a retired grammar meant - composes through it too rather than concatenating a second spelling.
+
+Everything up to the payload delimiter is the address - the canonical action, the option name, and an optional scope id, joined by dots - and everything after
+it is the value. An absent value composes the bare address; a present value composes behind the delimiter, trimmed first, so the canonical value domain excludes
+edge whitespace and the tolerant parse of a hand-spaced entry lands on exactly this form. A present-but-empty value composes the bare delimiter, which the global
+form produces for any option and the scoped form only for a list option storing its empty selection - every other scoped caller guards on
+[hasValueContent](#hasvaluecontent) first, because a scoped entry without value content is a shape the parser hands to the legacy grammar. Pairing this with the one decoder
+the readers share keeps the reader and the writer of the storage format from drifting apart.
+
+Nothing here consults a catalog: the composer spells exactly the parts it is handed, so a caller asking whether an id may address a scope at all asks
+[isValidScopeId](#isvalidscopeid) first, and one writing into a configuration through the engine's own rules reaches for [applySetOption](#applysetoption) instead.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `args` | \{ `enabled`: `boolean`; `id?`: `string`; `option`: `string`; `value?`: `string`; \} | - |
+| `args.enabled` | `boolean` | True composes an Enable entry, false a Disable entry. |
+| `args.id?` | `string` | Optional. The device or controller scope identifier, omitted or empty for the global scope. |
+| `args.option` | `string` | The expanded option name, in the casing the entry should carry. |
+| `args.value?` | `string` | Optional. The value to compose behind the payload delimiter. Omit it for a bare entry. |
+
+#### Returns
+
+`string`
+
+The composed entry.
+
+#### Example
+
+```ts
+// A scoped value, composed as "Enable.Audio.Volume.Kitchen=50".
+const scoped = composeEntry({ enabled: true, id: "Kitchen", option: "Audio.Volume", value: "50" });
+
+// A global disable, composed as "Disable.Motion.Detect".
+const disabled = composeEntry({ enabled: false, option: "Motion.Detect" });
+```
+
+***
+
 ### composeScopeId()
 
 ```ts
@@ -313,6 +360,48 @@ The composed scope identifier, ready to serve as the `id` of any scoped read or 
 // Address one shade of one hub, on a system whose device numbering repeats from hub to hub.
 featureOpts.setOption({ enabled: false, id: composeScopeId(hub.serialNumber, shade.id), option: "Shade.Calibrate" });
 ```
+
+***
+
+### decodeEntryAddress()
+
+```ts
+function decodeEntryAddress(catalog, rawEntry): 
+  | {
+  enabled: boolean;
+  id: string;
+  option: string;
+}
+  | undefined;
+```
+
+Decode the address one configured entry spells - whether it enables or disables, the option it names, and the scope it names that option at - through the
+engine's own grammar. This is the reader for a caller holding an entry rather than an option: [enumerateConfiguredEntries](#enumerateconfiguredentries) answers what the entries say
+about one option, while this answers what one entry addresses, under the same arbitration, so a dotted address that is itself a declared option's name reads as
+that option at the global scope and never as a shorter option scoped to an identifier the rest of the name happens to spell.
+
+It reads an entry's address and never its value. An entry carrying the payload delimiter answers undefined, and so does one the grammar reads a legacy value
+in, because what such an entry says about its option is the value reading the enumerator reports. A non-canonical entry, one opening with neither action,
+answers undefined, as does an address the arbitration assigns to no option the catalog declares.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `catalog` | [`CatalogIndex`](#catalogindex) | The catalog index the address is decoded against. |
+| `rawEntry` | `string` | The configured-options entry to read. |
+
+#### Returns
+
+  \| \{
+  `enabled`: `boolean`;
+  `id`: `string`;
+  `option`: `string`;
+\}
+  \| `undefined`
+
+The entry's enablement, the option it addresses as its lowercased expanded name, and the scope identifier in the casing the entry carried - the empty
+         string for the global scope - or undefined when the entry addresses no option of the catalog.
 
 ***
 

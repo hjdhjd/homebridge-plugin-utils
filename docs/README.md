@@ -40,6 +40,7 @@ The design decisions are driven by my own needs as I continue to create, evolve,
 | [docChrome](docChrome.md) | A shared documentation-chrome renderer for the family's plugins. |
 | [featureOptions](featureOptions.md) | A hierarchical feature option system for plugins and applications. |
 | [featureOptions-docs](featureOptions-docs.md) | A shared documentation renderer for the [FeatureOptions](featureOptions.md#featureoptions) catalog. |
+| [featureOptions-retired](featureOptions-retired.md) | Retired feature option families, declared as data and translated through the engine's own grammar. |
 | [ffmpeg/codecs](ffmpeg/codecs.md) | Probe FFmpeg capabilities and codecs on the host system. |
 | [ffmpeg/exec](ffmpeg/exec.md) | One-shot FFmpeg execution with composed signal lifetime. |
 | [ffmpeg/fmp4](ffmpeg/fmp4.md) | ISO BMFF (fMP4) box parsing utilities for working with fragmented MP4 data. |

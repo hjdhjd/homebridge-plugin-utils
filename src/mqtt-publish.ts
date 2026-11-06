@@ -1,14 +1,15 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * mqtt-publish.ts: The MQTT publish-outcome vocabulary and the graceful end the client and its shipped test double share.
+ * mqtt-publish.ts: The MQTT publish-outcome vocabulary, the graceful end and the MQTT-off rule the client and its shipped test double share.
  */
 
 /**
- * The MQTT publish-outcome vocabulary and the graceful end the client and its shipped test double share: the error a publish is refused with while the client holds
- * no broker session, the pure router that classifies a guarded publish's failure into the one line that reports it, the per-topic memory a change-gated publish is
- * answered against, the sequence that states a plugin's final words before the client tears down, with its default grace and the warning a teardown logs when
- * words go unsaid, the end's state with the admission a publish faces once the end has begun, and the check that tells a callback the end or the abort cut short apart
- * from one that failed, with the line each owner logs for a connect handler cut short.
+ * The MQTT publish-outcome vocabulary, the graceful end and the MQTT-off rule the client and its shipped test double share: the error a publish is refused with while
+ * the client holds no broker session, the pure router that classifies a guarded publish's failure into the one line that reports it, the per-topic memory a
+ * change-gated publish is answered against, the sequence that states a plugin's final words before the client tears down, with its default grace and the warning a
+ * teardown logs when words go unsaid, the end's state with the admission a publish faces once the end has begun, the check that tells a callback the end or the abort
+ * cut short apart from one that failed, with the line each owner logs for a connect handler cut short, and the rule that answers whether MQTT is off before a client
+ * is built.
  *
  * Every piece lives here rather than beside the client because the double stands in for the client without standing in for its transport. The double's only edge
  * to `mqttClient.ts` is a type import, which the compiler erases, and the `/testing` entry point aggregates every shipped double...so a value import from the client
@@ -18,14 +19,16 @@
  * import by value is what keeps them from drifting on the comparison or on how a payload is kept. The end sequence is here for it too: the grace, the order the
  * words are stated in and the warning have one definition, so a consumer's suite on the double sees the end a plugin meets on the client. So are the end's state, its
  * admission, the check and the connect handler's cancelled line, which is what keeps the two from disagreeing about which publish the end lets through, which failure is
- * a cancellation, and how a cancelled connect handler reads in the log.
+ * a cancellation, and how a cancelled connect handler reads in the log. So is the MQTT-off rule, which the client's factory and the double's factory each call, so a
+ * consumer's suite meets a `null` from the double's factory exactly where a plugin meets one from the client's.
  *
  * @module
  */
 import { HbpuAbortError, composeSignals, formatErrorMessage, isHbpuAbortError, waitWithSignal } from "./util.ts";
+import type { HomebridgePluginLogging, Nullable } from "./util.ts";
+import type { MqttClientConfigCandidate, MqttConnectionSettings } from "./mqttClient.ts";
 import { armDeadline, yieldMacrotask } from "./clock.ts";
 import type { Clock } from "./clock.ts";
-import type { HomebridgePluginLogging } from "./util.ts";
 
 /**
  * Rejected by {@link mqttClient!MqttClient.publish | MqttClient.publish} when the client holds no session with the broker: before the first CONNACK arrives, after a
@@ -396,4 +399,31 @@ export function assertAdmittedDuringMqttEnd({ end, signal }: { end: MqttEndState
 export function isMqttCallbackCutShort({ end, error, signal }: { end: MqttEndState; error: unknown; signal: AbortSignal }): boolean {
 
   return (isHbpuAbortError(error) && (end.kind !== "open")) || signal.aborted;
+}
+
+/**
+ * Answer the broker URL and topic prefix an MQTT client is built from, or `null` when MQTT is off. A broker URL or topic prefix that is absent, `null` or empty
+ * means MQTT is off - the ordinary state of a plugin whose user never configured a broker, or switched it back off - and the answer logs nothing, because a
+ * feature being off is not an event.
+ *
+ * The answer narrows the broker URL and topic prefix to strings, so a caller assembles an {@link mqttClient!MqttConfig | MqttConfig} from it with no cast. The
+ * rule lives here rather than beside the client because {@link mqttClient!createMqttClient | createMqttClient} and the shipped double's factory each call it by
+ * value, so the double answers `null` exactly where the factory does without loading the broker library.
+ *
+ * @param options             - The candidate broker URL and topic prefix, as {@link mqttClient!MqttClientConfigCandidate | MqttClientConfigCandidate} carries them.
+ * @param options.brokerUrl   - The broker URL, absent or `null` when none is configured.
+ * @param options.topicPrefix - The topic prefix, absent or `null` when none is configured.
+ *
+ * @returns The broker URL and topic prefix as non-empty strings, or `null` when MQTT is off.
+ *
+ * @category Utilities
+ */
+export function enabledMqttSettings({ brokerUrl, topicPrefix }: Pick<MqttClientConfigCandidate, "brokerUrl" | "topicPrefix">): Nullable<MqttConnectionSettings> {
+
+  if(!brokerUrl?.length || !topicPrefix?.length) {
+
+    return null;
+  }
+
+  return { brokerUrl, topicPrefix };
 }

@@ -8,7 +8,10 @@
  *
  * A plugin that speaks MQTT registers subscriptions and publishes state, and what its tests need to assert is its own half of that conversation. This module ships the
  * double that answers it: a {@link TestMqttClient} recording which subscriptions were registered, on which topics, carrying which signals, what was published, and how
- * a refused publish was handled, with drivers that let a test deliver a message or run a registered getter or setter by hand.
+ * a refused publish was handled, with drivers that let a test deliver a message or run a registered getter or setter by hand. Beside it is a
+ * {@link TestMqttClientFactory}, whose `create` stands in for {@link mqttClient!createMqttClient | createMqttClient}: it answers `null` by the factory's own rule
+ * and otherwise a recorded double whose lifetime composes the signal the consumer passed with the double's own, and is the double's own when the consumer passed
+ * none.
  *
  * The double records, it does not simulate a broker. There is no connection, no topic prefixing (a topic is recorded as the caller's tail, verbatim), no last will (a
  * will is published by the broker, and there is none behind this double to publish one), and nothing on the wire...those are the real client's own contract, covered by
@@ -23,8 +26,8 @@
  * {@link mqtt-publish!routeGuardedPublishFailure | routeGuardedPublishFailure}, so a cancellation, an offline refusal, and a genuine failure reach the same lines here
  * that they reach on the client.
  *
- * Signatures come from the client's own exported types - {@link MqttHandler}, {@link MqttGetHandler}, {@link MqttSetHandler}, and the init types - so a method here
- * cannot drift from the method it stands in for without the compiler saying so.
+ * Signatures come from the client's own exported types - {@link MqttHandler}, {@link MqttGetHandler}, {@link MqttSetHandler}, and the init types - and the
+ * factory's `create` is typed as `createMqttClient` itself, so a method here cannot drift from the method it stands in for without the compiler saying so.
  *
  * @module
  */
@@ -32,9 +35,9 @@ import { HbpuAbortError, assertPositiveFinite, composeSignals, guardedDispatch, 
 import type { HomebridgePluginLogging, Nullable, RepeatDemotedLog } from "./util.ts";
 import { MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC, MQTT_GET_SUFFIX, assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic, mqttTopic } from "./mqtt-topics.ts";
 import { MQTT_CONNECT_HANDLER_CANCELLED, MQTT_DEFAULT_END_GRACE_MS, MQTT_UNSAID_WORDS_WARNING, MqttLastPayloads, MqttOfflineError, assertAdmittedDuringMqttEnd,
-  guardedPublishReason, isMqttCallbackCutShort, routeGuardedPublishFailure, stateMqttFinalWords } from "./mqtt-publish.ts";
-import type { MqttConnectHandler, MqttEndHandler, MqttGetHandler, MqttHandler, MqttPublishInit, MqttSetHandler, MqttSubscribeInit,
-  MqttSubscribeSetInit } from "./mqttClient.ts";
+  enabledMqttSettings, guardedPublishReason, isMqttCallbackCutShort, routeGuardedPublishFailure, stateMqttFinalWords } from "./mqtt-publish.ts";
+import type { MqttClient, MqttClientConfigCandidate, MqttClientInit, MqttConnectHandler, MqttEndHandler, MqttGetHandler, MqttHandler, MqttPublishInit,
+  MqttSetHandler, MqttSubscribeInit, MqttSubscribeSetInit, createMqttClient } from "./mqttClient.ts";
 import type { Clock } from "./clock.ts";
 import type { MqttEndState } from "./mqtt-publish.ts";
 import { systemClock } from "./clock.ts";
@@ -86,6 +89,9 @@ export interface TestMqttPublish {
  * {@link TestMqttClient.onEnd}, {@link TestMqttClient.end} and disposal state a plugin's final words through the sequence the client runs, and an abort that leaves
  * them unsaid logs the client's warning, so a consumer's suite can assert its shutdown states its words before it aborts.
  *
+ * A consumer handed a client takes the double through a cast at its injection site, as the example below does. A consumer that builds its own client through an
+ * injected `createMqttClient` takes {@link TestMqttClientFactory}'s `create` instead, which answers the double on the consumer's own signal with no cast at the call.
+ *
  * @example
  *
  * ```ts
@@ -107,8 +113,8 @@ export interface TestMqttPublish {
 export class TestMqttClient implements AsyncDisposable {
 
   /**
-   * The abort signal representing this double's lifetime, mirroring {@link mqttClient!MqttClient.signal | MqttClient.signal}. It aborts exactly once, when
-   * {@link TestMqttClient.abort} is called or the double is disposed.
+   * The composed abort signal representing this double's lifetime, mirroring {@link mqttClient!MqttClient.signal | MqttClient.signal}. It aborts exactly once, when
+   * {@link TestMqttClient.abort} is called, when the double is disposed, or when the parent signal the constructor received fires.
    */
   public readonly signal: AbortSignal;
 
@@ -146,7 +152,8 @@ export class TestMqttClient implements AsyncDisposable {
   // The time source the end's grace is armed on, the client's own option mirrored.
   readonly #clock: Clock;
 
-  // The controller whose signal is this double's lifetime. Owned privately so `abort()` is the only way to fire it, exactly as the client owns its own.
+  // The controller whose signal is this double's lifetime, with any parent signal the constructor received composed in beside it, as the client composes its own.
+  // Owned privately so `abort()` is the only way to fire it, exactly as the client owns its own.
   readonly #controller = new AbortController();
 
   // The connect registrations the lever's false-to-true edge invokes, mirroring the set the client's connect listener reads. A `Set` keeps the client's rules: the
@@ -181,18 +188,20 @@ export class TestMqttClient implements AsyncDisposable {
   /**
    * Construct a recording double.
    *
-   * @param options       - Optional construction options.
-   * @param options.clock - The time source the grace of {@link TestMqttClient.end} is armed on, defaulting to the library's `systemClock`, as the client's own option
-   *                        does. A test that drives the grace by hand passes a `TestClock`.
-   * @param options.log   - The logger {@link TestMqttClient.publishGuarded} reports on and the abort warns on, defaulting to the library's `noOpLog` so a test asserting
-   *                        on behavior rather than on log output constructs the double bare; a test reading the double's wording passes a `capturingLog()`.
+   * @param options        - Optional construction options.
+   * @param options.clock  - The time source the grace of {@link TestMqttClient.end} is armed on, defaulting to the library's `systemClock`, as the client's own
+   *                         option does. A test that drives the grace by hand passes a `TestClock`.
+   * @param options.log    - The logger {@link TestMqttClient.publishGuarded} reports on and the abort warns on, defaulting to the library's `noOpLog` so a test
+   *                         asserting on behavior rather than on log output constructs the double bare; a test reading the double's wording passes a `capturingLog()`.
+   * @param options.signal - The parent signal the client would compose into its lifetime: the one a consumer passes in its
+   *                         {@link mqttClient!MqttClientInit | MqttClientInit}. Aborting it ends the double with that signal's reason.
    */
-  public constructor(options: { clock?: Clock; log?: HomebridgePluginLogging } = {}) {
+  public constructor(options: { clock?: Clock; log?: HomebridgePluginLogging; signal?: AbortSignal } = {}) {
 
     this.#clock = options.clock ?? systemClock;
     this.#log = options.log ?? noOpLog;
     this.#publishFailures = repeatDemotedLog(this.#log);
-    this.signal = this.#controller.signal;
+    this.signal = composeSignals(options.signal, this.#controller.signal);
 
     /* The client's teardown clears its whole subscription map on abort, independent of the per-subscription release listeners, so a client-level abort also
      * releases the registrations that never carried a signal of their own. Clearing in place preserves the array identity a test may already be holding. Only the
@@ -201,7 +210,8 @@ export class TestMqttClient implements AsyncDisposable {
      * registrations go too, since the client's teardown clears its own.
      *
      * The warning comes first, read before the clear empties the end registrations, under the client's own condition: an abort that is not the end's own, with
-     * registrations still held, leaves their words unsaid. The double has no parent signal, so its abort is the one teardown that can say so here.
+     * registrations still held, leaves their words unsaid. A parent signal composes into the lifetime this listener hears, so its abort meets the same condition
+     * the double's own abort does, and a parent that had already aborted runs this listener inline at construction, as the client's teardown runs for one.
      */
     onAbort(this.signal, () => {
 
@@ -890,4 +900,85 @@ export class TestMqttClient implements AsyncDisposable {
     return "TestMqttClient: no " + kind + " registration's topic ends with \"" + topicSuffix + "\"; " +
       ((registered.length > 0) ? "the registered " + kind + " topics are " + registered.join(", ") : "no " + kind + " topics are registered") + ".";
   }
+}
+
+/**
+ * A {@link mqttClient!createMqttClient | createMqttClient} double: its {@link TestMqttClientFactory.create} fills a consumer's injected factory, records every call,
+ * and answers a fresh {@link TestMqttClient} whose lifetime composes the `signal` of the init the consumer passed with the double's own, so the consumer's own
+ * signal ends the double it gets back as it ends a real client. With no init signal, the lifetime is the double's own.
+ *
+ * `create` answers `null` exactly where the real factory does, because each reads {@link mqtt-publish!enabledMqttSettings | enabledMqttSettings}: a broker URL or
+ * topic prefix that is absent, `null` or empty is MQTT off, and the call is recorded with its `null` and nothing is logged. A signal that has already aborted
+ * answers a double that has already ended, with that signal's reason, as the real factory answers a constructed client that has already ended rather than a
+ * `null`. The double's grace is armed on the init's `clock` when the consumer passes one, else on the clock this factory was constructed with, else on the
+ * double's own default, and the double logs on `config.log`, so its warning and its guarded publish's lines land in the log the consumer handed the factory.
+ *
+ * An unusable broker URL is the real factory's concern rather than this one's: mqtt.js refuses it synchronously and no connection opens, so a row proving a
+ * consumer survives one calls `createMqttClient` itself. A row reads the recorded calls through `expectAt`, which fails at the call site naming the call it
+ * expected when the consumer made none.
+ *
+ * @example
+ *
+ * ```ts
+ * import { TestMqttClientFactory, expectAt } from "homebridge-plugin-utils/testing";
+ *
+ * const factory = new TestMqttClientFactory();
+ * const platform = new ExamplePlatform(log, config, api, { mqttFactory: factory.create });
+ *
+ * // The platform built its client through the factory, so the recorded call holds the double it got back.
+ * const { client } = expectAt(factory.createCalls, 0, "the MQTT client the platform built");
+ *
+ * assert.ok(client, "the configuration names a broker and a topic prefix, so MQTT is on");
+ * await client.invokeSet("device1/power/set", "TRUE");
+ * ```
+ *
+ * @see TestMqttClient
+ *
+ * @category Testing
+ */
+export class TestMqttClientFactory {
+
+  /**
+   * Every create call's config and init and the double it answered, `null` when MQTT was off, in order, so a test can assert what the consumer asked for and drive
+   * what came back.
+   */
+  public readonly createCalls: { client: Nullable<TestMqttClient>; config: MqttClientConfigCandidate; init: MqttClientInit | undefined }[] = [];
+
+  // The clock a double's grace is armed on when the init names none, left undefined when this factory was constructed with none, so the double's own default
+  // stays the one default.
+  readonly #clock: Clock | undefined;
+
+  /**
+   * Construct a factory double.
+   *
+   * @param options       - Optional construction options.
+   * @param options.clock - The time source each double's grace is armed on when the init a consumer passes to `create` names none. Omitted, the double's own
+   *                        default applies.
+   */
+  public constructor({ clock }: { clock?: Clock } = {}) {
+
+    this.#clock = clock;
+  }
+
+  /**
+   * Record the call and answer `null` when MQTT is off, else a fresh double on the init's signal. It is an arrow-function property rather than a method, so a
+   * consumer takes it detached, as `factory.create`, and it still records on this factory.
+   *
+   * @param config - The candidate configuration the consumer passed. See {@link mqttClient!MqttClientConfigCandidate | MqttClientConfigCandidate}.
+   * @param init   - The init the consumer passed, or `undefined` when it passed none. See {@link mqttClient!MqttClientInit | MqttClientInit}.
+   *
+   * @returns The recorded double, or `null` when the broker URL or the topic prefix is absent, `null` or empty.
+   */
+  public readonly create: typeof createMqttClient = (config, init) => {
+
+    const client = (enabledMqttSettings(config) === null) ? null :
+      new TestMqttClient({ clock: init?.clock ?? this.#clock, log: config.log, signal: init?.signal });
+
+    this.createCalls.push({ client, config, init });
+
+    // The one cast. The client declares private fields - `#mqtt`, `#brokerUrl` and `#controller` among them - and TypeScript admits an instance of a class with
+    // private fields only from that class or a subclass of it, so no double satisfies the type by its shape. Casting the nullable answer carries a `null` through the
+    // same return.
+    return client as unknown as Nullable<MqttClient>;
+  };
 }

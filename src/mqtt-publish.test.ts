@@ -2,7 +2,8 @@
  *
  * mqtt-publish.test.ts: Unit tests for the MQTT publish-outcome vocabulary - the offline refusal, the pure guarded-publish failure router, the derivation that names
  * the reason a repeat is weighed by, and the per-topic memory a change-gated publish is weighed against - and for the end sequence that states a plugin's final
- * words, the admission a publish meets once the end has begun, and the check that tells a callback the end or the abort cut short apart from one that failed.
+ * words, the admission a publish meets once the end has begun, the check that tells a callback the end or the abort cut short apart from one that failed, and the
+ * rule that answers whether MQTT is off.
  *
  * The router's rows drive the pure function directly with a capturing log, so what they assert is the classification itself rather than any one caller's route to it;
  * the client's guarded publish over a real broker stays in the client's own suite. The reason derivation's rows do the same with synthetic rejections, which is what
@@ -11,14 +12,16 @@
  * The end sequence's rows drive the function on a TestClock, so the order, the window and the refusals are stated where they live, and the client's suite carries
  * the row that proves a stated word reaches a real broker ahead of the will. The admission's rows drive the pure function over end states built by hand, while the
  * client's and the double's suites state the quiet each one keeps through it. The check's row does the same, and those suites state the line each wrapped callback
- * reaches through it.
+ * reaches through it. The rule's rows drive the pure function over each field absent, null or empty and over a usable configuration, while the client's suite and
+ * the double's state the factory each one answers through it.
  */
 import { HbpuAbortError, composeSignals, isTimeoutReason } from "./util.ts";
-import { MqttLastPayloads, MqttOfflineError, assertAdmittedDuringMqttEnd, guardedPublishReason, isMqttCallbackCutShort, routeGuardedPublishFailure,
-  stateMqttFinalWords } from "./mqtt-publish.ts";
+import { MqttLastPayloads, MqttOfflineError, assertAdmittedDuringMqttEnd, enabledMqttSettings, guardedPublishReason, isMqttCallbackCutShort,
+  routeGuardedPublishFailure, stateMqttFinalWords } from "./mqtt-publish.ts";
 import { capturingLog, errnoError, expectAt, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import type { CapturingLog } from "./testing/index.ts";
+import type { MqttClientConfigCandidate } from "./mqttClient.ts";
 import type { MqttEndState } from "./mqtt-publish.ts";
 import { TestClock } from "./clock-double.ts";
 import assert from "node:assert/strict";
@@ -531,5 +534,41 @@ describe("isMqttCallbackCutShort - the check that tells a callback the end or th
       "an HbpuAbortError before the end begins and while the owner lives is the callback's own, its own timeout among them");
     assert.equal(isMqttCallbackCutShort({ end: stating, error: timeout, signal: live }), true, "while the end states its words an HbpuAbortError was cut short");
     assert.equal(isMqttCallbackCutShort({ end: closing, error: timeout, signal: live }), true, "and so once the end is closing");
+  });
+});
+
+describe("enabledMqttSettings - the MQTT-off rule the client's factory and the double's share", () => {
+
+  // The rule is the one createMqttClient and the double's factory each call, so these rows state it where it lives: each field absent, null or empty on its own
+  // beside a usable other field, and the broker URL and topic prefix a usable configuration answers.
+  const BROKER_URL = "mqtt://broker.test:1883";
+  const TOPIC_PREFIX = "homebridge";
+
+  test("answers null for a broker URL or a topic prefix that is absent, null or empty beside a usable other field", () => {
+
+    const cases: { label: string; settings: Parameters<typeof enabledMqttSettings>[0] }[] = [
+
+      { label: "an absent broker URL", settings: { topicPrefix: TOPIC_PREFIX } },
+      { label: "a null broker URL", settings: { brokerUrl: null, topicPrefix: TOPIC_PREFIX } },
+      { label: "an empty broker URL", settings: { brokerUrl: "", topicPrefix: TOPIC_PREFIX } },
+      { label: "an absent topic prefix", settings: { brokerUrl: BROKER_URL } },
+      { label: "a null topic prefix", settings: { brokerUrl: BROKER_URL, topicPrefix: null } },
+      { label: "an empty topic prefix", settings: { brokerUrl: BROKER_URL, topicPrefix: "" } }
+    ];
+
+    for(const { label, settings } of cases) {
+
+      assert.equal(enabledMqttSettings(settings), null, label + " means MQTT is off");
+    }
+  });
+
+  test("answers the broker URL and topic prefix, and nothing beside them, when each is a non-empty string, logging nothing", () => {
+
+    // A whole client configuration is what each factory hands the rule, so the row hands it one, logger and reconnect interval included.
+    const log = capturingLog();
+    const config: MqttClientConfigCandidate = { brokerUrl: BROKER_URL, log, reconnectInterval: 5, topicPrefix: TOPIC_PREFIX };
+
+    assert.deepEqual(enabledMqttSettings(config), { brokerUrl: BROKER_URL, topicPrefix: TOPIC_PREFIX }, "the answer must carry the broker URL and topic prefix alone");
+    assert.deepEqual(log.entries, [], "and the rule must log nothing on the configuration's logger");
   });
 });

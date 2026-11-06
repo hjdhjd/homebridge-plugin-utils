@@ -1,6 +1,7 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * mqtt-client-double.test.ts: Unit tests for the recording MqttClient double - what it records, how it routes a refused publish, and the abort lifecycle it mirrors.
+ * mqtt-client-double.test.ts: Unit tests for the recording MqttClient double - what it records, how it routes a refused publish, and the abort lifecycle it mirrors -
+ * and for the factory double that stands in for createMqttClient.
  *
  * The scenarios, in the order they run:
  *
@@ -29,17 +30,17 @@
  * - Registration: raw, get, and set entries carrying the appended suffix, the label, and the caller's init verbatim; a pre-aborted signal registering nothing; a
  *   signal aborting after registration releasing its own entry and no other.
  * - Teardown: aborting releasing every registration and turning every later call into a no-op - the drivers' quiet answer among them - the recorded history
- *   surviving, and scope exit disposing through abort.
+ *   surviving, a parent signal's abort ending the double with the parent's reason and releasing every registration, and scope exit disposing through abort.
  * - The final words: a registered word recorded while the double is live and the end aborting after it; a pre-aborted signal and an aborted double registering
  *   nothing; the refusals in registration order with the offline refusal; a second end() handed the first one's promise; a handler calling end() handed that same
  *   promise and run once, the end still aborting after it; an end and a disposal with nothing registered answering an empty array and aborting with the default
  *   reason; end() after abort() answering an empty array; disposal stating the words; a word pending when an outside abort lands refusing with its reason and the
- *   abort warning once; an abort, and an unawaited end() followed by an abort, each warning once, while an end, a disposal, and a registration its own signal
- *   released warn nothing; an invalid grace refused synchronously; a registration made once the end has begun never invoked; a word that never settles refused at the
- *   grace on a test clock and not before; a parked publish refused at the grace; a connect registration the end or the double's abort cuts short writing the cancelled
- *   line the client logs too at debug, whatever it fails with once the double has aborted, and one failing on a timeout of its own keeping the error line; the testing
- *   entry point, imported in a child process, loading neither mqtt nor the client, where importing the client loads mqtt; and the verbs held equal to the client's at
- *   compile time.
+ *   abort warning once; an abort, a parent signal's abort, and an unawaited end() followed by an abort, each warning once, while an end, a disposal, and a
+ *   registration its own signal released warn nothing; an invalid grace refused synchronously; a registration made once the end has begun never invoked; a word
+ *   that never settles refused at the grace on a test clock and not before; a parked publish refused at the grace; a connect registration the end or the double's
+ *   abort cuts short writing the cancelled line the client logs too at debug, whatever it fails with once the double has aborted, and one failing on a timeout of its
+ *   own keeping the error line; the testing entry point, imported in a child process, loading neither mqtt nor the client, where importing the client loads mqtt;
+ *   and the verbs, with the factory's create, held equal to the client's at compile time.
  * - The end's quiet: a word under the window recorded, issued at once or later; every other publish refused with the end's shutdown error, recording and counting
  *   nothing and leaving the guarded form only its aborted line; an aborted publish signal and an outside abort still answering with their own reasons and a
  *   change-gated repeat refused; the drivers running no handler and throwing no miss; a session restored running no registration; and a publish parked before
@@ -53,17 +54,20 @@
  *   ahead of the offline refusal and counting nothing; subscribe, subscribeGet, subscribeSet, and unsubscribe throwing synchronously and registering nothing on
  *   the same tail, while a brace-free tail passes every verb untouched; and the abort and empty-id guards answering ahead of the refusal, so a torn-down double
  *   and an empty id stay no-ops rather than reaching it.
+ * - The factory: a broker URL or topic prefix absent, null or empty answering null, recorded with its config and init and logging nothing; with no init clock, a
+ *   word that never settles refused at the grace on the factory's TestClock alone, and an init clock winning over the factory's; the double logging on the
+ *   config's logger; and a signal already aborted answering a double that has already ended with its reason, and a later abort ending it with its reason.
  */
 import type { Assert, Equal } from "./testing/index.ts";
-import { HbpuAbortError, composeSignals, isTimeoutReason } from "./util.ts";
+import { HbpuAbortError, composeSignals, isTimeoutReason, onAbort } from "./util.ts";
 import { MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC } from "./mqtt-topics.ts";
 import { MQTT_CONNECT_HANDLER_CANCELLED, MQTT_UNSAID_WORDS_WARNING, MqttOfflineError, guardedPublishReason } from "./mqtt-publish.ts";
+import type { MqttClient, MqttClientConfigCandidate, MqttClientInit, createMqttClient } from "./mqttClient.ts";
+import { TestMqttClient, TestMqttClientFactory } from "./mqtt-client-double.ts";
 import { assertNoUnhandledRejections, capturingLog, errnoError, expectAt, linesAt, settle } from "./testing/index.ts";
 import { describe, test } from "node:test";
 import { format, promisify } from "node:util";
-import type { MqttClient } from "./mqttClient.ts";
 import { TestClock } from "./clock-double.ts";
-import { TestMqttClient } from "./mqtt-client-double.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 
@@ -71,6 +75,9 @@ import { execFile } from "node:child_process";
 // asserts exactly this entry, and a row spelling it out for itself could disagree with the double and still pass. The tail is bare, since the double prefixes
 // nothing.
 const AVAILABILITY_RECORD = { payload: MQTT_AVAILABILITY_ONLINE, retain: true, topic: MQTT_AVAILABILITY_TOPIC };
+
+// The rendered warning for one unsaid registration, the line each warning row expects.
+const UNSAID_ONE = format(MQTT_UNSAID_WORDS_WARNING, 1);
 
 describe("TestMqttClient - publish", () => {
 
@@ -1527,6 +1534,32 @@ describe("TestMqttClient - teardown", () => {
     assert.equal(mqtt.signal.reason, first);
   });
 
+  test("a parent signal's abort ends the double with the parent's reason and releases every registration, as the double's own abort does", () => {
+
+    /* The parent composes into the double's lifetime as it composes into the client's, so its abort reaches the one teardown the double's own abort runs. A
+     * listener the row registers on the parent before the double exists runs ahead of anything the double attaches, and a composed lifetime already reads aborted
+     * there, as the client's does, where a double that ended itself from a parent listener of its own would still read live.
+     */
+    const parent = new AbortController();
+    const reason = new HbpuAbortError("shutdown");
+    const abortedInEarlierListener: boolean[] = [];
+
+    onAbort(parent.signal, () => abortedInEarlierListener.push(mqtt.aborted));
+
+    const mqtt = new TestMqttClient({ signal: parent.signal });
+
+    mqtt.subscribe("device1/status", () => { /* Released by the parent's abort. */ });
+
+    assert.equal(mqtt.aborted, false, "a live parent must leave the double live");
+
+    parent.abort(reason);
+
+    assert.deepEqual(abortedInEarlierListener, [true], "a parent listener registered before the double must already read it aborted, as it reads the client");
+    assert.equal(mqtt.aborted, true, "the parent's abort must end the double");
+    assert.equal(mqtt.signal.reason, reason, "with the parent's own reason");
+    assert.deepEqual(mqtt.subscriptions, [], "and must release every registration, as the double's own abort does");
+  });
+
   test("scope exit disposes through abort, defaulting the reason", async () => {
 
     const mqtt = new TestMqttClient();
@@ -1566,15 +1599,12 @@ describe("TestMqttClient - final words", () => {
 
   /* The graceful end on the double, row for row with the client's own suite wherever the double can observe the row: the word recorded while the double is still
    * live, the refusals in registration order, the promise a repeat call is handed, the window an outside abort closes, a parked publish refused at the grace, and
-   * the warning an abort logs when it leaves registered words unsaid. The double has no parent signal, so its abort is the one teardown that can warn here.
+   * the warning an abort logs when it leaves registered words unsaid.
    *
    * The cut-short rows state the line a connect registration reaches when the end or the double's abort cuts it short, the one the client logs too, read from the shared
    * module, beside the error line it keeps otherwise. The drivers hand a handler's failure to the test, so the connect pass is the one wrapped callback the double
    * reports.
    */
-
-  // The rendered warning for one unsaid registration, the line each warning row expects.
-  const UNSAID_ONE = format(MQTT_UNSAID_WORDS_WARNING, 1);
 
   // The device-scope word every recording row registers, as the double records it.
   const DEVICE_WORD = { payload: "offline", retain: true, topic: "device1/availability" };
@@ -1776,23 +1806,33 @@ describe("TestMqttClient - final words", () => {
     assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "and must add no warning");
   });
 
-  test("abort() with a registration held warns once and states nothing", () => {
+  test("abort() and a parent signal's abort with a registration held each warn once and state nothing", () => {
 
+    // The client's own row, run on the double: a parent composes into the lifetime the abort listener hears, so its abort meets the same condition the double's does.
     const log = capturingLog();
-    const mqtt = new TestMqttClient({ log });
+    const parent = new AbortController();
+    const direct = new TestMqttClient({ log });
+    const parented = new TestMqttClient({ log, signal: parent.signal });
 
     let invoked = 0;
 
-    mqtt.onEnd(() => {
+    for(const mqtt of [ direct, parented ]) {
 
-      invoked++;
-    });
+      mqtt.onEnd(() => {
 
-    mqtt.abort();
-    mqtt.abort();
+        invoked++;
+      });
+    }
 
-    assert.equal(invoked, 0, "an abort states no word");
-    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "and with a registration held it must warn once, a second abort adding nothing");
+    direct.abort();
+    direct.abort();
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "an abort with a registration held must warn once, and a second abort must add nothing");
+
+    parent.abort(new HbpuAbortError("shutdown"));
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [ UNSAID_ONE, UNSAID_ONE ], "a parent signal's abort with a registration held must warn once too");
+    assert.equal(invoked, 0, "neither teardown may state a word");
   });
 
   test("end() left unawaited and followed by abort() in the same turn warns once", async () => {
@@ -1992,7 +2032,7 @@ describe("TestMqttClient - final words", () => {
   test("once the double has aborted, a running connect registration failing with a plain Error writes the debug cancelled line, not its error line", async () => {
 
     // The registration runs on the lever's false-to-true edge and waits on the gate, so the error it throws once the row opens the gate is no HbpuAbortError and
-    // lands after the double's own signal has aborted, with its end never begun. The double has no parent signal, so its own abort is the one way to reach this.
+    // lands after the double's own signal has aborted, with its end never begun.
     const log = capturingLog();
     const mqtt = new TestMqttClient({ log });
     const proceed: PromiseWithResolvers<void> = Promise.withResolvers();
@@ -2246,14 +2286,17 @@ describe("TestMqttClient - the end's quiet", () => {
   });
 });
 
-/* Compile-time parity of the graceful end's verbs with the client's. These never run - the function is never called, and its leading underscore marks it, with its
- * bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals; TypeScript still type-checks the body during
- * `npm run typecheck`, so a double whose onEnd or end drifts from the client's signature fails the build here rather than at a consumer's injection site.
+/* Compile-time parity of the graceful end's verbs with the client's, and of the factory's create with createMqttClient. These never run - the function is never
+ * called, and its leading underscore marks it, with its bindings, as a compile-time exercise the typecheck reads - so they add nothing to the runtime totals;
+ * TypeScript still type-checks the body during `npm run typecheck`, so a double whose onEnd or end drifts from the client's signature, or a create a consumer's
+ * injected factory would refuse, fails the build here rather than at a consumer's injection site.
  */
 const _endParityExercises = (): void => {
 
   type _OnEndMatchesClient = Assert<Equal<TestMqttClient["onEnd"], MqttClient["onEnd"]>>;
   type _EndMatchesClient = Assert<Equal<TestMqttClient["end"], MqttClient["end"]>>;
+
+  const _create: typeof createMqttClient = new TestMqttClientFactory().create;
 };
 
 describe("TestMqttClient - unsubscribe", () => {
@@ -2568,5 +2611,152 @@ describe("TestMqttClient - the unresolved-placeholder refusal", () => {
 
     assert.deepEqual(live.unsubscribes, []);
     assert.deepEqual(mqtt.published, []);
+  });
+});
+
+describe("TestMqttClientFactory", () => {
+
+  /* The factory stands in for createMqttClient at a consumer's injection site, so its rows state what the real factory answers for the same call: null by the shared
+   * rule, recorded with the call's config and init and logging nothing, and otherwise a double whose lifetime is the init's signal, whose grace is armed on the
+   * init's clock ahead of the factory's own, and whose logger is the config's. Every row reads the record through expectAt, as a consumer's suite does.
+   */
+  const BROKER_URL = "mqtt://broker.test:1883";
+  const TOPIC_PREFIX = "homebridge";
+
+  // Create through the factory and answer the double it recorded, checking that the answer and the record are the one double a consumer would hold.
+  function created(factory: TestMqttClientFactory, config: MqttClientConfigCandidate, init?: MqttClientInit): TestMqttClient {
+
+    const answer = factory.create(config, init);
+    const { client } = expectAt(factory.createCalls, factory.createCalls.length - 1, "the create call just made");
+
+    assert.ok(client, "a usable configuration must answer a double");
+    assert.equal(answer, client, "and create must answer the double it recorded");
+
+    return client;
+  }
+
+  test("answers null when the broker URL or the topic prefix is absent, null or empty, recording each call with its config and init and logging nothing", () => {
+
+    const log = capturingLog();
+    const factory = new TestMqttClientFactory();
+    const init = { signal: new AbortController().signal };
+    const configs: MqttClientConfigCandidate[] = [
+
+      { log, topicPrefix: TOPIC_PREFIX },
+      { brokerUrl: null, log, topicPrefix: TOPIC_PREFIX },
+      { brokerUrl: "", log, topicPrefix: TOPIC_PREFIX },
+      { brokerUrl: BROKER_URL, log },
+      { brokerUrl: BROKER_URL, log, topicPrefix: null },
+      { brokerUrl: BROKER_URL, log, topicPrefix: "" }
+    ];
+
+    // A null answer is recorded as every other answer is, so a row proving its consumer asked and was told MQTT is off reads it where it reads every call.
+    for(const [ index, config ] of configs.entries()) {
+
+      assert.equal(factory.create(config, init), null, "MQTT is off for the configuration at index " + String(index));
+
+      const call = expectAt(factory.createCalls, index, "the create call for the configuration at index " + String(index));
+
+      assert.equal(call.client, null, "the call must record the null it answered");
+      assert.equal(call.config, config, "the config the consumer passed");
+      assert.equal(call.init, init, "and the init the consumer passed");
+    }
+
+    assert.equal(factory.createCalls.length, configs.length, "each call is recorded once");
+    assert.deepEqual(log.entries, [], "and MQTT being off logs nothing");
+  });
+
+  test("with no init clock, a word that never settles refuses at the grace on the factory's TestClock alone, and not before", async () => {
+
+    // The shape of the final words' grace row on a test clock, with the window read beside the refusal: the window closing the moment the factory's clock crosses
+    // the grace, with no real time passing, is what proves the grace was armed on that clock rather than on the double's default.
+    const clock = new TestClock();
+    const factory = new TestMqttClientFactory({ clock });
+    const mqtt = created(factory, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX });
+    const { windows } = holdEnd(mqtt);
+    const ending = mqtt.end({ grace: 500 });
+    const window = expectAt(windows, 0, "the window the end handed its word");
+
+    clock.advance(499);
+
+    assert.equal(window.aborted, false, "the window must still be open a millisecond short of the grace on the factory's clock");
+
+    clock.advance(1);
+
+    assert.equal(window.aborted, true, "and must close the moment the factory's clock crosses the grace");
+
+    const [refusal] = await ending;
+
+    assert.ok(isTimeoutReason(refusal), "the word unsettled at the grace must refuse with the deadline's TimeoutError");
+    assert.equal(mqtt.aborted, true, "the end must then abort the double");
+    assert.equal(expectAt(factory.createCalls, 0, "the create call").init, undefined, "and a call passing no init records none");
+  });
+
+  test("an init clock wins over the factory's, so the grace runs on the clock the consumer passed", async () => {
+
+    // The factory's clock is advanced past the grace first, so a grace armed on it would close the window there, and the window must wait for the init's clock.
+    const factoryClock = new TestClock();
+    const initClock = new TestClock();
+    const factory = new TestMqttClientFactory({ clock: factoryClock });
+    const mqtt = created(factory, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX }, { clock: initClock });
+    const { windows } = holdEnd(mqtt);
+    const ending = mqtt.end({ grace: 500 });
+    const window = expectAt(windows, 0, "the window the end handed its word");
+
+    factoryClock.advance(500);
+
+    assert.equal(window.aborted, false, "the factory's clock crossing the grace must close nothing when the init names a clock of its own");
+
+    initClock.advance(500);
+
+    assert.equal(window.aborted, true, "the init's clock crossing the grace must close the window");
+
+    const [refusal] = await ending;
+
+    assert.ok(isTimeoutReason(refusal), "and the word unsettled at the grace must refuse with the deadline's TimeoutError");
+  });
+
+  test("the double logs on the config's logger, so an abort leaving a word unsaid warns where the consumer's own log does", () => {
+
+    // The warning is the double's own line, so it reaching the config's logger proves the factory handed that logger down rather than leaving the double silent.
+    const log = capturingLog();
+    const mqtt = created(new TestMqttClientFactory(), { brokerUrl: BROKER_URL, log, topicPrefix: TOPIC_PREFIX });
+
+    mqtt.onEnd(() => { /* Left unsaid by the abort. */ });
+    mqtt.abort();
+
+    assert.deepEqual(linesAt(log.entries, "warn"), [UNSAID_ONE], "the abort's warning must land on the config's logger");
+  });
+
+  test("a signal that has already aborted answers a double that has already ended, with that signal's reason, rather than a null", () => {
+
+    // The real factory answers a constructed client that has already ended for a pre-aborted signal, so the double answers the same rather than reading it as MQTT off.
+    const parent = new AbortController();
+    const reason = new HbpuAbortError("shutdown");
+
+    parent.abort(reason);
+
+    const factory = new TestMqttClientFactory();
+    const init = { signal: parent.signal };
+    const mqtt = created(factory, { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX }, init);
+
+    assert.equal(mqtt.aborted, true, "the double must have ended as it was answered");
+    assert.equal(mqtt.signal.reason, reason, "with the signal's own reason");
+    assert.equal(expectAt(factory.createCalls, 0, "the create call").init, init, "and the call must record the init the consumer passed");
+  });
+
+  test("a later abort of the init's signal ends the double with that signal's reason", () => {
+
+    // The double is answered live and the signal aborts afterward, the order a platform's shutdown takes, so the double has to hear the signal rather than read it once.
+    const parent = new AbortController();
+    const reason = new HbpuAbortError("shutdown");
+    const mqtt = created(new TestMqttClientFactory(), { brokerUrl: BROKER_URL, log: capturingLog(), topicPrefix: TOPIC_PREFIX }, { signal: parent.signal });
+
+    assert.equal(mqtt.aborted, false, "a live signal must leave the double live");
+
+    parent.abort(reason);
+
+    assert.equal(mqtt.aborted, true, "the signal's abort must end the double");
+    assert.equal(mqtt.signal.reason, reason, "with the signal's own reason");
   });
 });

@@ -54,7 +54,7 @@ import type { HomebridgePluginLogging, Nullable, RepeatDemotedLog } from "./util
 import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC, assertResolvedMqttTopic, mqttGetTopic, mqttSetTopic,
   mqttTopic } from "./mqtt-topics.ts";
 import { MQTT_CONNECT_HANDLER_CANCELLED, MQTT_DEFAULT_END_GRACE_MS, MQTT_UNSAID_WORDS_WARNING, MqttLastPayloads, MqttOfflineError, assertAdmittedDuringMqttEnd,
-  guardedPublishReason, isMqttCallbackCutShort, routeGuardedPublishFailure, stateMqttFinalWords } from "./mqtt-publish.ts";
+  enabledMqttSettings, guardedPublishReason, isMqttCallbackCutShort, routeGuardedPublishFailure, stateMqttFinalWords } from "./mqtt-publish.ts";
 import type { Clock } from "./clock.ts";
 import type { MqttEndState } from "./mqtt-publish.ts";
 import type { MqttClient as MqttJsClient } from "mqtt";
@@ -367,12 +367,8 @@ export function mqttConnectionSettings({ config = {}, controller, featureOptions
 
   // Either read can come back empty, `null`, or `undefined`, and all three mean the same thing to a caller: there is nothing to connect with. A configured option
   // reaches here as `null` when the user turned it off and as `undefined` when they enabled it without a value, and both are the user saying MQTT is off.
-  if(!brokerUrl || !topicPrefix) {
-
-    return null;
-  }
-
-  return { brokerUrl, topicPrefix };
+  // The answer comes from the rule `createMqttClient` reads MQTT off by, so this function and that factory cannot disagree on when MQTT is off.
+  return enabledMqttSettings({ brokerUrl, topicPrefix });
 }
 
 /**
@@ -1637,7 +1633,8 @@ export type MqttClientConfigCandidate = Omit<MqttConfig, "brokerUrl" | "topicPre
  * `null` is the entire construction-failure vocabulary, and it covers two situations the caller does not have to tell apart:
  *
  * - **MQTT is off.** The broker URL or the topic prefix is absent, `null`, or empty - the ordinary state of a plugin whose user never configured MQTT, or who
- *   switched it back off. Nothing is logged, because a feature being off is not an event.
+ *   switched it back off. Nothing is logged, because a feature being off is not an event. The rule is {@link mqtt-publish!enabledMqttSettings | enabledMqttSettings},
+ *   which the shipped double's factory answers by too.
  * - **Construction failed.** The broker URL is present but unusable. The failure is logged once at error level, with the broker URL excised from the inspected
  *   error chain through {@link redactKnownBrokerUrl}, since that chain embeds the configured URL verbatim.
  *
@@ -1663,14 +1660,16 @@ export type MqttClientConfigCandidate = Omit<MqttConfig, "brokerUrl" | "topicPre
  */
 export function createMqttClient(config: MqttClientConfigCandidate, init?: MqttClientInit): Nullable<MqttClient> {
 
-  const { brokerUrl, topicPrefix } = config;
+  // Answer null silently: an unconfigured broker or a disabled topic is the normal MQTT-off state rather than something to report. The rule also narrows the broker
+  // URL and topic prefix to `string`, which is what lets the construction below assemble an `MqttConfig` from explicit fields without a cast anywhere.
+  const settings = enabledMqttSettings(config);
 
-  // Answer null silently: an unconfigured broker or a disabled topic is the normal MQTT-off state rather than something to report. The check also narrows both
-  // locals to `string`, which is what lets the construction below assemble an `MqttConfig` from explicit fields without a cast anywhere.
-  if(!brokerUrl?.length || !topicPrefix?.length) {
+  if(!settings) {
 
     return null;
   }
+
+  const { brokerUrl, topicPrefix } = settings;
 
   try {
 

@@ -325,8 +325,8 @@ export type MqttConnectionSettings = Pick<MqttConfig, "brokerUrl" | "topicPrefix
  * prefix to answer with, and the client would read the resulting empty prefix as MQTT off with nothing logged. That is a programming error rather than a
  * configuration state, so it throws where it can be seen rather than degrading into silence.
  *
- * Both consumers resolve this once, where the client is constructed, behind the example's `??=`: a client's broker and prefix are fixed for its lifetime, so a
- * later re-resolution reaches no existing client.
+ * A consumer resolves this once, where it constructs its client: a client's broker and prefix are fixed for its lifetime, so a later re-resolution reaches no
+ * existing client.
  *
  * @param input                - The engine, the identity, and the configuration properties. See {@link MqttConnectionSettingsInput}.
  * @param input.config         - Optional. The plugin's own configuration properties for this identity.

@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.2 (2026-11-06)
+  * New feature: `TestMqttClientFactory` on the testing entry, a stand-in for `createMqttClient`, so your platform builds its MQTT client in your tests the same way it does in production.
+  * Housekeeping.
+
 ## 2.7.1 (2026-11-05)
   * New feature: `createRetiredOptions`, for the plugin that's folded a set of on/off options - one per detection type, button, or logging category - into a single option. Declare each retired option family once, and `migrate` rewrites a user's configuration from your settings page while `translate` lets your plugin read an older one correctly at startup.
   * New feature: show-and-hide toggles for your own secret fields. Wrap a field in `.fo-secret-field`, say what it holds with `data-secret-subject`, and `mountSecretReveals` adds the same eye toggle that secret feature options use, labeled for screen readers by what the field holds ("Show the API token."). `maskSecrets` hides every revealed field again.

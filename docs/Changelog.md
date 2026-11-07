@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.3 (2026-11-07)
+  * Improvement: `setAccessoryName` takes an `owned` option, so it follows the family's rule for who owns a HomeKit name. Pass `owned: false` when the user owns the name and the call updates only the accessory's display name - the name your plugin logs under and your settings page lists - leaving the names the user gave it in HomeKit as they stand.
+  * Improvement: `readOptionsSetting` on the package root, the rule the feature options engine reads your options setting by, so a settings page migration or first-run write of your own reads a setting that isn't a list of option strings exactly as the engine does, rather than throwing on it.
+  * Improvement: an option that holds a list logs as "enabled for" its entries rather than "enabled at" them, and the feature options reference lists each option's choices beside its description and words the default of a value option that's off by default as "disabled, 30 when enabled". A line break in a description or an MQTT message stays on its table row, too. Re-run `prepare-docs` and `prepare-mqtt` when you rebuild against this release.
+  * Fix: on the feature-options page, an options setting holding a number or anything else beside its option strings no longer crashes the page...it keeps the text entries in order and drops the rest, exactly as your plugin reads the setting.
+  * Housekeeping.
+
 ## 2.7.2 (2026-11-06)
   * New feature: `TestMqttClientFactory` on the testing entry, a stand-in for `createMqttClient`, so your platform builds its MQTT client in your tests the same way it does in production.
   * Housekeeping.

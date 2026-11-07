@@ -17,8 +17,9 @@
  *     hooks that mirror the webUI's field-blind `validOption` / `validOptionCategory` predicate boundary, lifted from *filter* (boolean) to *describe* (string). No
  *     plugin-specific field name appears anywhere in this file.
  *
- * Putting the rendered fragment into a plugin's doc is {@link doc-markdown!spliceMarkedRegion}, the in-place splice every generator's CLI verb uses, and the table
- * layout the projection prints its option rows through is {@link doc-markdown!renderMarkdownTable}.
+ * Putting the rendered fragment into a plugin's doc is {@link doc-markdown!spliceMarkedRegion}, the in-place splice every generator's CLI verb uses, the table
+ * layout the projection prints its option rows through is {@link doc-markdown!renderMarkdownTable}, and what a cell cannot carry raw is
+ * {@link doc-markdown!escapeTableCell}'s to escape.
  *
  * It also ships two builders for those scope hooks, because writing them by hand is what every plugin was doing and the results converged on two shapes. Neither builder
  * is required - a plugin with prose of its own still writes the hooks directly - but between them they cover what the family actually says.
@@ -33,7 +34,7 @@
  */
 import { ALL_CHOICES, buildCatalogIndex, expandOption, isValueOption } from "./featureOptions.ts";
 import type { FeatureCategoryEntry, FeatureOptionEntry, FeatureOptionScope } from "./featureOptions.ts";
-import { renderMarkdownTable } from "./doc-markdown.ts";
+import { escapeTableCell, renderMarkdownTable } from "./doc-markdown.ts";
 
 /**
  * The opening marker of the auto-generated region in a plugin's `docs/FeatureOptions.md`. The documentation module's {@link doc-markdown!spliceMarkedRegion} replaces
@@ -78,14 +79,43 @@ function renderDefaultValue(option: FeatureOptionEntry): string {
   return ((option.defaultValue ?? "") === "") ? EMPTY_DEFAULT_LABEL : escapeCellText(String(option.defaultValue));
 }
 
-// Escape catalog-derived plain text for safe embedding in a markdown table cell, heading, or index line. We neutralize the column separator "|" (which would inject
-// a phantom table column) and the HTML-significant "&", "<", ">" (which would otherwise be parsed as markup and swallowed). "&" is replaced first so the entities we
-// introduce are not themselves re-escaped. This is applied ONLY to catalog-derived plain text (descriptions and the rendered default value); it is deliberately NOT
-// applied to the dotted key (a constrained identifier that also lives inside a code span where entities would not decode), to the renderer's own structural HTML
-// (the per-row/heading anchors) or the "=<value>" placeholder, nor to the scope-hook return values (the plugin owns that markup - e.g. a "<BR>" line break).
+// Escape catalog-derived plain text for safe embedding in a markdown table cell, heading, or index line. We neutralize the HTML-significant "&", "<", ">" (which
+// would otherwise be parsed as markup and swallowed), then hand the text to escapeTableCell for what a table row cannot carry raw. "&" is escaped first so the
+// entities we introduce are not themselves re-escaped. This is applied ONLY to catalog-derived plain text (descriptions, choice labels, and the rendered default
+// value); it is deliberately NOT applied to the dotted key (a constrained identifier that also lives inside a code span where entities would not decode), to a
+// choice's value (which takes a code span of its own), to the renderer's own structural HTML (the per-row/heading anchors) or the "=<value>" placeholder, nor to the
+// scope-hook return values (the plugin owns that markup - e.g. a "<BR>" line break).
 function escapeCellText(text: string): string {
 
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("|", "\\|");
+  return escapeTableCell(text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
+}
+
+// Render catalog-derived text as a code span a table cell can carry. Entities do not decode inside a code span, so the text takes escapeTableCell's escapes alone.
+// The fence is one backtick longer than the longest backtick run the text holds, so no run inside it can close the span early, and text opening or closing with a
+// backtick gains a space inside each end, which CommonMark strips, so that backtick cannot merge with the fence.
+function renderCodeSpan(text: string): string {
+
+  const escaped = escapeTableCell(text);
+  const fence = "`".repeat(Math.max(0, ...(escaped.match(/`+/g) ?? []).map((run) => run.length)) + 1);
+  const padding = (escaped.startsWith("`") || escaped.endsWith("`")) ? " " : "";
+
+  return fence + padding + escaped + padding + fence;
+}
+
+// Render an option's inline choices as the sentence its description cell carries, or the empty string when it declares none this side can list. A declaration is
+// absent, the name of a webUI source, or the list itself, and only the list is an object, the same tag read the catalog module's own choice reader makes. A source
+// name lists nothing, because the domain it derives lives on the page holding the device record. Each choice is the value a user types, in a code span, followed by
+// its label in parentheses wherever the label says something the value does not.
+function renderChoices(option: FeatureOptionEntry): string {
+
+  const choices = option.choices;
+
+  if(typeof choices !== "object") {
+
+    return "";
+  }
+
+  return " Choices: " + choices.map(({ label, value }) => renderCodeSpan(value) + ((label === value) ? "" : " (" + escapeCellText(label) + ")")).join(", ") + ".";
 }
 
 /**
@@ -196,15 +226,19 @@ export function renderFeatureOptionsReference<TOptionMeta = unknown, TCategoryMe
       const keyCell = "<A NAME=\"" + key + "\"></A>`" + key + (isValueOption(catalog, key) ? "=<value>" : "") + "`";
 
       // The default cell. A value option shows its declared default in the form the user would type - never formatted, since a formatted value (e.g. "30s") is an
-      // invalid config value - through the one renderer that also words the two spellings standing for something else. A toggle shows enabled / disabled.
-      const defaultCell = isValueOption(catalog, key) ? renderDefaultValue(option) : (option.default ? "enabled" : "disabled");
+      // invalid config value - through the one renderer that also words every spelling standing for something else. The legend reads every default as what applies
+      // when the option is left unset, so a value option that is off by default says so first and names its value as what enabling it applies: "disabled, 30 when
+      // enabled". A toggle shows enabled / disabled, and every cell reads `default` by truthiness.
+      const defaultCell = isValueOption(catalog, key) ? (option.default ? renderDefaultValue(option) : "disabled, " + renderDefaultValue(option) + " when enabled") :
+        (option.default ? "enabled" : "disabled");
 
       // The optional plugin-private scope suffix, appended to the description cell. Omitted cleanly when the hook returns `undefined`.
       const scopeSuffix = describeOptionScope?.(option, category) ?? "";
 
-      // The full description cell: the option description, the bolded default, then any scope suffix. The description and the rendered default are catalog-derived plain
-      // text and are escaped for safe table embedding; the scope suffix is hook-owned markup the plugin controls (e.g. a "<BR>") and passes through verbatim.
-      const descriptionCell = escapeCellText(option.description) + " **(default: " + defaultCell + ")**." + scopeSuffix;
+      // The full description cell: the option description, any inline choices, the bolded default, then any scope suffix. The description, the choices, and the
+      // rendered default are catalog-derived text and are escaped for safe table embedding, a choice's value as a code span and everything else as plain text; the
+      // scope suffix is hook-owned markup the plugin controls (e.g. a "<BR>") and passes through verbatim.
+      const descriptionCell = escapeCellText(option.description) + renderChoices(option) + " **(default: " + defaultCell + ")**." + scopeSuffix;
 
       return { descriptionCell, keyCell };
     });

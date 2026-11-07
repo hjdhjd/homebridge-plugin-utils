@@ -24,7 +24,8 @@
  * What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when it
  * declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. A row credits the kinds its verb's narrowing
  * names, and the entry's whole list when the verb has none. The column layout, the width pass, and the divider are
- * {@link doc-markdown!renderMarkdownTable | renderMarkdownTable}'s; this module owns which cells go into it and how each one reads.
+ * {@link doc-markdown!renderMarkdownTable | renderMarkdownTable}'s, and what a cell cannot carry raw is {@link doc-markdown!escapeTableCell | escapeTableCell}'s to
+ * escape; this module owns which cells go into it and how each one reads.
  *
  * The renderer is pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading the document and writing it back - belongs to the
  * `prepare-mqtt` verb that drives it. This module is therefore browser-safe and trivially testable, but it is a tooling concern and is deliberately NOT mirrored
@@ -35,7 +36,7 @@
 import { MQTT_AVAILABILITY_OFFLINE, MQTT_AVAILABILITY_ONLINE, MQTT_AVAILABILITY_TOPIC, MQTT_DEVICE_COLUMN, mqttGetTopic, mqttSetTopic, mqttTopicPlaceholders,
   resolveMqttTopic } from "./mqtt-topics.ts";
 import type { MqttTopicCatalog, MqttTopicDeviceColumn, MqttTopicEntry } from "./mqtt-topics.ts";
-import { renderMarkdownTable } from "./doc-markdown.ts";
+import { escapeTableCell, renderMarkdownTable } from "./doc-markdown.ts";
 
 /**
  * The opening marker of the auto-generated published-topics region in a plugin's `docs/MQTT.md`. The documentation module's
@@ -120,13 +121,6 @@ interface TopicRow {
   readonly cells: readonly string[];
   readonly group?: string;
   readonly segments: readonly string[];
-}
-
-// Neutralize the column separator in author-owned markdown. A bare "|" would open a phantom column, while backticks, links, and alert markup have to reach the
-// document exactly as the plugin wrote them - so this is the only transformation a message text or a device label receives.
-function escapeColumnSeparator(text: string): string {
-
-  return text.replaceAll("|", "\\|");
 }
 
 // Render a raw topic as the document shows it. A plain tail sits in a backtick code span; a template becomes an HTML code span so each placeholder can be italicized
@@ -223,14 +217,15 @@ function renderDeviceCells({ column, entry, key }: {
   const labels = Object.entries(column.vocabulary);
   const cellFor = (kinds: readonly string[]): string => {
 
-    return escapeColumnSeparator(labels.filter(([name]) => kinds.includes(name)).map(([ , label ]) => label).join(LABEL_SEPARATOR));
+    return escapeTableCell(labels.filter(([name]) => kinds.includes(name)).map(([ , label ]) => label).join(LABEL_SEPARATOR));
   };
 
   return { get: cellFor(entry.getDevices ?? devices), publish: cellFor(entry.publishDevices ?? devices), set: cellFor(entry.setDevices ?? devices) };
 }
 
-// Build one row from an entry's declaration. The message text and the device labels are author-owned markdown and receive only the separator escape; the topic cell
-// is this module's own markup.
+// Build one row from an entry's declaration. The message text and the device labels are author-owned markdown, so backticks, links, and alert markup reach the
+// document exactly as the plugin wrote them, and escapeTableCell is the only transformation they receive: a "|" is escaped so it opens no phantom column, and a
+// line ending becomes a space so the text stays on its row. The topic cell is this module's own markup.
 function buildRow({ deviceCell, group, message, segments, topic, withColumn }: {
 
   deviceCell: string;
@@ -241,8 +236,7 @@ function buildRow({ deviceCell, group, message, segments, topic, withColumn }: {
   withColumn: boolean;
 }): TopicRow {
 
-  const cells = withColumn ? [ renderTopicCell(topic), deviceCell, escapeColumnSeparator(message) ] :
-    [ renderTopicCell(topic), escapeColumnSeparator(message) ];
+  const cells = withColumn ? [ renderTopicCell(topic), deviceCell, escapeTableCell(message) ] : [ renderTopicCell(topic), escapeTableCell(message) ];
 
   return { cells, group, segments };
 }

@@ -4,8 +4,9 @@
  *
  * The worked example is an Access-shaped catalog carrying every row that plugin's document prints, asserted byte for byte, so a regression in a cell, a width, a
  * heading, or the row set fails here as a diff a reader can read. The rest of the rows isolate one clause each: a flat catalog with no grouping, the parameterized
- * markup and the widths measured on it, the sort, the vocabulary-order join, the omitted empty group, the empty section beside it, the column-separator escape,
- * per-verb device narrowing, every refusal the renderer owns, and the marked regions the renderer's output splices into a real document.
+ * markup and the widths measured on it, the sort, the vocabulary-order join, the omitted empty group, the empty section beside it, the column-separator escape, a
+ * message's line ending kept on its row, per-verb device narrowing, every refusal the renderer owns, and the marked regions the renderer's output splices into a
+ * real document.
  */
 import { MQTT_DEVICE_COLUMN, mqttAvailabilityEntry, mqttTopicCatalog } from "./mqtt-topics.ts";
 import { MQTT_PUBLISHED_DOC_BEGIN, MQTT_PUBLISHED_DOC_END, MQTT_SUBSCRIBED_DOC_BEGIN, MQTT_SUBSCRIBED_DOC_END,
@@ -428,6 +429,21 @@ describe("renderMqttTopicsReference - ordering and joining", () => {
 
     assert.equal(renderMqttTopicsReference(catalog).published, ESCAPED_PUBLISHED);
     assert.equal(renderMqttTopicsReference(catalog).subscribed, "", "an entry declaring neither a get nor a set child leaves the subscribed section with no rows");
+  });
+
+  test("keeps a message holding a line ending on its topic's table row", () => {
+
+    // A line ending ends a markdown table row, so a message written across lines would strand everything after its first line outside the table. The cell takes
+    // it as a space, and the whole message reads on its topic's row.
+    const lines = renderMqttTopicsReference(mqttTopicCatalog({
+
+      wrap: { label: "wrap", publish: "First line.\nSecond line.", topic: "wrap" }
+    })).published.split("\n");
+
+    const row = AVAILABILITY_BLOCK_LINES.length + 2;
+
+    assert.equal(lines[row], "| `wrap`  | First line. Second line.", "the message reads whole on its row, observed: " + String(lines[row]));
+    assert.equal(lines.length, row + 2, "and the row is the table's last line, followed only by the fragment's closing newline");
   });
 
   test("leaves two entries that declare the same wire topic in their declared order", () => {

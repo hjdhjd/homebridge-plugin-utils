@@ -1,15 +1,16 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * doc-markdown.test.ts: Unit tests for the shared documentation markdown mechanics - the padded-column table layout (renderMarkdownTable) and the in-place marker
- * splice (spliceMarkedRegion).
+ * doc-markdown.test.ts: Unit tests for the shared documentation markdown mechanics - the padded-column table layout (renderMarkdownTable), the escape a table cell
+ * takes (escapeTableCell), and the in-place marker splice (spliceMarkedRegion).
  *
  * The table rows assert whole lines byte for byte rather than probing widths, because alignment is the only thing the layout promises and a hand-computed line is
- * the one assertion a padding regression cannot slip past. The splice rows cover its happy path, repeatability, prose preservation, and malformed-marker throws. Both
- * surfaces are pure string functions, so every row drives them directly with no fixture beyond its own strings.
+ * the one assertion a padding regression cannot slip past. The escape rows cover the column separator, every line-ending form, and text passing through as written.
+ * The splice rows cover its happy path, repeatability, prose preservation, and malformed-marker throws. Every surface is a pure string function, so every row drives
+ * it directly with no fixture beyond its own strings.
  */
 import { FEATURE_OPTIONS_DOC_BEGIN, FEATURE_OPTIONS_DOC_END } from "./featureOptions-docs.ts";
 import { describe, test } from "node:test";
-import { renderMarkdownTable, spliceMarkedRegion } from "./doc-markdown.ts";
+import { escapeTableCell, renderMarkdownTable, spliceMarkedRegion } from "./doc-markdown.ts";
 import assert from "node:assert/strict";
 
 /* Compile-time shape exercises for the splice's marker pair. These never run - the function is never called, and its leading underscore marks it, with its bindings,
@@ -112,6 +113,32 @@ describe("renderMarkdownTable - layout", () => {
 
     assert.throws(() => renderMarkdownTable({ dividerWidth: 12, headings: [ "A", "B", "C" ], rows: [ [ "a", "b", "c" ], [ "a", "b" ] ] }),
       /^Error: renderMarkdownTable: the row at index 1 carries 2 cells for 3 headings\.$/);
+  });
+});
+
+describe("escapeTableCell", () => {
+
+  test("escapes every column separator", () => {
+
+    // A bare "|" opens a phantom column, so each one takes the backslash GFM strips again before it reads the cell.
+    assert.equal(escapeTableCell("a|b|c"), "a\\|b\\|c");
+  });
+
+  test("turns each line-ending form into one space", () => {
+
+    // A line ending ends a table row. A carriage return and line feed together are one line ending and so one space, while consecutive line endings each take a space.
+    assert.equal(escapeTableCell("a\nb"), "a b", "a line feed");
+    assert.equal(escapeTableCell("a\r\nb"), "a b", "a carriage return and line feed");
+    assert.equal(escapeTableCell("a\rb"), "a b", "a lone carriage return");
+    assert.equal(escapeTableCell("a\r\n\nb"), "a  b", "consecutive line endings");
+  });
+
+  test("leaves plain text and a cell's own markup as written", () => {
+
+    // Everything a row can carry passes through untouched, so a caller's code spans, links, entities, and HTML reach the document exactly as the caller wrote them.
+    const text = "Plain `code`, a [link](#anchor), &amp; an entity, <BR> a tag, *emphasis*, and a \\ backslash.";
+
+    assert.equal(escapeTableCell(text), text);
   });
 });
 

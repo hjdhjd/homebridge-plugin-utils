@@ -162,14 +162,14 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
 
   test("substitutes an empty-string default to \"none\" at render time without mutating the entry", () => {
 
-    // A value option whose declared default is the empty string renders "none" - communicating "defaults to no value" rather than an empty cell. The substitution must
-    // be render-only: the caller's entry is unchanged afterward.
+    // A value option whose declared default is the empty string renders "none" - communicating "defaults to no value" rather than an empty cell, here as the value
+    // enabling this default-off option applies. The substitution must be render-only: the caller's entry is unchanged afterward.
     const categories: FeatureCategoryEntry[] = [{ description: "Configuration", name: "Cfg" }];
     const entry: FeatureOptionEntry = { default: false, defaultValue: "", description: "A path.", name: "Path" };
     const options: Record<string, FeatureOptionEntry[]> = { Cfg: [entry] };
     const output = renderFeatureOptionsReference({ categories, options });
 
-    assert.ok(output.includes("A path. **(default: none)**."));
+    assert.ok(output.includes("A path. **(default: disabled, none when enabled)**."));
     assert.equal(entry.defaultValue, "", "the renderer must not mutate the input entry's defaultValue");
   });
 
@@ -182,7 +182,7 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
     const output = renderFeatureOptionsReference({ categories, options });
 
     assert.ok(output.includes("`Cfg.Token=<value>`"));
-    assert.ok(output.includes("Token. **(default: none)**."));
+    assert.ok(output.includes("Token. **(default: disabled, none when enabled)**."));
   });
 
   test("renders a numeric zero default as \"0\", not the empty-string substitution", () => {
@@ -212,7 +212,8 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
 
   test("renders a multi-select's plain list default verbatim, as the user would type it", () => {
 
-    // Only the reserved spelling is worded. An ordinary list default is a value a user would type into their configuration and prints exactly as declared.
+    // Only the reserved spelling is worded. An ordinary list default is a value a user would type into their configuration and prints exactly as declared, after
+    // the inline choices the description lists.
     const categories: FeatureCategoryEntry[] = [{ description: "Detection", name: "Motion" }];
     const options: Record<string, FeatureOptionEntry[]> = {
 
@@ -221,7 +222,7 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
     };
     const output = renderFeatureOptionsReference({ categories, options });
 
-    assert.ok(output.includes("Detected object types. **(default: person,vehicle)**."));
+    assert.ok(output.includes("Detected object types. Choices: `person` (Person), `vehicle` (Vehicle). **(default: person,vehicle)**."));
     assert.ok(!output.includes("(default: all)"), "the wording is reserved for the all-choices spelling alone");
   });
 });
@@ -303,6 +304,94 @@ describe("renderFeatureOptionsReference - cell escaping", () => {
 
     // The catalog-derived description text, by contrast, is escaped.
     assert.ok(output.includes("#### <A NAME=\"a&b\"></A>A &amp; B"));
+  });
+});
+
+describe("renderFeatureOptionsReference - default-off value options and inline choices", () => {
+
+  const categories: FeatureCategoryEntry[] = [{ description: "Configuration", name: "Cfg" }];
+
+  test("states a default-off value option's default as the value enabling it applies", () => {
+
+    // The legend reads every default as what applies when the option is left unset, so a default-off value option's bare value would read as in force. Each
+    // spelling renderDefaultValue answers - a plain value, the all-choices word, and the empty-default word - is wrapped alike.
+    const output = renderFeatureOptionsReference({ categories, options: { Cfg: [
+
+      { default: false, defaultValue: 30, description: "Interval.", name: "Interval" },
+      { choices: "smartDetectTypes", default: false, defaultValue: ALL_CHOICES, description: "Detected object types.", multiple: true, name: "Types" },
+      { choices: "plates", default: false, defaultValue: "", description: "Watched plates.", multiple: true, name: "Plates" }
+    ] } });
+
+    assert.ok(output.includes("Interval. **(default: disabled, 30 when enabled)**."));
+    assert.ok(output.includes("Detected object types. **(default: disabled, all when enabled)**."));
+    assert.ok(output.includes("Watched plates. **(default: disabled, none when enabled)**."));
+  });
+
+  test("leaves a default-on value option and a toggle reading as they do", () => {
+
+    // The wrap belongs to a value option that is off by default. A default-on value applies unset as printed, and a toggle's cell names its enabled or
+    // disabled state alone.
+    const output = renderFeatureOptionsReference({ categories, options: { Cfg: [
+
+      { default: true, defaultValue: 30, description: "Interval.", name: "Interval" },
+      { default: false, description: "Off toggle.", name: "Off" },
+      { default: true, description: "On toggle.", name: "On" }
+    ] } });
+
+    assert.ok(output.includes("Interval. **(default: 30)**."));
+    assert.ok(output.includes("Off toggle. **(default: disabled)**."));
+    assert.ok(output.includes("On toggle. **(default: enabled)**."));
+    assert.ok(!output.includes("when enabled"));
+  });
+
+  test("lists inline choices in catalog order, naming a label only where it differs from its value", () => {
+
+    // A choice is the value a user types, so the value leads in a code span; a label that repeats it exactly adds nothing and is left off.
+    const output = renderFeatureOptionsReference({ categories, options: { Cfg: [
+
+      { choices: [ { label: "Presence", value: "Presence" }, { label: "PTZ", value: "ptz" } ], default: true, defaultValue: "Presence", description: "Mode.",
+        name: "Mode" }
+    ] } });
+
+    assert.ok(output.includes("Mode. Choices: `Presence`, `ptz` (PTZ). **(default: Presence)**."));
+  });
+
+  test("lists nothing for choices a webUI source names", () => {
+
+    // A source's domain lives on the page holding the device record, so the reference has no members to list and says nothing rather than printing the name.
+    const output = renderFeatureOptionsReference({ categories, options: { Cfg: [
+
+      { choices: "smartDetectTypes", default: true, defaultValue: "person", description: "Detected object types.", multiple: true, name: "Types" }
+    ] } });
+
+    assert.ok(output.includes("Detected object types. **(default: person)**."));
+    assert.ok(!output.includes("Choices:"));
+  });
+
+  test("fences each choice value in a code span a table cell can carry", () => {
+
+    // A legal choice value may hold a pipe, a backtick, an ampersand, or an angle bracket. The pipe is escaped even inside the span, since GFM splits the row on
+    // it first; a backtick run widens the fence past it, with a space inside each end where the value meets the fence; and an entity stays as written, because
+    // entities do not decode in a code span. The label is plain text and takes the plain-text escapes.
+    const output = renderFeatureOptionsReference({ categories, options: { Cfg: [
+
+      { choices: [ { label: "A|B", value: "a|b" }, { label: "x`y", value: "x`y" }, { label: "`lead", value: "`lead" }, { label: "&amp;<i>", value: "&amp;<i>" } ],
+        default: true, defaultValue: "a|b", description: "Pick.", name: "Pick" }
+    ] } });
+
+    assert.ok(output.includes("Pick. Choices: `a\\|b` (A\\|B), ``x`y``, `` `lead ``, `&amp;<i>`. **(default: a\\|b)**."));
+  });
+
+  test("turns a line ending in a value, a label, or a description into a space", () => {
+
+    // A line ending ends a table row, so any text a row carries holds it as a space - the description, the choice's value and its label, and the default naming
+    // that value. A carriage return and line feed together are one line ending and one space. The row stays a single line from its key cell through its default.
+    const output = renderFeatureOptionsReference({ categories, options: { Cfg: [
+
+      { choices: [{ label: "Line\r\nbreak", value: "a\nb" }], default: true, defaultValue: "a\nb", description: "First line.\nSecond line.", name: "Wrap" }
+    ] } });
+
+    assert.ok(output.includes("`Cfg.Wrap=<value>`  | First line. Second line. Choices: `a b` (Line break). **(default: a b)**."));
   });
 });
 

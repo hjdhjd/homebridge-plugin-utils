@@ -742,10 +742,27 @@ describe("FeatureOptions - logFeature (deviation logging)", () => {
     assert.deepEqual(logBare.entries, [], "without the controller id the option resolves to the global default value and stays silent");
   });
 
-  test("states an emptied list in words on the boolean-axis line rather than rendering nothing after \"at\"", () => {
+  test("names the entries of a list a level turned on with \"enabled for\" rather than \"enabled at\"", () => {
+
+    // A default-off list the user turned on deviates on the boolean axis, and its line carries the entries it selects. "Enabled at" ahead of a list reads as a place
+    // rather than a selection, so a list takes "for", while every enabled-at row above holds a single value and keeps "at".
+    const categories: FeatureCategoryEntry[] = [{ description: "Detection Options", name: "Disco" }];
+    const options: Record<string, FeatureOptionEntry[]> = {
+
+      Disco: [{ default: false, defaultValue: "Presence", description: "Vehicle events.", multiple: true, name: "Vehicle" }]
+    };
+    const fo = new FeatureOptions(categories, options, ["Enable.Disco.Vehicle=Presence,Arriving"]);
+    const log = capturingLog();
+
+    fo.logFeature({ label: "Vehicle events", log, option: "Disco.Vehicle" });
+
+    assert.deepEqual(log.entries, [{ level: "info", message: "%s enabled for %s.", params: [ "Vehicle events", "Presence,Arriving" ] }]);
+  });
+
+  test("states an emptied list in words on the boolean-axis line rather than rendering nothing after \"for\"", () => {
 
     // A default-off list the user turned on and emptied deviates on both axes, so the line takes the "enabled" shape - and the shape has to say what the empty
-    // selection is, since interpolating the value would emit "Smart detections enabled at ." instead.
+    // selection is, since interpolating the value would emit "Smart detections enabled for ." instead.
     const categories: FeatureCategoryEntry[] = [{ description: "Motion Options", name: "Motion" }];
     const options: Record<string, FeatureOptionEntry[]> = {
 

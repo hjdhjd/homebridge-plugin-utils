@@ -165,9 +165,9 @@ export interface MqttTopicDeviceColumn<V extends Readonly<Record<string, string>
  *
  * The presence of `publish`, `get`, and `set` is the declaration that the plugin performs that verb. A consumer publishes an entry only when it declares `publish`,
  * and the renderer emits exactly the rows the entry declares, so one declaration answers both what the code does and what the document says. Author-owned markdown
- * in the three message texts reaches the document verbatim, except the column separator, which the renderer escapes. A verb's narrowing - `getDevices`,
- * `publishDevices`, `setDevices` - names the listed kinds that perform that verb when fewer than all of them do; a verb without one is performed by every listed
- * kind. Like `devices`, a narrowing is documentation the renderer projects and the runtime never reads.
+ * in each message text reaches the document verbatim, except the column separator, which the renderer escapes, and a line ending, which it renders as a space so
+ * the text stays on its row. A verb's narrowing - `getDevices`, `publishDevices`, `setDevices` - names the listed kinds that perform that verb when fewer than all
+ * of them do; a verb without one is performed by every listed kind. Like `devices`, a narrowing is documentation the renderer projects and the runtime never reads.
  *
  * @property devices        - Optional. The device kinds the topic belongs to, named by key into the catalog's column vocabulary, as a non-empty tuple. Present only when
  *                            the catalog declares a column, which the builder's two overloads make a compile-time pair wherever the entries' literal type survives.

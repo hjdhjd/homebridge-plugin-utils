@@ -1,24 +1,26 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * doc-markdown.ts: The markdown mechanics every documentation generator composes over - the marked-region splice and the padded-column table.
+ * doc-markdown.ts: The markdown mechanics every documentation generator composes over - the marked-region splice, the padded-column table, and its cell escape.
  */
 
 /**
  * The markdown mechanics every documentation generator in the family composes over: the in-place splice of a marked region, and the markdown table with padded
- * columns.
+ * columns, with the escape a cell's text takes before it goes in.
  *
- * Both are domain-free by design. A generator owns what its catalog holds, what a row says, and which marker pair frames its region; it reaches here for the two
- * mechanics that are the same whatever the domain, so two documents that share no subject matter still print tables a reader recognizes as one family's and still
- * regenerate through one splice.
+ * Each is domain-free by design. A generator owns what its catalog holds, what a row says, and which marker pair frames its region; it reaches here for the
+ * mechanics that are the same whatever the domain, so documents that share no subject matter still print tables a reader recognizes as one family's, keep every
+ * cell on its row the same way, and still regenerate through one splice.
  *
- * The module exports two pure string functions:
+ * The module exports pure string functions:
  *
  *   - {@link renderMarkdownTable} - the table layout: the single width pass over every column but the last, the divider, and the row template.
+ *
+ *   - {@link escapeTableCell} - what a cell's text cannot carry raw into a table row: the column separator and a line ending.
  *
  *   - {@link spliceMarkedRegion} - the in-place splice that replaces the region between a caller-named marker pair in an existing document with freshly rendered
  *     content, leaving the hand-written prose around it untouched.
  *
- * Both are pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading a document and writing it back - belongs to the CLI verb that
+ * Each is pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading a document and writing it back - belongs to the CLI verb that
  * drives a generator, which is inherently a tooling concern. This module is therefore browser-safe and trivially testable, but it is a tooling concern and is
  * deliberately NOT mirrored into `dist/ui/` by the build pipeline.
  *
@@ -115,6 +117,27 @@ export function renderMarkdownTable({ dividerWidth, headings, rows }: MarkdownTa
   const divider = paddedWidths.map((width) => "|" + "-".repeat(width + 2)).join("") + "|" + "-".repeat(dividerWidth);
 
   return [ renderTableLine(headings, paddedWidths), divider, ...rows.map((row) => renderTableLine(row, paddedWidths)) ];
+}
+
+/**
+ * Escape a cell's text for a markdown table row, and nothing else. The column separator `|` becomes `\|`, because a bare one would open a phantom column and shift
+ * every cell after it. A line ending - `\r\n`, `\r`, or `\n` - becomes one space, because a line ending ends the row and would strand the rest of the cell outside
+ * the table. GFM strips the backslash from an escaped `|` before it parses the cell's inline content, inside a code span too, so the escape never shows in the
+ * rendered text.
+ *
+ * Everything else passes through as written, so a cell's own markup - a code span, a link, an entity, an alert - reaches the document exactly as its author wrote
+ * it. A caller that needs more for plain text, such as entity escapes, applies them first and this last. Apply it to a cell's text before the cell goes to
+ * {@link renderMarkdownTable}, which lays out and measures each cell exactly as it is handed over.
+ *
+ * @param text - The cell's text.
+ *
+ * @returns The text with every column separator escaped and every line ending a single space.
+ *
+ * @category Utilities
+ */
+export function escapeTableCell(text: string): string {
+
+  return text.replaceAll("|", "\\|").replaceAll(/\r\n?|\n/g, " ");
 }
 
 /**

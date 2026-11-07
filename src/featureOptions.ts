@@ -2794,28 +2794,34 @@ export class FeatureOptions {
     }
 
     // Defensive fallback for the degenerate case of a value-centric catalog entry with no concrete value at this level - no registered default and no explicit value
-    // where the level resolves. The option is enabled per the user's choice but there is nothing meaningful to render after "at"; emitting "<label> enabled at ."
-    // would mislead a reader, so we collapse to the boolean-axis message shape and let the catalog declaration's malformed-ness surface elsewhere.
+    // where the level resolves. The option is enabled per the user's choice but there is nothing meaningful to render after "at" or "for"; emitting
+    // "<label> enabled at ." or "<label> enabled for ." would mislead a reader, so we collapse to the boolean-axis message shape and let the catalog declaration's
+    // malformed-ness surface elsewhere.
     if(state.value === undefined) {
 
       return [ "%s enabled.", label ];
     }
 
-    // A list resolving to the empty selection is stated in words rather than rendered, because there is nothing to put after "at" or "to" and a catalog-declared
+    // Whether the option stores a list decides how an empty selection reads and which word an enabled line puts before its value.
+    const isList = isMultipleOption(this.#catalog.optionsByName[option.toLowerCase()]);
+
+    // A list resolving to the empty selection is stated in words rather than rendered, because there is nothing to put after "for" or "to" and a catalog-declared
     // renderer is written for the values the option offers, not for their absence. This resolves ahead of the renderer so no plugin's formatter is handed the
     // empty string; every option storing a single value keeps the reading below, empty answers included.
-    if(!state.value.length && isMultipleOption(this.#catalog.optionsByName[option.toLowerCase()])) {
+    if(!state.value.length && isList) {
 
       return [ booleanDeviates ? "%s enabled with an empty selection." : "%s set to an empty selection.", label ];
     }
 
     const renderedValue = this.#catalog.renderers[option.toLowerCase()]?.(state.value) ?? state.value;
 
-    // Message shape splits on which axis deviated: "enabled at" when the level turned the feature on (boolean axis crossed), "set to" when only the value moved away
-    // from the one it inherits. Each form carries the effective value, since for value-centric options the value is what the operator most needs to see.
+    // Message shape splits on which axis deviated. Where the level turned the feature on (boolean axis crossed), a single value is "enabled at" itself and a list
+    // "enabled for" its entries, since "enabled at" ahead of a list reads as a place rather than a selection; where only the value moved away from the one it
+    // inherits, a single value and a list alike are "set to" it. Each form carries the effective value, since for value-centric options the value is what the
+    // operator most needs to see.
     if(booleanDeviates) {
 
-      return [ "%s enabled at %s.", label, renderedValue ];
+      return [ isList ? "%s enabled for %s." : "%s enabled at %s.", label, renderedValue ];
     }
 
     return [ "%s set to %s.", label, renderedValue ];
@@ -2852,15 +2858,19 @@ export class FeatureOptions {
    * | Value-centric    | both axes match                                         | (silent)                           |
    * | Value-centric    | inherited on, disabled                                  | `<label> disabled.`                |
    * | Value-centric    | inherited off, enabled (value matches or differs)       | `<label> enabled at <value>.`      |
+   * | List-valued      | inherited off, enabled (list matches or differs)        | `<label> enabled for <list>.`      |
    * | Value-centric    | inherited on, enabled, value differs                    | `<label> set to <value>.`          |
    *
+   * A list-valued option, one declaring {@link FeatureOptionEntry.multiple}, takes the value-centric rows except where its level turned it on: there its entries
+   * follow "for" rather than "at", since "enabled at" ahead of a list reads as a place rather than a selection.
+   *
    * A value-centric option enabled with no resolvable value at its level - no catalog-declared default and no explicit value where the level resolves - collapses
-   * to the plain `<label> enabled.` line above rather than the `enabled at <value>` form, since there is nothing meaningful to render after "at". A level resolving
-   * no value says nothing about the value axis, so it differs from the level above only where its enabled state does.
+   * to the plain `<label> enabled.` line above rather than the `enabled at <value>` or `enabled for <list>` form, since there is nothing meaningful to render after
+   * "at" or "for". A level resolving no value says nothing about the value axis, so it differs from the level above only where its enabled state does.
    *
    * An option declaring {@link FeatureOptionEntry.multiple} that resolves to the empty selection keeps the same axis split and states the emptiness in words:
    * `<label> enabled with an empty selection.` where the boolean axis deviated, `<label> set to an empty selection.` where only the value axis did. Saying it
-   * outright is what keeps the line a sentence, since interpolating the empty string into either shape above would emit "enabled at ." instead.
+   * outright is what keeps the line a sentence, since interpolating the empty string into the shapes above would emit "enabled for ." instead.
    *
    * Value rendering consults the catalog-declared {@link FeatureOptionEntry.render} when present; otherwise the raw string returned by {@link FeatureOptions.value}
    * is used. The renderer may be either a {@link FeatureOptionFormatter} string naming a built-in formatter from the shared registry (preferred when the format exists

@@ -26,7 +26,8 @@ the catalog like every other row, through the shipped [mqttAvailabilityEntry](mq
 What each table carries is the entry's own declaration. An entry contributes a published row when it declares `publish`, a subscribed row for its get child when it
 declares `get`, and another for its set child when it declares `set`, so the document says exactly what the plugin does. A row credits the kinds its verb's narrowing
 names, and the entry's whole list when the verb has none. The column layout, the width pass, and the divider are
-[renderMarkdownTable](doc-markdown.md#rendermarkdowntable)'s; this module owns which cells go into it and how each one reads.
+[renderMarkdownTable](doc-markdown.md#rendermarkdowntable)'s, and what a cell cannot carry raw is [escapeTableCell](doc-markdown.md#escapetablecell)'s to
+escape; this module owns which cells go into it and how each one reads.
 
 The renderer is pure and isomorphic: no `node:` imports, no `fs`, no `process`. The only I/O - reading the document and writing it back - belongs to the
 `prepare-mqtt` verb that drives it. This module is therefore browser-safe and trivially testable, but it is a tooling concern and is deliberately NOT mirrored

@@ -49,9 +49,9 @@ plugin's own shutdown listeners therefore never matters: a change made before th
 Nothing else tells the helper a change happened, by design. The plugin marks wherever it changes what the cache holds: where a service gate,
 [acquireService](service.md#acquireservice) or [validService](service.md#validservice), or a characteristic gate,
 [validCharacteristic](service.md#validcharacteristic) or [updatePresenceCharacteristic](service.md#updatepresencecharacteristic), answers a transition
-[presenceChanged](service.md#presencechanged) reads as a change, where a name helper, [setAccessoryName](service.md#setaccessoryname) or
-[setServiceName](service.md#setservicename), answers true, and where it writes a setting into an accessory's context. Live device state, a motion or
-contact reading, belongs on characteristics, which the device reports again after a restart, so it never passes through here.
+[presenceChanged](service.md#presencechanged) reads as a change, where a name helper, [setAccessoryName](service.md#setaccessoryname), whatever its
+`owned` option says, or [setServiceName](service.md#setservicename), answers true, and where it writes a setting into an accessory's context. Live device
+state, a motion or contact reading, belongs on characteristics, which the device reports again after a restart, so it never passes through here.
 
 #### Example
 

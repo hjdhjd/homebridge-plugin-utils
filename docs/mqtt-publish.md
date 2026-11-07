@@ -6,11 +6,12 @@
 
 # mqtt-publish
 
-The MQTT publish-outcome vocabulary and the graceful end the client and its shipped test double share: the error a publish is refused with while the client holds
-no broker session, the pure router that classifies a guarded publish's failure into the one line that reports it, the per-topic memory a change-gated publish is
-answered against, the sequence that states a plugin's final words before the client tears down, with its default grace and the warning a teardown logs when
-words go unsaid, the end's state with the admission a publish faces once the end has begun, and the check that tells a callback the end or the abort cut short apart
-from one that failed, with the line each owner logs for a connect handler cut short.
+The MQTT publish-outcome vocabulary, the graceful end and the MQTT-off rule the client and its shipped test double share: the error a publish is refused with while
+the client holds no broker session, the pure router that classifies a guarded publish's failure into the one line that reports it, the per-topic memory a
+change-gated publish is answered against, the sequence that states a plugin's final words before the client tears down, with its default grace and the warning a
+teardown logs when words go unsaid, the end's state with the admission a publish faces once the end has begun, the check that tells a callback the end or the abort
+cut short apart from one that failed, with the line each owner logs for a connect handler cut short, and the rule that answers whether MQTT is off before a client
+is built.
 
 Every piece lives here rather than beside the client because the double stands in for the client without standing in for its transport. The double's only edge
 to `mqttClient.ts` is a type import, which the compiler erases, and the `/testing` entry point aggregates every shipped double...so a value import from the client
@@ -20,7 +21,8 @@ library. The memory is here for the same reason: the double has to answer "is th
 import by value is what keeps them from drifting on the comparison or on how a payload is kept. The end sequence is here for it too: the grace, the order the
 words are stated in and the warning have one definition, so a consumer's suite on the double sees the end a plugin meets on the client. So are the end's state, its
 admission, the check and the connect handler's cancelled line, which is what keeps the two from disagreeing about which publish the end lets through, which failure is
-a cancellation, and how a cancelled connect handler reads in the log.
+a cancellation, and how a cancelled connect handler reads in the log. So is the MQTT-off rule, which the client's factory and the double's factory each call, so a
+consumer's suite meets a `null` from the double's factory exactly where a plugin meets one from the client's.
 
 ## Utilities
 
@@ -59,7 +61,7 @@ clear(): void;
 ```
 
 Forget every topic, so the next change-gated publish on each one goes out. The client clears its memory on every connect and at teardown, and the double clears
-its own when a session is restored and at abort.
+its own when a session is established and at abort.
 
 ###### Returns
 
@@ -289,6 +291,34 @@ loop still publishing while the words are stated goes quiet without the plugin h
 #### Throws
 
 `HbpuAbortError("shutdown")` once the end has begun, unless the end is stating and `signal` is its window.
+
+***
+
+### enabledMqttSettings()
+
+```ts
+function enabledMqttSettings(options): Nullable<MqttConnectionSettings>;
+```
+
+Answer the broker URL and topic prefix an MQTT client is built from, or `null` when MQTT is off. A broker URL or topic prefix that is absent, `null` or empty
+means MQTT is off - the ordinary state of a plugin whose user never configured a broker, or switched it back off - and the answer logs nothing, because a
+feature being off is not an event.
+
+The answer narrows the broker URL and topic prefix to strings, so a caller assembles an [MqttConfig](mqttClient.md#mqttconfig) from it with no cast. The
+rule lives here rather than beside the client because [createMqttClient](mqttClient.md#createmqttclient) and the shipped double's factory each call it by
+value, so the double answers `null` exactly where the factory does without loading the broker library.
+
+#### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options` | `Pick`\<[`MqttClientConfigCandidate`](mqttClient.md#mqttclientconfigcandidate), `"brokerUrl"` \| `"topicPrefix"`\> | The candidate broker URL and topic prefix, as [MqttClientConfigCandidate](mqttClient.md#mqttclientconfigcandidate) carries them. |
+
+#### Returns
+
+[`Nullable`](util.md#nullable)\<[`MqttConnectionSettings`](mqttClient.md#mqttconnectionsettings)\>
+
+The broker URL and topic prefix as non-empty strings, or `null` when MQTT is off.
 
 ***
 

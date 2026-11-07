@@ -840,7 +840,8 @@ where `new MqttClient(...)` throws on an unusable broker URL, this degrades, bec
 `null` is the entire construction-failure vocabulary, and it covers two situations the caller does not have to tell apart:
 
 - **MQTT is off.** The broker URL or the topic prefix is absent, `null`, or empty - the ordinary state of a plugin whose user never configured MQTT, or who
-  switched it back off. Nothing is logged, because a feature being off is not an event.
+  switched it back off. Nothing is logged, because a feature being off is not an event. The rule is [enabledMqttSettings](mqtt-publish.md#enabledmqttsettings),
+  which the shipped double's factory answers by too.
 - **Construction failed.** The broker URL is present but unusable. The failure is logged once at error level, with the broker URL excised from the inspected
   error chain through [redactKnownBrokerUrl](#redactknownbrokerurl), since that chain embeds the configured URL verbatim.
 
@@ -1096,8 +1097,8 @@ The catalog contract is checked before anything is read: a catalog that never co
 prefix to answer with, and the client would read the resulting empty prefix as MQTT off with nothing logged. That is a programming error rather than a
 configuration state, so it throws where it can be seen rather than degrading into silence.
 
-Both consumers resolve this once, where the client is constructed, behind the example's `??=`: a client's broker and prefix are fixed for its lifetime, so a
-later re-resolution reaches no existing client.
+A consumer resolves this once, where it constructs its client: a client's broker and prefix are fixed for its lifetime, so a later re-resolution reaches no
+existing client.
 
 #### Parameters
 

@@ -84,7 +84,7 @@ What a durable rewrite answers.
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="configuredoptions"></a> `configuredOptions` | `readonly` | readonly `string`[] | The configured options with every family this pass could compose exactly stated through its canonical entries in place of its retired ones, the compositions following the surviving entries in order. The input reference itself when nothing was consumed or composed. |
+| <a id="configuredoptions"></a> `configuredOptions` | `readonly` | readonly `string`[] | The configured options with every family this pass could compose exactly stated through its canonical entries in place of its retired ones, the compositions following the surviving entries in order. The input reference itself when it was a list of strings and nothing was consumed or composed. |
 | <a id="remaining"></a> `remaining` | `readonly` | `boolean` | True when a family kept its retired entries because the topology this pass had could not place one of its scopes, which a caller reads as "probe wider and come back". A converged configuration answers false. |
 
 ***
@@ -175,7 +175,7 @@ The boot view of a configuration: the entries the engine is built on, the overla
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="configuredoptions-1"></a> `configuredOptions` | `readonly` | readonly `string`[] | The configured options with every retired shape the engine would misread composed into the current grammar, surviving entries in order and the compositions after them. The input reference itself when nothing was consumed or composed. |
+| <a id="configuredoptions-1"></a> `configuredOptions` | `readonly` | readonly `string`[] | The configured options with every retired shape the engine would misread composed into the current grammar, surviving entries in order and the compositions after them. The input reference itself when it was a list of strings and nothing was consumed or composed. |
 | <a id="translated"></a> `translated` | `readonly` | readonly `string`[] | The retired entries the translation consumed, superseded or left in place for the overlay, verbatim, for a plugin's startup narration. Empty when the configuration is already canonical. |
 
 #### Methods
@@ -229,7 +229,9 @@ nothing for it.
 
 Families walk in the order they are declared and a family's scopes in the order they first appear, each identifier once whatever its casing and in the spelling
 it first appeared in. Surviving entries stay byte-verbatim and in order, and the composed entries follow them. Each act answers the input array itself when it
-consumed and composed nothing, so a caller tells a no-op by reference.
+consumed and composed nothing, so a caller tells a no-op by reference. A plugin's configuration arrives untyped, so each act first reads a setting that is not a
+list of strings for the strings it holds, as `FeatureOptions` does: a list keeps them and drops anything else, and any other value holds no entries. Such a
+setting is never answered by reference, so a caller writing the answer back writes the strings alone.
 
 #### Parameters
 

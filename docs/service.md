@@ -545,10 +545,14 @@ if(presenceChanged(validCharacteristic({ characteristic: Characteristic.StatusTa
 ### setAccessoryName()
 
 ```ts
-function setAccessoryName(accessory, name): boolean;
+function setAccessoryName(
+   accessory, 
+   name, 
+   options?
+): boolean;
 ```
 
-Updates the display name of an accessory and of its AccessoryInformation service to the specified value.
+Updates the display name of an accessory to the specified value, and the names of its AccessoryInformation service with it while the plugin owns them.
 
 #### Parameters
 
@@ -556,22 +560,29 @@ Updates the display name of an accessory and of its AccessoryInformation service
 | ------ | ------ | ------ |
 | `accessory` | `PlatformAccessory` | The accessory to rename. |
 | `name` | `string` | The new name to apply to the accessory. |
+| `options?` | \{ `owned?`: `boolean`; \} | Optional naming options. |
+| `options.owned?` | `boolean` | Whether the plugin owns the accessory's HomeKit name under the family naming rule, true when [ownedName](homekit-name.md#ownedname) answers a name. Defaults to `true`. With `false`, the call writes the display name alone, Homebridge's own label, keeping it in step with [displayedName](homekit-name.md#displayedname) while the user's HomeKit names stand. |
 
 #### Returns
 
 `boolean`
 
-True when the call wrote anything, a display name or a characteristic, and false when every name already carried the sanitized name or nothing was
-left after sanitizing.
+True when the call wrote anything, a display name or a characteristic, and false when every name it reaches already carried the sanitized name or
+nothing was left after sanitizing.
 
 #### Remarks
 
-An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to two names. This writes all
-of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName` owns the accessory display names (the
-`PlatformAccessory`'s own and the HAP accessory's beneath it), and [setServiceName](#setservicename) owns the AccessoryInformation service's `ConfiguredName` and `Name`
-characteristics. `ConfiguredName` is the name a user edits in the Home app, so whether to sync a device's name at all stays the plugin's policy: a call with the
-device's name replaces a name the user gave the accessory. A tile whose own service carries a `ConfiguredName` takes its rename there rather than here, so a
-plugin names and watches that service through [setServiceName](#setservicename) and [watchServiceName](#watchservicename).
+An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to names that disagree. While the
+plugin owns the HomeKit name, this writes all of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName`
+owns the accessory display names (the `PlatformAccessory`'s own and the HAP accessory's beneath it), and [setServiceName](#setservicename) owns the AccessoryInformation
+service's `ConfiguredName` and `Name` characteristics. `ConfiguredName` is the name a user edits in the Home app, so whether the plugin owns it stays the
+plugin's policy, which the family naming rule states and `owned` carries: a call with `owned` true replaces a name the user gave the accessory. A tile whose own
+service carries a `ConfiguredName` takes its rename there rather than here, so a plugin names and watches that service through [setServiceName](#setservicename) and
+[watchServiceName](#watchservicename).
+
+A call with `owned` false writes the display names alone, from the same sanitized source, and leaves the information service's names as the user left them. The
+display name is Homebridge's own field, which HomeKit never reads for a bridged accessory, while the plugin logs under it and a settings page lists the accessory
+cache by it...so it follows the name the plugin shows for the accessory whoever owns the HomeKit names, and the user's name stands in HomeKit beside it.
 
 Each name is compared before it is written, and only what differs is written, so a plugin calls this on every refresh of a device's name and saves the accessory
 only when the answer is true, with no comparison of its own. A comparison of its own would misread a fresh accessory: HAP seeds the information service's `Name`
@@ -583,8 +594,12 @@ nothing left after sanitizing is not applied anywhere: an accessory has to answe
 #### Example
 
 ```typescript
-// Rename an accessory after the device reports a new name, and save it to Homebridge's accessory cache only when the rename changed something.
-if(setAccessoryName(accessory, device.name)) {
+// Name an accessory under the family naming rule whenever the device reports its name, and save it to Homebridge's accessory cache only when the call wrote
+// something. The display name follows the name the plugin shows for the device, and the HomeKit names follow it only while the plugin owns them.
+const names = { fallback: device.name, override: this.nameOption(device) };
+const owned = ownedName({ ...names, sync: this.syncName(device) }) !== null;
+
+if(setAccessoryName(accessory, displayedName(names), { owned })) {
 
   this.platform.persistence.persist(accessory);
 }

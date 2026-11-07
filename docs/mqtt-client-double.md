@@ -10,7 +10,12 @@ A recording [MqttClient](mqttClient.md#mqttclient) test double.
 
 A plugin that speaks MQTT registers subscriptions and publishes state, and what its tests need to assert is its own half of that conversation. This module ships the
 double that answers it: a [TestMqttClient](#testmqttclient) recording which subscriptions were registered, on which topics, carrying which signals, what was published, and how
-a refused publish was handled, with drivers that let a test deliver a message or run a registered getter or setter by hand.
+a refused publish was handled, with drivers that let a test deliver a message or run a registered getter or setter by hand. Beside it is a
+[TestMqttClientFactory](#testmqttclientfactory), whose `create` stands in for [createMqttClient](mqttClient.md#createmqttclient): it answers `null` by the factory's own rule
+and otherwise a recorded double whose lifetime composes the signal the consumer passed with the double's own, and is the double's own when the consumer passed
+none. The factory's options fit each double before the consumer holds it - a client with no broker session until a test connects it, or an end held open on a
+promise the test settles - and [settlePastMqttEnd](#settlepastmqttend) carries a test past the turns an end nothing holds takes to finish, so a test reading inside a held end
+reads what the hold keeps back rather than an end that has not finished yet.
 
 The double records, it does not simulate a broker. There is no connection, no topic prefixing (a topic is recorded as the caller's tail, verbatim), no last will (a
 will is published by the broker, and there is none behind this double to publish one), and nothing on the wire...those are the real client's own contract, covered by
@@ -18,15 +23,15 @@ the library's suite against a real broker, and a plugin's suite needs the plugin
 the client's observable behavior, because that is what a consumer's code branches on: the composed-signal check every publish opens with, the connection state a
 publish is refused on when it reads false, the pre-aborted early return that registers nothing, the release of a registration when its per-subscription signal aborts,
 the change gate a publish asking for `ifChanged` is answered by and the session-bound memory behind it, the connect registrations the client notifies on every session
-it establishes until its end begins - driven here by the lever's false-to-true edge, which is the double's session restored - the retained availability statement that
+it establishes until its end begins - driven here by the lever's false-to-true edge, which is the double's connect - the retained availability statement that
 same edge records ahead of those registrations, the final words the end registrations state within the end's grace, the admission that refuses every other publish once
 the end has begun, and the warning a teardown logs when the words go unsaid, each run from the module the client runs it from, the quiet the end keeps over every
 driver, and the post-abort no-op posture of every method. The guarded path routes through the client's own
 [routeGuardedPublishFailure](mqtt-publish.md#routeguardedpublishfailure), so a cancellation, an offline refusal, and a genuine failure reach the same lines here
 that they reach on the client.
 
-Signatures come from the client's own exported types - [MqttHandler](mqttClient.md#mqtthandler), [MqttGetHandler](mqttClient.md#mqttgethandler), [MqttSetHandler](mqttClient.md#mqttsethandler), and the init types - so a method here
-cannot drift from the method it stands in for without the compiler saying so.
+Signatures come from the client's own exported types - [MqttHandler](mqttClient.md#mqtthandler), [MqttGetHandler](mqttClient.md#mqttgethandler), [MqttSetHandler](mqttClient.md#mqttsethandler), and the init types - and the
+factory's `create` is typed as `createMqttClient` itself, so a method here cannot drift from the method it stands in for without the compiler saying so.
 
 ## Testing
 
@@ -40,6 +45,9 @@ publish, the log lines the guarded path routes between, the registration rules, 
 once the double has aborted - so a consumer driven against this double branches exactly as it would against a live client. That holds for the graceful end too:
 [TestMqttClient.onEnd](#onend), [TestMqttClient.end](#end) and disposal state a plugin's final words through the sequence the client runs, and an abort that leaves
 them unsaid logs the client's warning, so a consumer's suite can assert its shutdown states its words before it aborts.
+
+A consumer handed a client takes the double through a cast at its injection site, as the example below does. A consumer that builds its own client through an
+injected `createMqttClient` takes [TestMqttClientFactory](#testmqttclientfactory)'s `create` instead, which answers the double on the consumer's own signal with no cast at the call.
 
 #### Example
 
@@ -75,9 +83,11 @@ Construct a recording double.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options?` | \{ `clock?`: [`Clock`](clock.md#clock); `log?`: [`HomebridgePluginLogging`](util.md#homebridgepluginlogging); \} | Optional construction options. |
+| `options?` | \{ `clock?`: [`Clock`](clock.md#clock); `connected?`: `boolean`; `log?`: [`HomebridgePluginLogging`](util.md#homebridgepluginlogging); `signal?`: [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal); \} | Optional construction options. |
 | `options.clock?` | [`Clock`](clock.md#clock) | The time source the grace of [TestMqttClient.end](#end) is armed on, defaulting to the library's `systemClock`, as the client's own option does. A test that drives the grace by hand passes a `TestClock`. |
+| `options.connected?` | `boolean` | Whether the double starts out holding a broker session, defaulting to `true`. A real client holds no session until the broker's first CONNACK, so `false` starts the double there, refusing every publish with [MqttOfflineError](mqtt-publish.md#mqttofflineerror), and its first write of `true` is that connect: the availability statement and every [TestMqttClient.onConnect](#onconnect) registration, as the client's first connect states and runs them. |
 | `options.log?` | [`HomebridgePluginLogging`](util.md#homebridgepluginlogging) | The logger [TestMqttClient.publishGuarded](#publishguarded) reports on and the abort warns on, defaulting to the library's `noOpLog` so a test asserting on behavior rather than on log output constructs the double bare; a test reading the double's wording passes a `capturingLog()`. |
+| `options.signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The parent signal the client would compose into its lifetime: the one a consumer passes in its [MqttClientInit](mqttClient.md#mqttclientinit). Aborting it ends the double with that signal's reason. |
 
 ###### Returns
 
@@ -90,7 +100,7 @@ Construct a recording double.
 | <a id="published"></a> `published` | `public readonly` | [`TestMqttPublish`](#testmqttpublish)[] | `[]` | Every recorded publish, in order. A publish the refusal lever rejected never lands here - it is counted in [TestMqttClient.rejectedPublishes](#rejectedpublishes) instead. [TestMqttClient.publishedTo](#publishedto) is the view over this list a scenario reads when it cares about one topic rather than about the whole conversation. |
 | <a id="publishrejection"></a> `publishRejection` | `public` | [`Nullable`](util.md#nullable)\<`Error`\> | `null` | The refusal lever. While it holds an error, every [TestMqttClient.publish](#publish) rejects with that error instead of recording, which is how a test proves a plugin's loop survives a broker that will not take a message. Set it back to `null` to resume recording. |
 | <a id="rejectedpublishes"></a> `rejectedPublishes` | `public` | `number` | `0` | How many publishes the double refused - through the refusal lever, or because [TestMqttClient.connected](#connected) was false - counting the ones [TestMqttClient.publishGuarded](#publishguarded) absorbs and the republish [TestMqttClient.invokeGet](#invokeget) issues, so a test can assert a refusal happened without having to observe the rejection itself. |
-| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | `undefined` | The abort signal representing this double's lifetime, mirroring [MqttClient.signal](mqttClient.md#signal). It aborts exactly once, when [TestMqttClient.abort](#abort) is called or the double is disposed. |
+| <a id="signal"></a> `signal` | `public readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | `undefined` | The composed abort signal representing this double's lifetime, mirroring [MqttClient.signal](mqttClient.md#signal). It aborts exactly once, when [TestMqttClient.abort](#abort) is called, when the double is disposed, or when the parent signal the constructor received fires. |
 | <a id="subscriptions"></a> `subscriptions` | `public readonly` | [`TestMqttSubscription`](#testmqttsubscription)[] | `[]` | The registrations that are currently live, in registration order. An entry leaves this list when its per-subscription signal aborts, when [TestMqttClient.unsubscribe](#unsubscribe) names its topic, or when the double aborts - the client's release semantics, observable here as the entry's departure. |
 | <a id="unsubscribes"></a> `unsubscribes` | `public readonly` | \{ `id`: `string`; `topic`: `string`; \}[] | `[]` | Every `(id, topic)` tuple [TestMqttClient.unsubscribe](#unsubscribe) acted on, in order. A call the guard short-circuits - an aborted double, or an empty id - records nothing. |
 
@@ -118,20 +128,21 @@ get aborted(): boolean;
 get connected(): boolean;
 ```
 
-The connection lever, mirroring [MqttClient.connected](mqttClient.md#connected). It reads `true` on a fresh double and `false` once the double
-aborts, whatever the lever itself holds, which is the composition the client makes between mqtt.js's flag and its own lifetime.
+The connection lever, mirroring [MqttClient.connected](mqttClient.md#connected). It starts where the constructor's `connected` option sets it,
+and reads `false` once the double aborts, whatever the lever itself holds, which is the composition the client makes between mqtt.js's flag and its own
+lifetime.
 
 Setting it to `false` stands in for a broker the client holds no session with: every [TestMqttClient.publish](#publish) is then refused with
-[MqttOfflineError](mqtt-publish.md#mqttofflineerror) and counted, which is the outage a consumer's own code has to survive. Set it back to `true` to resume recording. Moving the lever
-from `false` to `true` is a session restored and clears the change-gated memory, exactly as the client's connect clears its own; a write that leaves the lever
+[MqttOfflineError](mqtt-publish.md#mqttofflineerror) and counted, which is the outage a consumer's own code has to survive. Set it to `true` for a publish to record. Moving the lever
+from `false` to `true` is a session established and clears the change-gated memory, exactly as the client's connect clears its own; a write that leaves the lever
 where it was is not a session event and leaves the memory standing. That same edge runs every registration [TestMqttClient.onConnect](#onconnect) holds, which is
 how a scenario drives a consumer's restatement of held state without a broker, until [TestMqttClient.end](#end) begins: from then on the edge runs none.
 
 The edge is also where the double states its availability, as the client's connect does: a retained `online` on the availability tail, recorded ahead of those
-registrations. A fresh double records nothing of the kind, and the asymmetry with the client is deliberate rather than an omission - the client's first connect
-is a session established, while a fresh double is a session already held, with no edge to cross - so a scenario that wants the statement drives the lever from
-`false` to `true`. Recording one at construction would shift every index-based assertion a consumer's own suite already holds. Once the end has begun, its
-admission refuses the statement, which records nothing and reaches the aborted line at debug, as on the client.
+registrations. Construction crosses no edge, so no double records the statement as it is built, and a scenario that wants the client's first connect
+constructs the double with `connected: false` and drives the lever to `true`, which records the statement as that connect makes it. Recording one at
+construction would shift every index-based assertion a consumer's own suite already holds. Once the end has begun, its admission refuses the statement, which
+records nothing and reaches the aborted line at debug, as on the client.
 
 ###### Returns
 
@@ -231,7 +242,7 @@ the client's own, imported from the shared module, so a word the client would re
 
 From the moment it begins, the end keeps the double quiet but for the words, as the client's keeps the client: a publish whose own signal is not the window a
 handler was handed rejects with `HbpuAbortError("shutdown")`, which the guarded form reports at debug alone; [TestMqttClient.deliver](#deliver),
-[TestMqttClient.invokeGet](#invokeget) and [TestMqttClient.invokeSet](#invokeset) return without running a handler; and a session restored through
+[TestMqttClient.invokeGet](#invokeget) and [TestMqttClient.invokeSet](#invokeset) return without running a handler; and a session established through
 [TestMqttClient.connected](#connected) runs no connect registration. The shutdown order is the client's, and its own `end()` states it.
 
 A second call returns the first call's promise, and a call on an aborted double resolves an empty array, as on the client.
@@ -338,7 +349,7 @@ Record a connect registration, mirroring [MqttClient.onConnect](mqttClient.md#on
 signal registers nothing, a supplied signal releases the registration when it - or the double - aborts, and registering the same function twice is one
 registration.
 
-Moving [TestMqttClient.connected](#connected) from `false` to `true` is what makes a registration fire, since that edge is the double's session restored. The
+Moving [TestMqttClient.connected](#connected) from `false` to `true` is what makes a registration fire, since that edge is the double's connect. The
 registrations run after the memory clear and after the lever has taken its value, so a handler reading `connected` sees `true` and a publish it issues is
 admitted, exactly as one is on the client. A write that leaves the lever where it stood, and a write to `false`, invoke nothing, and from the moment
 [TestMqttClient.end](#end) begins the edge invokes nothing at all, as a session the client establishes during its end runs no connect handler.
@@ -481,7 +492,7 @@ own signal, or by a rejection carrying either cancellation shape reaches the abo
 [TestMqttClient.connected](#connected) reaches the dropped line at debug; anything else is a genuine failure and lands on the error line. The router owns the
 reasoning behind that order. Every line names the topic tail, since the double expands nothing, and a change-gated publish the memory suppresses reaches no
 line at all, since nothing was attempted. A failure that keeps answering the same tag is reported once and replayed at debug until the tag changes or a
-session is restored, which is the client's own cadence rather than a behavior of the double's own.
+session is established, which is the client's own cadence rather than a behavior of the double's own.
 
 ###### Parameters
 
@@ -600,6 +611,206 @@ An aborted double or an empty `id` is a no-op, releasing nothing. A tail still c
 
 ***
 
+### TestMqttClientFactory
+
+A [createMqttClient](mqttClient.md#createmqttclient) double: its [TestMqttClientFactory.create](#create) fills a consumer's injected factory, records every call,
+and answers a fresh [TestMqttClient](#testmqttclient) whose lifetime composes the `signal` of the init the consumer passed with the double's own, so the consumer's own
+signal ends the double it gets back as it ends a real client. With no init signal, the lifetime is the double's own.
+
+`create` answers `null` exactly where the real factory does, because each reads [enabledMqttSettings](mqtt-publish.md#enabledmqttsettings): a broker URL or
+topic prefix that is absent, `null` or empty is MQTT off, and the call is recorded with its `null` and nothing is logged. A signal that has already aborted
+answers a double that has already ended, with that signal's reason, as the real factory answers a constructed client that has already ended rather than a
+`null`. The double's grace is armed on the init's `clock` when the consumer passes one, else on the clock this factory was constructed with, else on the
+double's own default, and the double logs on `config.log`, so its warning and its guarded publish's lines land in the log the consumer handed the factory.
+
+An unusable broker URL is the real factory's concern rather than this one's: mqtt.js refuses it synchronously and no connection opens, so a row proving a
+consumer survives one calls `createMqttClient` itself. A row reads the recorded calls through `expectAt`, which fails at the call site naming the call it
+expected when the consumer made none.
+
+The factory's options fit each double as `create` builds it, before the consumer registers anything on it: `connected` is whether each double starts out
+holding a broker session, and `holdEnd` holds each double's end open on a promise the row settles, with [TestMqttClientFactory.holdReached](#holdreached) reading
+whether an end has reached the hold. A row reading inside a held end first settles past the turns an unheld end takes, through [settlePastMqttEnd](#settlepastmqttend), so
+what it reads is what the hold keeps back.
+
+#### Examples
+
+```ts
+import { TestMqttClientFactory, expectAt } from "homebridge-plugin-utils/testing";
+
+const factory = new TestMqttClientFactory();
+const platform = new ExamplePlatform(log, config, api, { mqttFactory: factory.create });
+
+// The platform built its client through the factory, so the recorded call holds the double it got back.
+const { client } = expectAt(factory.createCalls, 0, "the MQTT client the platform built");
+
+assert.ok(client, "the configuration names a broker and a topic prefix, so MQTT is on");
+await client.invokeSet("device1/power/set", "TRUE");
+```
+
+```ts
+import { TestMqttClientFactory, expectAt, settlePastMqttEnd } from "homebridge-plugin-utils/testing";
+
+const hold: PromiseWithResolvers<void> = Promise.withResolvers();
+const factory = new TestMqttClientFactory({ holdEnd: hold.promise });
+const platform = new ExamplePlatform(log, config, api, { mqttFactory: factory.create });
+
+// The platform's shutdown begins its client's end, which the hold keeps open until the row settles the promise.
+const stopped = platform.shutdown();
+
+await settlePastMqttEnd();
+
+assert.ok(factory.holdReached, "the shutdown began the client's end");
+assert.equal(expectAt(factory.createCalls, 0, "the MQTT client the platform built").client?.aborted, false, "and the hold keeps it open");
+
+hold.resolve();
+await stopped;
+```
+
+#### See
+
+TestMqttClient
+
+#### Constructors
+
+##### Constructor
+
+```ts
+new TestMqttClientFactory(options?): TestMqttClientFactory;
+```
+
+Construct a factory double.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `options?` | \{ `clock?`: [`Clock`](clock.md#clock); `connected?`: `boolean`; `holdEnd?`: [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>; \} | Optional construction options. |
+| `options.clock?` | [`Clock`](clock.md#clock) | The time source each double's grace is armed on when the init a consumer passes to `create` names none. Omitted, the double's own default applies. |
+| `options.connected?` | `boolean` | Whether each double starts out holding a broker session, handed to the double's own `connected` option. Omitted, the double's own default applies. |
+| `options.holdEnd?` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | A promise each double's end waits on. `create` registers the hold on the double before it returns it, so the hold runs first among the end's registrations, ahead of any the consumer makes, and marks [TestMqttClientFactory.holdReached](#holdreached) as it is invoked. It is a registration like any other, so an abort while it is held counts it in the warning the abort logs, and the end waits on it only within the grace, armed on the double's clock, so a promise the row never settles holds the end for the grace at most. Omitted, nothing holds the end. |
+
+###### Returns
+
+[`TestMqttClientFactory`](#testmqttclientfactory)
+
+#### Utilities
+
+##### create
+
+```ts
+readonly create: (config, init?) => Nullable<MqttClient>;
+```
+
+Record the call and answer `null` when MQTT is off, else a fresh double on the init's signal, fitted with this factory's options. It is an arrow-function
+property rather than a method, so a consumer takes it detached, as `factory.create`, and it still records on this factory.
+
+Construct an [MqttClient](mqttClient.md#mqttclient) when the configuration supports one, and answer `null` when it does not. This is the graceful counterpart to direct construction:
+where `new MqttClient(...)` throws on an unusable broker URL, this degrades, because a mistyped MQTT entry must never keep a plugin from loading.
+
+`null` is the entire construction-failure vocabulary, and it covers two situations the caller does not have to tell apart:
+
+- **MQTT is off.** The broker URL or the topic prefix is absent, `null`, or empty - the ordinary state of a plugin whose user never configured MQTT, or who
+  switched it back off. Nothing is logged, because a feature being off is not an event. The rule is [enabledMqttSettings](mqtt-publish.md#enabledmqttsettings),
+  which the shipped double's factory answers by too.
+- **Construction failed.** The broker URL is present but unusable. The failure is logged once at error level, with the broker URL excised from the inspected
+  error chain through [redactKnownBrokerUrl](mqttClient.md#redactknownbrokerurl), since that chain embeds the configured URL verbatim.
+
+The guard covers construction and nothing beyond it. Signal semantics stay the caller's, identical to direct construction: a pre-aborted `init.signal` yields a
+constructed client that has already ended, not a `null`.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `config` | [`MqttClientConfigCandidate`](mqttClient.md#mqttclientconfigcandidate) | Broker / topic configuration, both resolved option values passed through as-is. See [MqttClientConfigCandidate](mqttClient.md#mqttclientconfigcandidate). |
+| `init?` | [`MqttClientInit`](mqttClient.md#mqttclientinit) | Optional init options, forwarded to the constructor unchanged. See [MqttClientInit](mqttClient.md#mqttclientinit). |
+
+###### Returns
+
+[`Nullable`](util.md#nullable)\<[`MqttClient`](mqttClient.md#mqttclient)\>
+
+A live [MqttClient](mqttClient.md#mqttclient), or `null` when MQTT is unconfigured or construction failed. Never throws.
+
+###### Example
+
+```ts
+import { createMqttClient, mqttConnectionSettings } from "homebridge-plugin-utils";
+
+const settings = mqttConnectionSettings({ controller: mac, featureOptions });
+
+this.mqtt ??= settings && createMqttClient({ ...settings, log }, { signal: platform.signal });
+```
+
+###### Param
+
+**config**
+
+The candidate configuration the consumer passed. See [MqttClientConfigCandidate](mqttClient.md#mqttclientconfigcandidate).
+
+###### Param
+
+**init**
+
+The init the consumer passed, or `undefined` when it passed none. See [MqttClientInit](mqttClient.md#mqttclientinit).
+
+###### Returns
+
+The recorded double, or `null` when the broker URL or the topic prefix is absent, `null` or empty.
+
+#### Other
+
+##### createCalls
+
+```ts
+readonly createCalls: {
+  client: Nullable<TestMqttClient>;
+  config: MqttClientConfigCandidate;
+  init: MqttClientInit | undefined;
+}[] = [];
+```
+
+Every create call's config and init and the double it answered, `null` when MQTT was off, in order, so a test can assert what the consumer asked for and drive
+what came back.
+
+###### Type Declaration
+
+###### client
+
+```ts
+client: Nullable<TestMqttClient>;
+```
+
+###### config
+
+```ts
+config: MqttClientConfigCandidate;
+```
+
+###### init
+
+```ts
+init: MqttClientInit | undefined;
+```
+
+##### holdReached
+
+###### Get Signature
+
+```ts
+get holdReached(): boolean;
+```
+
+Whether the end of a double this factory answered has reached the hold `holdEnd` installs, which it does in the turn the end begins, before any registration
+the consumer made is invoked. It reads `false` before any end begins and throughout when the factory was constructed with no `holdEnd`, and once `true` it
+stays `true` for the life of the factory, across every double `create` answers. A row whose factory answers more than one client reads each double's own
+`aborted` to tell which end it is.
+
+###### Returns
+
+`boolean`
+
+***
+
 ### TestMqttPublish
 
 One recorded publish, as the caller issued it.
@@ -627,3 +838,25 @@ One recorded subscription registration.
 | <a id="kind"></a> `kind` | `"raw"` \| `"get"` \| `"set"` | Which registration verb produced the entry. |
 | <a id="topic-1"></a> `topic` | `string` | The topic the entry is registered on: the tail the caller passed, carrying the `/get` or `/set` suffix exactly as the client appends it. |
 | <a id="type"></a> `type` | `string` \| `undefined` | The human-readable label a get or set registration carries, and `undefined` for a raw registration, which has none. |
+
+***
+
+### settlePastMqttEnd()
+
+```ts
+function settlePastMqttEnd(): Promise<void>;
+```
+
+Settle past the turns an MQTT end that nothing holds takes to finish on a [TestMqttClient](#testmqttclient), so a row reading after an end it began reads that end
+finished, and a row reading inside an end held open through [TestMqttClientFactory](#testmqttclientfactory)'s `holdEnd` reads what the hold keeps back rather than an end that
+is merely unfinished.
+
+Call it in the turn the end begins. The end states its words at once and, once their microtasks drain, yields one turn of the event loop before it aborts,
+the yield the client's own end takes; that yield queues behind the first turn this helper crosses, so the second crosses it. An end whose words a consumer
+delays on a macrotask of its own finishes later by that macrotask, and a row driving one settles past it before it reads.
+
+#### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
+
+A promise that resolves once an end begun in the caller's turn, with nothing holding it, has finished.

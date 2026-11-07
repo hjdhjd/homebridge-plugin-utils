@@ -19,8 +19,9 @@ The module exports one pure string function:
     hooks that mirror the webUI's field-blind `validOption` / `validOptionCategory` predicate boundary, lifted from *filter* (boolean) to *describe* (string). No
     plugin-specific field name appears anywhere in this file.
 
-Putting the rendered fragment into a plugin's doc is [doc-markdown!spliceMarkedRegion](doc-markdown.md#splicemarkedregion), the in-place splice every generator's CLI verb uses, and the table
-layout the projection prints its option rows through is [doc-markdown!renderMarkdownTable](doc-markdown.md#rendermarkdowntable).
+Putting the rendered fragment into a plugin's doc is [doc-markdown!spliceMarkedRegion](doc-markdown.md#splicemarkedregion), the in-place splice every generator's CLI verb uses, the table
+layout the projection prints its option rows through is [doc-markdown!renderMarkdownTable](doc-markdown.md#rendermarkdowntable), and what a cell cannot carry raw is
+[doc-markdown!escapeTableCell](doc-markdown.md#escapetablecell)'s to escape.
 
 It also ships two builders for those scope hooks, because writing them by hand is what every plugin was doing and the results converged on two shapes. Neither builder
 is required - a plugin with prose of its own still writes the hooks directly - but between them they cover what the family actually says.

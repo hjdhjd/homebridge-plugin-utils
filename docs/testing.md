@@ -1178,6 +1178,12 @@ Re-exports [RuntimeFloorQuery](testing/runtime-floor.md#runtimefloorquery)
 
 ***
 
+### settlePastMqttEnd
+
+Re-exports [settlePastMqttEnd](mqtt-client-double.md#settlepastmqttend)
+
+***
+
 ### SourceSweep
 
 Re-exports [SourceSweep](testing/runtime-floor.md#sourcesweep)
@@ -1283,6 +1289,12 @@ Re-exports [TestMdnsBrowserFactory](mdns/browser-double.md#testmdnsbrowserfactor
 ### TestMqttClient
 
 Re-exports [TestMqttClient](mqtt-client-double.md#testmqttclient)
+
+***
+
+### TestMqttClientFactory
+
+Re-exports [TestMqttClientFactory](mqtt-client-double.md#testmqttclientfactory)
 
 ***
 

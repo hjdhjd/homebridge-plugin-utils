@@ -838,7 +838,7 @@ Create a new FeatureOptions instance.
 | ------ | ------ | ------ | ------ |
 | `categories` | [`FeatureCategoryEntry`](#featurecategoryentry)\<`unknown`\>[] | `undefined` | Array of feature option categories. |
 | `options` | `Record`\<`string`, [`FeatureOptionEntry`](#featureoptionentry)[]\> | `undefined` | Dictionary mapping category names to arrays of feature options. |
-| `configuredOptions?` | `string`[] | `[]` | Optional. Array of currently configured option strings. |
+| `configuredOptions?` | `string`[] | `[]` | Optional. Array of currently configured option strings. A plugin's configuration arrives untyped, so a setting that is not a list of strings is read for the strings it holds: a list keeps them and drops anything else, and any other value holds no entries. |
 
 ###### Returns
 
@@ -959,7 +959,7 @@ Set the list of currently configured feature options.
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | `string`[] \| `null` \| `undefined` | Array of configured feature options. |
+| `options` | `string`[] \| `null` \| `undefined` | Array of configured feature options. A nullish value holds no entries, and any other value that is not a list of strings is read as the constructor reads it. |
 
 ###### Returns
 
@@ -1395,15 +1395,19 @@ The distinct emitted-line shapes, with the named level's state measured against 
 | Value-centric    | both axes match                                         | (silent)                           |
 | Value-centric    | inherited on, disabled                                  | `<label> disabled.`                |
 | Value-centric    | inherited off, enabled (value matches or differs)       | `<label> enabled at <value>.`      |
+| List-valued      | inherited off, enabled (list matches or differs)        | `<label> enabled for <list>.`      |
 | Value-centric    | inherited on, enabled, value differs                    | `<label> set to <value>.`          |
 
+A list-valued option, one declaring [FeatureOptionEntry.multiple](#multiple), takes the value-centric rows except where its level turned it on: there its entries
+follow "for" rather than "at", since "enabled at" ahead of a list reads as a place rather than a selection.
+
 A value-centric option enabled with no resolvable value at its level - no catalog-declared default and no explicit value where the level resolves - collapses
-to the plain `<label> enabled.` line above rather than the `enabled at <value>` form, since there is nothing meaningful to render after "at". A level resolving
-no value says nothing about the value axis, so it differs from the level above only where its enabled state does.
+to the plain `<label> enabled.` line above rather than the `enabled at <value>` or `enabled for <list>` form, since there is nothing meaningful to render after
+"at" or "for". A level resolving no value says nothing about the value axis, so it differs from the level above only where its enabled state does.
 
 An option declaring [FeatureOptionEntry.multiple](#multiple) that resolves to the empty selection keeps the same axis split and states the emptiness in words:
 `<label> enabled with an empty selection.` where the boolean axis deviated, `<label> set to an empty selection.` where only the value axis did. Saying it
-outright is what keeps the line a sentence, since interpolating the empty string into either shape above would emit "enabled at ." instead.
+outright is what keeps the line a sentence, since interpolating the empty string into the shapes above would emit "enabled for ." instead.
 
 Value rendering consults the catalog-declared [FeatureOptionEntry.render](#render) when present; otherwise the raw string returned by [FeatureOptions.value](#value)
 is used. The renderer may be either a [FeatureOptionFormatter](#featureoptionformatter) string naming a built-in formatter from the shared registry (preferred when the format exists

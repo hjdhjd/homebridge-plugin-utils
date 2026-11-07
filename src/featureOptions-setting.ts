@@ -1,13 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * featureOptions-setting.ts: The rule for reading a plugin's feature options setting, shared by the feature-options engine and the retired-option translation.
+ * featureOptions-setting.ts: The rule for reading a plugin's feature options setting, shared by the feature-options engine, the retired-option translation and plugins.
  */
 
 /**
- * **Why this file exists.** Homebridge hands a plugin its configuration as untyped JSON, so the `options` setting reaches the engine as whatever the user's file
- * holds. `FeatureOptions` and the retired-option translation both read it, and both must read a setting that is not a list of option strings the same way rather
- * than throw on it. They share this module instead of one exporting the rule to the other, because everything either of them exports is public through the package
- * root and this rule is not. It imports nothing, so the browser loads it beside the modules that use it.
+ * **Why this file exists.** Homebridge hands a plugin its configuration as untyped JSON, so the `options` setting reaches every reader as whatever the user's file
+ * holds. `FeatureOptions`, the retired-option translation and a plugin's own code that reads the setting outside the engine, a settings page's migration or
+ * first-run write among them, must all read a setting that is not a list of option strings the same way rather than throw on it, so the rule lives here once and is
+ * public through the package root. It imports nothing, so the browser loads it beside the modules that use it.
  *
  * @module
  */
@@ -21,7 +21,15 @@
  *
  * @returns The setting's option entries.
  *
- * @internal
+ * @example
+ * ```ts
+ * readOptionsSetting([ "Disable.Device", 42, "Enable.Log" ])
+ * ```
+ *
+ * Returns: `[ "Disable.Device", "Enable.Log" ]`, the strings in order with the number dropped. A setting that is not a list, `"Disable.Device"` alone among them,
+ * returns `[]`.
+ *
+ * @category Feature Options
  */
 export function readOptionsSetting(setting: unknown): string[] {
 

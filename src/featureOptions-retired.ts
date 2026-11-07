@@ -32,6 +32,7 @@
 import { ALL_CHOICES, buildCatalogIndex, buildConfigIndex, composeEntry, decodeEntryAddress, enumerateConfiguredEntries, formatValueList, resolveScope,
   selectValues } from "./featureOptions.ts";
 import type { CatalogIndex, ConfigIndex, FeatureCategoryEntry, FeatureOptionEntry } from "./featureOptions.ts";
+import { readOptionsSetting } from "./featureOptions-setting.ts";
 
 /**
  * One retired option, paired with the value its family's surviving option stores for it.
@@ -94,8 +95,8 @@ export interface RetiredController {
  * What a durable rewrite answers.
  *
  * @property configuredOptions - The configured options with every family this pass could compose exactly stated through its canonical entries in place of its
- *                               retired ones, the compositions following the surviving entries in order. The input reference itself when nothing was consumed or
- *                               composed.
+ *                               retired ones, the compositions following the surviving entries in order. The input reference itself when it was a list of
+ *                               strings and nothing was consumed or composed.
  * @property remaining         - True when a family kept its retired entries because the topology this pass had could not place one of its scopes, which a caller
  *                               reads as "probe wider and come back". A converged configuration answers false.
  *
@@ -129,7 +130,8 @@ export interface RetiredSelectionArgs {
  * The boot view of a configuration: the entries the engine is built on, the overlay a family still needs, and the entries the translation acted on.
  *
  * @property configuredOptions - The configured options with every retired shape the engine would misread composed into the current grammar, surviving entries in
- *                               order and the compositions after them. The input reference itself when nothing was consumed or composed.
+ *                               order and the compositions after them. The input reference itself when it was a list of strings and nothing was consumed or
+ *                               composed.
  * @property translated        - The retired entries the translation consumed, superseded or left in place for the overlay, verbatim, for a plugin's startup
  *                               narration. Empty when the configuration is already canonical.
  *
@@ -313,7 +315,9 @@ function retiredCatalog({ families, served }: { families: readonly RetiredFamily
  *
  * Families walk in the order they are declared and a family's scopes in the order they first appear, each identifier once whatever its casing and in the spelling
  * it first appeared in. Surviving entries stay byte-verbatim and in order, and the composed entries follow them. Each act answers the input array itself when it
- * consumed and composed nothing, so a caller tells a no-op by reference.
+ * consumed and composed nothing, so a caller tells a no-op by reference. A plugin's configuration arrives untyped, so each act first reads a setting that is not a
+ * list of strings for the strings it holds, as `FeatureOptions` does: a list keeps them and drops anything else, and any other value holds no entries. Such a
+ * setting is never answered by reference, so a caller writing the answer back writes the strings alone.
  *
  * @param args
  * @param args.categories - The plugin's feature option categories, exactly as its catalog declares them.
@@ -559,8 +563,9 @@ export function createRetiredOptions({ categories, families, options }: {
 
   return {
 
-    migrate: ({ configuredOptions, controllers }): RetiredMigration => {
+    migrate: ({ configuredOptions: setting, controllers }): RetiredMigration => {
 
+      const configuredOptions = readOptionsSetting(setting);
       const readings = survey(configuredOptions);
 
       if(!readings.length) {
@@ -623,8 +628,9 @@ export function createRetiredOptions({ categories, families, options }: {
       return { configuredOptions: rewrite({ configuredOptions, consumed, emissions }), remaining };
     },
 
-    translate: (configuredOptions): RetiredTranslation => {
+    translate: (setting): RetiredTranslation => {
 
+      const configuredOptions = readOptionsSetting(setting);
       const readings = survey(configuredOptions);
 
       if(!readings.length) {

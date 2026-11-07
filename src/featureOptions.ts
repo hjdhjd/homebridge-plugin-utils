@@ -69,6 +69,7 @@
  */
 import type { HomebridgePluginLogging, Nullable } from "./util.ts";
 import { formatBps, formatBytes, formatMs, formatPercent, formatSeconds } from "./formatters.ts";
+import { readOptionsSetting } from "./featureOptions-setting.ts";
 
 /**
  * Named built-in formatters available to {@link FeatureOptionEntry.render}. The string literals double as discoverable, autocomplete-friendly names and as the
@@ -2572,7 +2573,8 @@ export class FeatureOptions {
    *
    * @param categories        - Array of feature option categories.
    * @param options           - Dictionary mapping category names to arrays of feature options.
-   * @param configuredOptions - Optional. Array of currently configured option strings.
+   * @param configuredOptions - Optional. Array of currently configured option strings. A plugin's configuration arrives untyped, so a setting that is not a list
+   *                            of strings is read for the strings it holds: a list keeps them and drops anything else, and any other value holds no entries.
    *
    * @example
    *
@@ -2583,8 +2585,8 @@ export class FeatureOptions {
   constructor(categories: FeatureCategoryEntry[], options: Record<string, FeatureOptionEntry[]>, configuredOptions: string[] = []) {
 
     this.#catalog = buildCatalogIndex(categories, options);
-    this.#configuredOptions = configuredOptions;
-    this.#configIndex = buildConfigIndex(this.#catalog, configuredOptions);
+    this.#configuredOptions = readOptionsSetting(configuredOptions);
+    this.#configIndex = buildConfigIndex(this.#catalog, this.#configuredOptions);
     this.defaultReturnValue = false;
   }
 
@@ -3420,11 +3422,12 @@ export class FeatureOptions {
   /**
    * Set the list of currently configured feature options.
    *
-   * @param options       - Array of configured feature options.
+   * @param options       - Array of configured feature options. A nullish value holds no entries, and any other value that is not a list of strings is read as the
+   *                        constructor reads it.
    */
   public set configuredOptions(options: string[] | null | undefined) {
 
-    this.#configuredOptions = options ?? [];
+    this.#configuredOptions = readOptionsSetting(options);
 
     // The catalog-derived state is unchanged across config mutations, so the reset keeps the catalog, rebuilding only the lookup index and re-arming logFeature.
     this.#reset();

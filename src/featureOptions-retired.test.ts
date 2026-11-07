@@ -519,6 +519,51 @@ describe("createRetiredOptions - a misdeclared family", () => {
   });
 });
 
+// A plugin's configuration arrives untyped, so each case is what a hand-edited file could hold, handed in as the setting the signature declares.
+const asSetting = (setting: unknown): string[] => setting as string[];
+
+describe("createRetiredOptions - a setting that is not a list of strings", () => {
+
+  // A two-member family over a catalog no plugin declares, so these rows read the setting's rule alone.
+  const categories = [{ description: "Widget", name: "Widget" }];
+  const options = { Widget: [{ choices: [ { label: "Alpha", value: "Alpha" }, { label: "Beta", value: "Beta" } ], default: true, defaultValue: "Alpha,Beta",
+    description: "Parts.", multiple: true, name: "Parts" }] };
+  const widget = createRetiredOptions({ categories, families: [{ members: [ { default: true, option: "Widget.Alpha", value: "Alpha" },
+    { default: true, option: "Widget.Beta", value: "Beta" } ], option: "Widget.Parts" }], options });
+
+  test("a setting that is not a list holds no entries, and neither act throws on it", () => {
+
+    for(const setting of [ "Disable.Widget.Alpha", { options: ["Disable.Widget.Alpha"] }, 5 ]) {
+
+      const translation = widget.translate(asSetting(setting));
+
+      assert.deepEqual(translation.configuredOptions, [], "the boot view holds no entries: " + JSON.stringify(setting));
+      assert.deepEqual(translation.translated, [], "with nothing to narrate: " + JSON.stringify(setting));
+      assert.deepEqual(widget.migrate({ configuredOptions: asSetting(setting), controllers: [] }).configuredOptions, [],
+        "and the rewrite writes an empty list: " + JSON.stringify(setting));
+    }
+  });
+
+  test("a list keeps its strings, so a retired entry beside entries that are not strings still translates", () => {
+
+    const setting = asSetting([ null, "Disable.Widget.Alpha", 5, {} ]);
+    const translation = widget.translate(setting);
+
+    assert.deepEqual(translation.configuredOptions, ["Enable.Widget.Parts=Beta"], "the boot view composes the retired entry alone");
+    assert.deepEqual(translation.translated, ["Disable.Widget.Alpha"], "and narrates it");
+    assert.deepEqual(widget.migrate({ configuredOptions: setting }).configuredOptions, ["Enable.Widget.Parts=Beta"], "as does the rewrite");
+  });
+
+  test("a list holding no retired entry is answered without its other values, never by reference", () => {
+
+    const setting = asSetting([ "Disable.Widget.Parts", null ]);
+
+    assert.deepEqual(widget.translate(setting).configuredOptions, ["Disable.Widget.Parts"], "the boot view keeps the string alone");
+    assert.deepEqual(widget.migrate({ configuredOptions: setting }).configuredOptions, ["Disable.Widget.Parts"],
+      "and so does the rewrite, which a settings page writes back");
+  });
+});
+
 // The HBUA shape: a flat plugin whose sensor and logging lists carry what its retired grammar spelled as one switch per sensor and per logging category, every
 // member defaulting on.
 const ACCESS_CATEGORIES: FeatureCategoryEntry[] = [

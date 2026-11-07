@@ -5,7 +5,8 @@
 "use strict";
 
 // The compiled-TS modules the browser bundle carries alongside the webUI. `featureOptions` and `formatters` back the catalog and its magnitude renderers;
-// `featureOptions-retired` is the translation of a plugin's retired feature option families, which a settings page runs as its durable migration; `homekit-name`
+// `featureOptions-retired` is the translation of a plugin's retired feature option families, which a settings page runs as its durable migration;
+// `featureOptions-setting` is the rule `featureOptions` and `featureOptions-retired` read a plugin's untyped options setting through; `homekit-name`
 // is HomeKit's naming module, whose functions a plugin's settings page applies to the names it saves and shows; `mark-handled` is the identity-preserving handled
 // mark the library and the page alike reach for; `webui/address` is the listed-address rule a plugin's settings cards apply before a Save; `webui/saveflow` is the
 // shared save flow a plugin's settings cards run every press of their Save through; `webui/status` is the live device-status wire contract the status panel
@@ -15,5 +16,5 @@
 // specifier to its `src/<entry>.ts` source - every consumer imports this list rather than restating it, so none can drift. Every module named here is obligated
 // to keep its own imports browser-safe (no Node-only APIs), since the browser resolves each one directly. A module that declares types alone, such as the commit
 // vocabulary the save flow imports by type, compiles to nothing the browser loads and is not listed.
-export const BROWSER_MODULES = [ "featureOptions", "featureOptions-retired", "formatters", "homekit-name", "mark-handled", "webui/address", "webui/saveflow",
-  "webui/status" ];
+export const BROWSER_MODULES = [ "featureOptions", "featureOptions-retired", "featureOptions-setting", "formatters", "homekit-name", "mark-handled",
+  "webui/address", "webui/saveflow", "webui/status" ];

@@ -1745,7 +1745,7 @@ describe("FeatureOptions - setters regenerate derived state", () => {
 
   test("assigning a nullish configuredOptions falls back to an empty array", () => {
 
-    // The setter tolerates a nullish input and normalizes to []. Exercises the `options ?? []` coalesce.
+    // The setter tolerates a nullish input and reads it as no entries.
     const fo = new FeatureOptions(CATEGORIES, OPTIONS, ["Disable.Motion.Detect"]);
 
     assert.equal(fo.test("Motion.Detect"), false);
@@ -1754,6 +1754,41 @@ describe("FeatureOptions - setters regenerate derived state", () => {
 
     assert.deepEqual(fo.configuredOptions, []);
     assert.equal(fo.test("Motion.Detect"), true, "with an empty configured list the default is authoritative");
+  });
+
+  test("a setting that is not a list of strings is read for the strings it holds, by the constructor and the setter alike", () => {
+
+    // A plugin's configuration arrives untyped, so each case is what a hand-edited file could hold, handed in as the setting the signature declares.
+    const asSetting = (setting: unknown): string[] => setting as string[];
+    const wellFormed = ["Disable.Motion.Detect"];
+
+    assert.equal(new FeatureOptions(CATEGORIES, OPTIONS, wellFormed).configuredOptions, wellFormed, "a well-formed setting keeps its identity");
+
+    for(const setting of [ "Disable.Motion.Detect", { options: ["Disable.Motion.Detect"] }, 5 ]) {
+
+      const fo = new FeatureOptions(CATEGORIES, OPTIONS, asSetting(setting));
+
+      assert.deepEqual(fo.configuredOptions, [], "a setting that is not a list holds no entries: " + JSON.stringify(setting));
+      assert.equal(fo.test("Motion.Detect"), true, "so the default answers: " + JSON.stringify(setting));
+
+      fo.configuredOptions = ["Disable.Motion.Detect"];
+      fo.configuredOptions = asSetting(setting);
+
+      assert.deepEqual(fo.configuredOptions, [], "and the setter reads it the same way: " + JSON.stringify(setting));
+      assert.equal(fo.test("Motion.Detect"), true, "rebuilding the index from no entries: " + JSON.stringify(setting));
+    }
+
+    const mixed = asSetting([ null, "Disable.Motion.Detect", 5, {} ]);
+    const fo = new FeatureOptions(CATEGORIES, OPTIONS, mixed);
+
+    assert.deepEqual(fo.configuredOptions, ["Disable.Motion.Detect"], "a list keeps its strings and drops everything else");
+    assert.equal(fo.test("Motion.Detect"), false, "and the strings it keeps still mean what they say");
+
+    fo.configuredOptions = [];
+    fo.configuredOptions = mixed;
+
+    assert.deepEqual(fo.configuredOptions, ["Disable.Motion.Detect"], "the setter keeps the same strings");
+    assert.equal(fo.test("Motion.Detect"), false, "and indexes them");
   });
 
   test("assigning new options rebuilds defaults, value index, and groups", () => {

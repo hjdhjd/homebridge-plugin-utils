@@ -162,14 +162,14 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
 
   test("substitutes an empty-string default to \"none\" at render time without mutating the entry", () => {
 
-    // A value option whose declared default is the empty string renders "none" - communicating "defaults to no value" rather than an empty cell, here as the value
-    // enabling this default-off option applies. The substitution must be render-only: the caller's entry is unchanged afterward.
+    // A value option whose declared default is the empty string renders "none" - communicating "defaults to no value" rather than an empty cell - alone, even though
+    // this option is off by default, since being off and having no value are the same state. The substitution must be render-only: the caller's entry is unchanged.
     const categories: FeatureCategoryEntry[] = [{ description: "Configuration", name: "Cfg" }];
     const entry: FeatureOptionEntry = { default: false, defaultValue: "", description: "A path.", name: "Path" };
     const options: Record<string, FeatureOptionEntry[]> = { Cfg: [entry] };
     const output = renderFeatureOptionsReference({ categories, options });
 
-    assert.ok(output.includes("A path. **(default: disabled, none when enabled)**."));
+    assert.ok(output.includes("A path. **(default: none)**."));
     assert.equal(entry.defaultValue, "", "the renderer must not mutate the input entry's defaultValue");
   });
 
@@ -182,7 +182,7 @@ describe("renderFeatureOptionsReference - default cell and value/toggle distinct
     const output = renderFeatureOptionsReference({ categories, options });
 
     assert.ok(output.includes("`Cfg.Token=<value>`"));
-    assert.ok(output.includes("Token. **(default: disabled, none when enabled)**."));
+    assert.ok(output.includes("Token. **(default: none)**."));
   });
 
   test("renders a numeric zero default as \"0\", not the empty-string substitution", () => {
@@ -313,18 +313,33 @@ describe("renderFeatureOptionsReference - default-off value options and inline c
 
   test("states a default-off value option's default as the value enabling it applies", () => {
 
-    // The legend reads every default as what applies when the option is left unset, so a default-off value option's bare value would read as in force. Each
-    // spelling renderDefaultValue answers - a plain value, the all-choices word, and the empty-default word - is wrapped alike.
+    // The legend reads every default as what applies when the option is left unset, so a default-off value option's bare value would read as in force. A plain
+    // value and the all-choices word are wrapped alike, since each names what enabling the option applies.
     const output = renderFeatureOptionsReference({ categories, options: { Cfg: [
 
       { default: false, defaultValue: 30, description: "Interval.", name: "Interval" },
-      { choices: "smartDetectTypes", default: false, defaultValue: ALL_CHOICES, description: "Detected object types.", multiple: true, name: "Types" },
-      { choices: "plates", default: false, defaultValue: "", description: "Watched plates.", multiple: true, name: "Plates" }
+      { choices: "smartDetectTypes", default: false, defaultValue: ALL_CHOICES, description: "Detected object types.", multiple: true, name: "Types" }
     ] } });
 
     assert.ok(output.includes("Interval. **(default: disabled, 30 when enabled)**."));
     assert.ok(output.includes("Detected object types. **(default: disabled, all when enabled)**."));
-    assert.ok(output.includes("Watched plates. **(default: disabled, none when enabled)**."));
+  });
+
+  test("states a default-off value option with an empty default as \"none\" alone", () => {
+
+    // Being off and having no value are the same state, so the wrapped form would repeat itself. Every empty spelling - the empty string on a plain or a
+    // multi-select option, and a present but undefined defaultValue - reads "none" with no "disabled" prefix.
+    const output = renderFeatureOptionsReference({ categories, options: { Cfg: [
+
+      { default: false, defaultValue: "", description: "API key.", name: "Key" },
+      { choices: "plates", default: false, defaultValue: "", description: "Watched plates.", multiple: true, name: "Plates" },
+      { default: false, defaultValue: undefined, description: "Token.", name: "Token" }
+    ] } });
+
+    assert.ok(output.includes("API key. **(default: none)**."));
+    assert.ok(output.includes("Watched plates. **(default: none)**."));
+    assert.ok(output.includes("Token. **(default: none)**."));
+    assert.ok(!output.includes("when enabled"));
   });
 
   test("leaves a default-on value option and a toggle reading as they do", () => {

@@ -66,6 +66,13 @@ const EMPTY_DEFAULT_LABEL = "none";
 // domain the catalog cannot enumerate, so the table reads it out as the word it means rather than printing a character a reader would have to go look up.
 const ALL_CHOICES_LABEL = "all";
 
+// Whether a value option declares no value as its default: the empty string, or a defaultValue key present with an undefined value. The renderer and the default
+// cell both ask this one question, so the "none" word and the cell that shows it alone agree on which defaults are empty.
+function hasEmptyDefault(option: FeatureOptionEntry): boolean {
+
+  return (option.defaultValue ?? "") === "";
+}
+
 // Render a value option's declared default as the table shows it. Two catalog spellings stand for something other than themselves and are read out as words: the
 // empty default, which says the option starts with no value, and a multi-select's all-choices default, which says every member of its domain is selected. Every
 // other default prints as the text a user would type into their configuration. The substitution happens at render time only; the catalog entry is never mutated.
@@ -76,7 +83,7 @@ function renderDefaultValue(option: FeatureOptionEntry): string {
     return ALL_CHOICES_LABEL;
   }
 
-  return ((option.defaultValue ?? "") === "") ? EMPTY_DEFAULT_LABEL : escapeCellText(String(option.defaultValue));
+  return hasEmptyDefault(option) ? EMPTY_DEFAULT_LABEL : escapeCellText(String(option.defaultValue));
 }
 
 // Escape catalog-derived plain text for safe embedding in a markdown table cell, heading, or index line. We neutralize the HTML-significant "&", "<", ">" (which
@@ -228,8 +235,10 @@ export function renderFeatureOptionsReference<TOptionMeta = unknown, TCategoryMe
       // The default cell. A value option shows its declared default in the form the user would type - never formatted, since a formatted value (e.g. "30s") is an
       // invalid config value - through the one renderer that also words every spelling standing for something else. The legend reads every default as what applies
       // when the option is left unset, so a value option that is off by default says so first and names its value as what enabling it applies: "disabled, 30 when
-      // enabled". A toggle shows enabled / disabled, and every cell reads `default` by truthiness.
-      const defaultCell = isValueOption(catalog, key) ? (option.default ? renderDefaultValue(option) : "disabled, " + renderDefaultValue(option) + " when enabled") :
+      // enabled". An empty default reads "none" alone whether the option is on or off, because being off and having no value are the same state...the wrapped form
+      // would say it twice. A toggle shows enabled / disabled, and every cell reads `default` by truthiness.
+      const defaultCell = isValueOption(catalog, key) ?
+        ((option.default || hasEmptyDefault(option)) ? renderDefaultValue(option) : "disabled, " + renderDefaultValue(option) + " when enabled") :
         (option.default ? "enabled" : "disabled");
 
       // The optional plugin-private scope suffix, appended to the description cell. Omitted cleanly when the hook returns `undefined`.

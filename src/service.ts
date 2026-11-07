@@ -961,21 +961,30 @@ export function getServiceName(service?: Service): string | undefined {
 }
 
 /**
- * Updates the display name of an accessory and of its AccessoryInformation service to the specified value.
+ * Updates the display name of an accessory to the specified value, and the names of its AccessoryInformation service with it while the plugin owns them.
  *
- * @param accessory - The accessory to rename.
- * @param name      - The new name to apply to the accessory.
+ * @param accessory     - The accessory to rename.
+ * @param name          - The new name to apply to the accessory.
+ * @param options       - Optional naming options.
+ * @param options.owned - Whether the plugin owns the accessory's HomeKit name under the family naming rule, true when {@link homekit-name!ownedName | ownedName}
+ *                        answers a name. Defaults to `true`. With `false`, the call writes the display name alone, Homebridge's own label, keeping it in step with
+ *                        {@link homekit-name!displayedName | displayedName} while the user's HomeKit names stand.
  *
- * @returns True when the call wrote anything, a display name or a characteristic, and false when every name already carried the sanitized name or nothing was
- * left after sanitizing.
+ * @returns True when the call wrote anything, a display name or a characteristic, and false when every name it reaches already carried the sanitized name or
+ * nothing was left after sanitizing.
  *
  * @remarks
- * An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to two names. This writes all
- * of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName` owns the accessory display names (the
- * `PlatformAccessory`'s own and the HAP accessory's beneath it), and {@link setServiceName} owns the AccessoryInformation service's `ConfiguredName` and `Name`
- * characteristics. `ConfiguredName` is the name a user edits in the Home app, so whether to sync a device's name at all stays the plugin's policy: a call with the
- * device's name replaces a name the user gave the accessory. A tile whose own service carries a `ConfiguredName` takes its rename there rather than here, so a
- * plugin names and watches that service through {@link setServiceName} and {@link watchServiceName}.
+ * An accessory carries its name in more than one place, and a rename that reaches only some of them leaves the accessory answering to names that disagree. While the
+ * plugin owns the HomeKit name, this writes all of them from one sanitized source, then hands each pair to whichever API owns it: Homebridge's `updateDisplayName`
+ * owns the accessory display names (the `PlatformAccessory`'s own and the HAP accessory's beneath it), and {@link setServiceName} owns the AccessoryInformation
+ * service's `ConfiguredName` and `Name` characteristics. `ConfiguredName` is the name a user edits in the Home app, so whether the plugin owns it stays the
+ * plugin's policy, which the family naming rule states and `owned` carries: a call with `owned` true replaces a name the user gave the accessory. A tile whose own
+ * service carries a `ConfiguredName` takes its rename there rather than here, so a plugin names and watches that service through {@link setServiceName} and
+ * {@link watchServiceName}.
+ *
+ * A call with `owned` false writes the display names alone, from the same sanitized source, and leaves the information service's names as the user left them. The
+ * display name is Homebridge's own field, which HomeKit never reads for a bridged accessory, while the plugin logs under it and a settings page lists the accessory
+ * cache by it...so it follows the name the plugin shows for the accessory whoever owns the HomeKit names, and the user's name stands in HomeKit beside it.
  *
  * Each name is compared before it is written, and only what differs is written, so a plugin calls this on every refresh of a device's name and saves the accessory
  * only when the answer is true, with no comparison of its own. A comparison of its own would misread a fresh accessory: HAP seeds the information service's `Name`
@@ -986,8 +995,12 @@ export function getServiceName(service?: Service): string | undefined {
  *
  * @example
  * ```typescript
- * // Rename an accessory after the device reports a new name, and save it to Homebridge's accessory cache only when the rename changed something.
- * if(setAccessoryName(accessory, device.name)) {
+ * // Name an accessory under the family naming rule whenever the device reports its name, and save it to Homebridge's accessory cache only when the call wrote
+ * // something. The display name follows the name the plugin shows for the device, and the HomeKit names follow it only while the plugin owns them.
+ * const names = { fallback: device.name, override: this.nameOption(device) };
+ * const owned = ownedName({ ...names, sync: this.syncName(device) }) !== null;
+ *
+ * if(setAccessoryName(accessory, displayedName(names), { owned })) {
  *
  *   this.platform.persistence.persist(accessory);
  * }
@@ -997,7 +1010,7 @@ export function getServiceName(service?: Service): string | undefined {
  * @see getServiceName - to retrieve the current name set on a service.
  * @category Accessory
  */
-export function setAccessoryName(accessory: PlatformAccessory, name: string): boolean {
+export function setAccessoryName(accessory: PlatformAccessory, name: string, { owned = true }: { owned?: boolean } = {}): boolean {
 
   // Sanitize once. HomeKit's naming rules govern the accessory display names and the information service's name characteristics alike, so one validation pass
   // feeds every write below and none of them can disagree about what the name is. Nothing surviving the sanitize means there is no name to apply, and a partial
@@ -1020,9 +1033,11 @@ export function setAccessoryName(accessory: PlatformAccessory, name: string): bo
     accessory.updateDisplayName(sanitized);
   }
 
+  // The information service carries the HomeKit names, which are written only while the plugin owns them. A name the user owns stays as they left it, and the
+  // display names above are the whole of the call.
   const [first] = accessory.services;
 
-  if(!first) {
+  if(!owned || !first) {
 
     return displayed;
   }

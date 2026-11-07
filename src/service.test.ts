@@ -1910,6 +1910,113 @@ describe("setAccessoryName", () => {
     assert.equal(update.mock.callCount(), 0);
     assert.deepEqual(accessory.changes, []);
   });
+
+  test("writes the name to the accessory's display names with owned true and with owned false", () => {
+
+    // The display names are Homebridge's own label, which the plugin logs under and a settings page lists the accessory cache by, so they follow the name whoever
+    // owns the HomeKit names.
+    for(const owned of [ true, false ]) {
+
+      const accessory = createAccessory();
+
+      assert.equal(setAccessoryName(accessory, "Front Porch", { owned }), true, "the call wrote, owned " + String(owned));
+      assert.equal(accessory.displayName, "Front Porch", "the platform wrapper's display name, owned " + String(owned));
+      assert.equal(accessory._associatedHAPAccessory.displayName, "Front Porch", "the HAP accessory's display name, owned " + String(owned));
+    }
+  });
+
+  test("writes the information service's names with owned true", () => {
+
+    // A plugin that owns the HomeKit name carries it into the information service: its display name, the ConfiguredName the Home app shows and the Name beneath it.
+    const accessory = createAccessory();
+    const information = informationServiceOf(accessory);
+
+    assert.equal(setAccessoryName(accessory, "Front Porch", { owned: true }), true);
+    assert.equal(information.displayName, "Front Porch", "the information service's display name");
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Front Porch", "the ConfiguredName");
+    assert.equal(readNamedCharacteristic(information, "Name"), "Front Porch", "the Name");
+    assert.deepEqual(accessory.changesOn(information).map(({ characteristic, newValue }) => [ characteristic.UUID, newValue ]),
+      [ [ hap.Characteristic.ConfiguredName.UUID, "Front Porch" ], [ hap.Characteristic.Name.UUID, "Front Porch" ] ], "each name characteristic was written");
+  });
+
+  test("with owned false moves the accessory's display names and leaves the information service's names as the user left them", (t) => {
+
+    // The field case: an accessory named "Garage Door Nuzzle" while the plugin owned its name, whose custom name the user then cleared with Sync Name off. The plugin
+    // shows and logs the device's own name from then on, while the HomeKit names stay the user's, so the display names move and the information service raises no
+    // change.
+    const accessory = createAccessory();
+    const hapAccessory = accessory._associatedHAPAccessory;
+    const information = informationServiceOf(accessory);
+
+    setAccessoryName(accessory, "Garage Door Nuzzle");
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "Garage Door North", { owned: false }), true, "the display names moved, which the plugin saves");
+    assert.equal(update.mock.callCount(), 1);
+    assert.equal(accessory.displayName, "Garage Door North", "the platform wrapper's display name");
+    assert.equal(hapAccessory.displayName, "Garage Door North", "the HAP accessory's display name");
+    assert.equal(information.displayName, "Garage Door Nuzzle", "the information service's display name stands");
+    assert.equal(readNamedCharacteristic(information, "ConfiguredName"), "Garage Door Nuzzle", "the ConfiguredName the Home app shows stands");
+    assert.equal(readNamedCharacteristic(information, "Name"), "Garage Door Nuzzle", "and so does the Name");
+    assert.deepEqual(accessory.changesOn(information), [], "no change was raised on the information service");
+  });
+
+  test("a repeat with owned false answers false, calls no display-name update and raises no change", (t) => {
+
+    // The display names already carry the name, and the information service's names, which differ, are not the call's to compare, so a steady refresh of an
+    // accessory whose HomeKit name the user owns writes nothing and asks for no save.
+    const accessory = createAccessory();
+
+    setAccessoryName(accessory, "Garage Door Nuzzle");
+    assert.equal(setAccessoryName(accessory, "Garage Door North", { owned: false }), true, "precondition: the first call moved the display names");
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "Garage Door North", { owned: false }), false);
+    assert.equal(update.mock.callCount(), 0, "the accessory's display names already carried the name");
+    assert.deepEqual(accessory.changes, [], "no change was raised, so nothing was written");
+  });
+
+  test("a name with nothing left after sanitizing answers false and writes nothing with owned false", (t) => {
+
+    // The refusal comes before the owner is read, so a name that sanitizes away entirely leaves every name in place whoever owns the HomeKit names.
+    const accessory = createAccessory();
+
+    setAccessoryName(accessory, "Garden Shed");
+    accessory.clearObservations();
+
+    const update = t.mock.method(accessory, "updateDisplayName");
+
+    assert.equal(setAccessoryName(accessory, "\u{1F680}", { owned: false }), false);
+    assert.equal(update.mock.callCount(), 0);
+    assert.equal(accessory.displayName, "Garden Shed", "the wrapper keeps the name it had");
+    assert.deepEqual(accessory.changes, []);
+  });
+
+  test("no options and an empty options object behave as owned true", () => {
+
+    // Each call shape names a twin accessory through the same names, and its answers and final names must match the twin given owned true. The first name is a
+    // fresh accessory's own, which only an owned call answers true for, since only it adds the information service's missing ConfiguredName.
+    const sequence = [ "TestAccessory", "Front Porch", "Front Porch" ];
+    const run = (rename: (accessory: PlatformAccessory, name: string) => boolean): { answers: boolean[]; names: Record<string, string | undefined> } => {
+
+      const accessory = createAccessory();
+      const information = informationServiceOf(accessory);
+      const answers = sequence.map((name) => rename(accessory, name));
+
+      return { answers, names: { configuredName: readNamedCharacteristic(information, "ConfiguredName"), display: accessory.displayName,
+        hapDisplay: accessory._associatedHAPAccessory.displayName, information: information.displayName, name: readNamedCharacteristic(information, "Name") } };
+    };
+    const twin = run((accessory, name) => setAccessoryName(accessory, name, { owned: true }));
+
+    assert.deepEqual(twin.answers, [ true, true, false ], "precondition: the owned twin's answers");
+    assert.ok(Object.values(twin.names).every((value) => value === "Front Porch"), "precondition: the owned twin carries the name everywhere");
+    assert.deepEqual(run((accessory, name) => setAccessoryName(accessory, name)), twin, "no options");
+    assert.deepEqual(run((accessory, name) => setAccessoryName(accessory, name, {})), twin, "an empty options object");
+  });
 });
 
 describe("watchServiceName", () => {

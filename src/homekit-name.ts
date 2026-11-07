@@ -156,9 +156,15 @@ export function resolveNameOverride(text: string | null | undefined): string | n
  * @returns Returns the custom name where one resolves and the fallback otherwise, sanitized by HomeKit's naming rule, or as it stands when the rule leaves nothing
  * of it.
  *
- * @remarks The chosen name is sanitized as the runtime sanitizes a name before it applies one. The length HAP keeps is not applied here: the runtime cuts a name
- * to it where each name characteristic is written, as `setServiceName` does against that characteristic's maximum length, so a name past that length shows whole
- * here. A name the rule empties entirely is shown as it stands instead, because a blank row would name nothing at all. Only the fallback can be such a name, since
+ * @remarks A settings page's sidebar names each device by this answer, over the device's own name as the fallback and the value of its name option as the override:
+ * the custom name where HomeKit can carry it and the device's own name otherwise, the same name the plugin logs under. A row never shows a rename made in the Home
+ * app, which stays in HomeKit. Where a plugin gets its device list, a live console or hub or the accessory cache, stays its own, and only the naming is shared: a
+ * list built from the accessory cache follows the rule through `setAccessoryName`'s `owned` option, which keeps each accessory's display name equal to this answer
+ * whoever owns its HomeKit names.
+ *
+ * The chosen name is sanitized as the runtime sanitizes a name before it applies one. The length HAP keeps is not applied here: the runtime cuts a name to it where
+ * each name characteristic is written, as `setServiceName` does against that characteristic's maximum length, so a name past that length shows whole here. A name
+ * the rule empties entirely is shown as it stands instead, because a blank row would name nothing at all. Only the fallback can be such a name, since
  * {@link resolveNameOverride} already refuses an override the rule empties.
  *
  * @example
@@ -191,8 +197,10 @@ export function displayedName({ fallback, override }: { fallback: string; overri
  *
  * @remarks The rule reads in order of precedence. A name the user typed in the plugin's settings owns the HomeKit name, whatever Sync Name says; otherwise, with
  * Sync Name on, the device's name owns it; otherwise the user owns it. An answer of `null` means the user owns the name and the plugin leaves it alone, so a rename
- * in the Home app stands and nothing the plugin does afterward touches it. Owning a name is the user's explicit opt-in, through a custom name or Sync Name, which
- * is why an owned name overrides a rename in the Home app rather than yielding to it.
+ * in the Home app stands and nothing the plugin does afterward touches it. A custom name the user clears with Sync Name off is left alone the same way: it stays
+ * in HomeKit as theirs, to rename in the Home app or to replace by turning Sync Name on, while the accessory's display name, the plugin's own label, follows
+ * {@link displayedName} through `setAccessoryName` with `owned` false. Owning a name is the user's explicit opt-in, through a custom name or Sync Name, which is
+ * why an owned name overrides a rename in the Home app rather than yielding to it.
  *
  * The rule governs a service that is already named. A new service is named through {@link displayedName} whoever owns the name, because a service HomeKit has never
  * seen carries no name of the user's to leave alone. The answer is the trimmed custom name or the fallback as given, never sanitized, because each setter sanitizes

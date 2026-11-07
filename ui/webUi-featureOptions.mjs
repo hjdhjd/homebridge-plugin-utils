@@ -2441,6 +2441,9 @@ export class webUiFeatureOptions {
   /**
    * Default method for retrieving the device list from the Homebridge accessory cache. Plugins override via the constructor's `getDevices` option.
    *
+   * Each device is named by its accessory's cached display name. The rule for naming a sidebar row is `displayedName`'s, and the cached display name follows it
+   * through `setAccessoryName`'s `owned` option, which keeps it equal to `displayedName`'s answer whoever owns the accessory's HomeKit names.
+   *
    * Used as the default `getDevices`, it is extracted unbound and later invoked with `#config` as the receiver, so its body must never reference `this` - it reads only
    * the global `homebridge` object. A future edit that needs instance state must bind it explicitly (or stop using it as the bare default).
    *

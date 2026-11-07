@@ -114,9 +114,9 @@ function isBridged(accessory: PlatformAccessory): boolean {
  * Nothing else tells the helper a change happened, by design. The plugin marks wherever it changes what the cache holds: where a service gate,
  * {@link service!acquireService | acquireService} or {@link service!validService | validService}, or a characteristic gate,
  * {@link service!validCharacteristic | validCharacteristic} or {@link service!updatePresenceCharacteristic | updatePresenceCharacteristic}, answers a transition
- * {@link service!presenceChanged | presenceChanged} reads as a change, where a name helper, {@link service!setAccessoryName | setAccessoryName} or
- * {@link service!setServiceName | setServiceName}, answers true, and where it writes a setting into an accessory's context. Live device state, a motion or
- * contact reading, belongs on characteristics, which the device reports again after a restart, so it never passes through here.
+ * {@link service!presenceChanged | presenceChanged} reads as a change, where a name helper, {@link service!setAccessoryName | setAccessoryName}, whatever its
+ * `owned` option says, or {@link service!setServiceName | setServiceName}, answers true, and where it writes a setting into an accessory's context. Live device
+ * state, a motion or contact reading, belongs on characteristics, which the device reports again after a restart, so it never passes through here.
  *
  * @example
  *

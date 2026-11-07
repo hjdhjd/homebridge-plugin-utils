@@ -22,6 +22,7 @@ import { mountOptionsView } from "./webUi-featureOptions/views/options.mjs";
 import { mountSearchView } from "./webUi-featureOptions/views/search.mjs";
 import { mountStatusPanelView } from "./webUi-featureOptions/views/statusPanel.mjs";
 import { paintMenuTabs } from "./webUi-theming.mjs";
+import { readOptionsSetting } from "./featureOptions-setting.js";
 import { registerKeyboardEffect } from "./webUi-featureOptions/effects/keyboard.mjs";
 import { registerOptionsSkinEffect } from "./webUi-featureOptions/effects/optionsSkin.mjs";
 import { registerStagingEffect } from "./webUi-featureOptions/effects/staging.mjs";
@@ -2767,9 +2768,9 @@ const assertControllerRename = (rename) => {
 };
 
 // The session's saved options, as an array. Every read of them goes through here - the editing buffer's pre-model answer, the boot's model load, and a coordinated
-// write's before-and-after comparison - so a config whose options key is missing or holds something other than an array reads as an empty set everywhere rather
-// than as an empty set in some places and a surprise in others.
-const platformOptions = (session) => Array.isArray(session?.platform?.options) ? session.platform.options : [];
+// write's before-and-after comparison - and through the rule the feature options engine reads the setting with, so a list keeps its text entries and drops the
+// rest, and a missing key or anything that is not a list reads as an empty set, everywhere rather than in some places with a surprise in others.
+const platformOptions = (session) => readOptionsSetting(session?.platform?.options);
 
 // Set-wise equality on two string arrays. Used to decide whether a re-loaded options array represents a genuine save (different set) or a no-op reorder (same set).
 // The length check short-circuits first, so arrays of different lengths count as different sets even when they hold the same values - one carrying a duplicate

@@ -3198,6 +3198,35 @@ describe("webUiFeatureOptions - boundary coercion of malformed config", () => {
 
     orchestrator.cleanup();
   });
+
+  test("show() keeps the text entries of an options list holding anything else, without crashing the model", async () => {
+
+    // A hand-edited options list can hold a number or an object beside its option strings. The page reads the setting through the same rule the feature options
+    // engine does, so the model holds the text entries in order and the parser never meets an entry it cannot read.
+    using dom = createTestDom();
+
+    createSkeletonFeatureOptionsDom();
+
+    const fake = createFakeHomebridge({
+
+      config: [{ name: "TestPlugin", options: [ "Enable.Audio.Volume.50", 42, "Disable.Motion.Detect" ], platform: "TestPlugin" }],
+      requestResponses: new Map([[ "/getOptions", FEATURES ]])
+    });
+
+    using homebridgeInstall = installHomebridge(fake);
+
+    seedBootstrapProbeShim();
+
+    const orchestrator = new webUiFeatureOptions();
+
+    await assert.doesNotReject(async () => orchestrator.show(await openTestSession()),
+      "show() must tolerate a non-text entry in the options list rather than handing it through to the parser");
+
+    assert.deepEqual(orchestrator.editedConfig[0].options, [ "Enable.Audio.Volume.50", "Disable.Motion.Detect" ],
+      "the model must hold the list's text entries in order, the non-text entry dropped");
+
+    orchestrator.cleanup();
+  });
 });
 
 describe("webUiFeatureOptions - controller-mode multi-tier inheritance (end-to-end)", () => {

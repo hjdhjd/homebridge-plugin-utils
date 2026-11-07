@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.7.4 (2026-11-07)
+  * Fix: in the feature options reference, an option that starts with no value - an API key, say, or a list that starts empty - reads simply "none" as its default, rather than "disabled, none when enabled", which says the same thing twice. Re-run `prepare-docs` when you rebuild against this release.
+  * Housekeeping.
+
 ## 2.7.3 (2026-11-07)
   * Improvement: `setAccessoryName` takes an `owned` option, so it follows the family's rule for who owns a HomeKit name. Pass `owned: false` when the user owns the name and the call updates only the accessory's display name - the name your plugin logs under and your settings page lists - leaving the names the user gave it in HomeKit as they stand.
   * Improvement: `readOptionsSetting` on the package root, the rule the feature options engine reads your options setting by, so a settings page migration or first-run write of your own reads a setting that isn't a list of option strings exactly as the engine does, rather than throwing on it.

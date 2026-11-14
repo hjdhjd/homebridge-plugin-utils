@@ -97,7 +97,7 @@ const ffmpegOpts = new FfmpegOptions(optionsConfig);
 | Property | Modifier | Type | Default value | Description |
 | ------ | ------ | ------ | ------ | ------ |
 | <a id="audiodecoder"></a> `audioDecoder` | `public readonly` | `string` | `"libfdk_aac"` | The fixed FFmpeg audio decoder used when decoding. |
-| <a id="config"></a> `config` | `public readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | `undefined` | The configuration options used to initialize this instance. This is the single stored state on `FfmpegOptions`: every other public field on this class is either a getter that forwards to `this.config`, or a fixed constant independent of it (`audioDecoder`), so external callers have exactly one canonical path to each config-backed value and internal code never has to keep a parallel field in sync with `config` at construction time. |
+| <a id="config"></a> `config` | `public readonly` | [`FfmpegOptionsConfig`](#ffmpegoptionsconfig-1) | `undefined` | The configuration options used to initialize this instance. This is the one stored configuration on `FfmpegOptions`: every config-backed public field on this class is a getter that forwards to `this.config`, so external callers have exactly one canonical path to each config-backed value and internal code never has to keep a parallel field in sync with `config` at construction time. Beside it the instance holds a fixed constant (`audioDecoder`) and what it learns at runtime rather than from its configuration: whether the host's hardware video decoder has refused its source (see `hardwareDecoderRefused`). |
 
 #### Accessors
 
@@ -142,6 +142,23 @@ get debug(): boolean;
 
 Indicates if debug logging is enabled. Normalizes `undefined` to `false` so callers always see a definite boolean regardless of whether the config object set
 the field explicitly.
+
+###### Returns
+
+`boolean`
+
+##### hardwareDecoderRefused
+
+###### Get Signature
+
+```ts
+get hardwareDecoderRefused(): boolean;
+```
+
+Whether the host's hardware video decoder has refused this instance's source. A refusal is FFmpeg reporting that its hardware decoder could not be set up for the
+stream it was handed, which a decoder can do for a stream whose codec it otherwise takes, such as one whose frame size is beyond what it opens. While the mark
+stands, every pipeline this instance describes decodes in software, exactly as one whose caller passed `hardwareDecoding: false`. The mark lasts until
+`resetHardwareDecoderRefusal` or a new instance, and a consumer resets it when its source's dimensions or codec change.
 
 ###### Returns
 
@@ -258,6 +275,22 @@ relaxing the raspbian exclusion here flips every one of them together with no co
 
 `true` when `context` runs on the host's hardware encoder in the resolved configuration, `false` when it software-encodes.
 
+##### markHardwareDecoderRefusal()
+
+```ts
+markHardwareDecoderRefusal(): void;
+```
+
+Record that the host's hardware video decoder refused this instance's source. A refusal is FFmpeg reporting that its hardware decoder could not be set up for the
+stream it was handed, and every `FfmpegProcess` built over this instance calls this when its stderr carries that report, whether or not the process then fails.
+From then on every pipeline this instance describes decodes in software and, where it encodes on hardware, uploads its frames to the encoder, exactly as one whose
+caller passed `hardwareDecoding: false`. The first call since construction or a reset logs the change at info, and a repeat does nothing. The mark lasts until
+`resetHardwareDecoderRefusal` or a new instance, and a consumer resets it when its source's dimensions or codec change.
+
+###### Returns
+
+`void`
+
 ##### maxSourcePixels()
 
 ```ts
@@ -301,6 +334,21 @@ Returns the video encoder options to use for HomeKit Secure Video (HKSV) event r
 
 Array of FFmpeg command-line arguments for video encoding.
 
+##### resetHardwareDecoderRefusal()
+
+```ts
+resetHardwareDecoderRefusal(): void;
+```
+
+Clear a recorded refusal by the host's hardware video decoder, so the pipelines this instance describes decode on hardware again wherever its configuration and
+the source's codec allow. A refusal is FFmpeg reporting that its hardware decoder could not be set up for the stream it was handed, and its mark lasts until this
+call or a new instance. A consumer resets when its source's dimensions or codec change, since the refusal answered the source as it was, and a later refusal of
+the changed source marks the instance again. A refusal never touches the class config, so a reset restores exactly what construction resolved.
+
+###### Returns
+
+`void`
+
 ##### streamEncoder()
 
 ```ts
@@ -341,7 +389,8 @@ every builder: a caller passes `videoDecoder` the very options object it gives `
 disagree about where the frames are. A pipeline that decodes on hardware and encodes on hardware keeps its frames on the GPU wherever its chain scales there. One
 that decodes on hardware and encodes in software - a snapshot, say, which passes `{ hardwareTranscoding: false, inputCodec }` - receives them in system memory, in
 the stream's own format, and so does a VideoToolbox pipeline whose caller-supplied filters run its chain on the CPU. A source the host's hardware decoder cannot
-take decodes in software, and the encoder side of the same pipeline uploads the frames it receives.
+take, or has refused on this instance (see `hardwareDecoderRefused`), decodes in software, and the encoder side of the same pipeline uploads the frames it
+receives.
 
 ###### Parameters
 
@@ -409,7 +458,8 @@ Configuration options for `FfmpegOptions`, defining transcoding, decoding, loggi
 The `hardwareDecoding` and `hardwareTranscoding` flags are bidirectional. On input, they express the caller's desired hardware acceleration state. During
 `FfmpegOptions` construction, the flags are resolved against the host's actual capabilities and the config object is mutated in place to reflect what is available.
 After construction, these flags represent the resolved state...`hardwareDecoding` or `hardwareTranscoding` may be set to `false` if the required codecs or
-accelerators are absent, or `hardwareDecoding` may be set to `true` if Intel Quick Sync Video is detected even when not explicitly requested.
+accelerators are absent, or `hardwareDecoding` may be set to `true` if Intel Quick Sync Video is detected even when not explicitly requested. A later refusal by the
+hardware decoder leaves them as construction resolved them, and the pipelines read it from `FfmpegOptions.hardwareDecoderRefused` instead.
 
 #### Example
 
@@ -490,7 +540,7 @@ const args = [ ...ffmpegOpts.videoDecoder(encoderOptions), ...ffmpegOpts.streamE
 | ------ | ------ | ------ |
 | <a id="bitrate"></a> `bitrate` | `number` | Target video bitrate, in kilobits per second. |
 | <a id="fps"></a> `fps` | `number` | Target output frames per second. |
-| <a id="hardwaredecoding-1"></a> `hardwareDecoding?` | `boolean` | Optional. If `true`, the pipeline decodes on hardware wherever the host's hardware decoder can take `inputCodec`, and in software where it cannot. Together with `hardwareTranscoding` it decides where the decoded frames live: a hardware decode feeding a hardware encode keeps them on the GPU, and a hardware decode feeding a software encode hands them over in system memory. Defaults to the resolved `FfmpegOptionsConfig.hardwareDecoding` value on the owning `FfmpegOptions` instance. |
+| <a id="hardwaredecoding-1"></a> `hardwareDecoding?` | `boolean` | Optional. If `true`, the pipeline decodes on hardware wherever the host's hardware decoder can take `inputCodec` and has not refused the owning instance's source (see `FfmpegOptions.hardwareDecoderRefused`), and in software elsewhere. Together with `hardwareTranscoding` it decides where the decoded frames live: a hardware decode feeding a hardware encode keeps them on the GPU, and a hardware decode feeding a software encode hands them over in system memory. Defaults to the resolved `FfmpegOptionsConfig.hardwareDecoding` value on the owning `FfmpegOptions` instance. |
 | <a id="hardwaretranscoding-1"></a> `hardwareTranscoding?` | `boolean` | Optional. If `true`, the emitted args select a hardware-accelerated encoder (`h264_videotoolbox` / `h264_qsv` / `h264_v4l2m2m`) and the matching filter pipeline. If `false`, the args fall back to the libx264 software encoder. Defaults to the resolved `FfmpegOptionsConfig.hardwareTranscoding` value on the owning `FfmpegOptions` instance. |
 | <a id="height"></a> `height` | `number` | Output video height, in pixels. The output fits inside this height and `width` together, keeping the source's aspect ratio, never larger than the source, at even dimensions. |
 | <a id="idrinterval"></a> `idrInterval` | `number` | Interval (in seconds) between keyframes (IDR frames). |

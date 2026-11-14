@@ -69,7 +69,8 @@ const H264_PROFILE_NAMES = {
  * @remarks The `hardwareDecoding` and `hardwareTranscoding` flags are bidirectional. On input, they express the caller's desired hardware acceleration state. During
  * `FfmpegOptions` construction, the flags are resolved against the host's actual capabilities and the config object is mutated in place to reflect what is available.
  * After construction, these flags represent the resolved state...`hardwareDecoding` or `hardwareTranscoding` may be set to `false` if the required codecs or
- * accelerators are absent, or `hardwareDecoding` may be set to `true` if Intel Quick Sync Video is detected even when not explicitly requested.
+ * accelerators are absent, or `hardwareDecoding` may be set to `true` if Intel Quick Sync Video is detected even when not explicitly requested. A later refusal by the
+ * hardware decoder leaves them as construction resolved them, and the pipelines read it from `FfmpegOptions.hardwareDecoderRefused` instead.
  *
  * @example
  *
@@ -141,10 +142,11 @@ export interface AudioEncoderOptions {
  *
  * @property bitrate             - Target video bitrate, in kilobits per second.
  * @property fps                 - Target output frames per second.
- * @property hardwareDecoding    - Optional. If `true`, the pipeline decodes on hardware wherever the host's hardware decoder can take `inputCodec`, and in software
- *                                 where it cannot. Together with `hardwareTranscoding` it decides where the decoded frames live: a hardware decode feeding a hardware
- *                                 encode keeps them on the GPU, and a hardware decode feeding a software encode hands them over in system memory. Defaults to the
- *                                 resolved `FfmpegOptionsConfig.hardwareDecoding` value on the owning `FfmpegOptions` instance.
+ * @property hardwareDecoding    - Optional. If `true`, the pipeline decodes on hardware wherever the host's hardware decoder can take `inputCodec` and has not
+ *                                 refused the owning instance's source (see `FfmpegOptions.hardwareDecoderRefused`), and in software elsewhere. Together with
+ *                                 `hardwareTranscoding` it decides where the decoded frames live: a hardware decode feeding a hardware encode keeps them on the GPU,
+ *                                 and a hardware decode feeding a software encode hands them over in system memory. Defaults to the resolved
+ *                                 `FfmpegOptionsConfig.hardwareDecoding` value on the owning `FfmpegOptions` instance.
  * @property hardwareTranscoding - Optional. If `true`, the emitted args select a hardware-accelerated encoder (`h264_videotoolbox` / `h264_qsv` / `h264_v4l2m2m`) and
  *                                 the matching filter pipeline. If `false`, the args fall back to the libx264 software encoder. Defaults to the resolved
  *                                 `FfmpegOptionsConfig.hardwareTranscoding` value on the owning `FfmpegOptions` instance.
@@ -413,11 +415,16 @@ const GPU_TRANSFER_PIXEL_FORMAT = "nv12";
 export class FfmpegOptions {
 
   /**
-   * The configuration options used to initialize this instance. This is the single stored state on `FfmpegOptions`: every other public field on this class is either
-   * a getter that forwards to `this.config`, or a fixed constant independent of it (`audioDecoder`), so external callers have exactly one canonical path to each
-   * config-backed value and internal code never has to keep a parallel field in sync with `config` at construction time.
+   * The configuration options used to initialize this instance. This is the one stored configuration on `FfmpegOptions`: every config-backed public field on this
+   * class is a getter that forwards to `this.config`, so external callers have exactly one canonical path to each config-backed value and internal code never has to
+   * keep a parallel field in sync with `config` at construction time. Beside it the instance holds a fixed constant (`audioDecoder`) and what it learns at runtime
+   * rather than from its configuration: whether the host's hardware video decoder has refused its source (see `hardwareDecoderRefused`).
    */
   public readonly config: FfmpegOptionsConfig;
+
+  // Whether the host's hardware video decoder has refused this instance's source. Held apart from `config.hardwareDecoding`, which keeps what construction resolved, so
+  // a reset restores exactly that.
+  #hardwareDecoderRefused = false;
 
   /**
    * Creates an instance of Homebridge FFmpeg encoding and decoding options.
@@ -751,6 +758,48 @@ export class FfmpegOptions {
   }
 
   /**
+   * Whether the host's hardware video decoder has refused this instance's source. A refusal is FFmpeg reporting that its hardware decoder could not be set up for the
+   * stream it was handed, which a decoder can do for a stream whose codec it otherwise takes, such as one whose frame size is beyond what it opens. While the mark
+   * stands, every pipeline this instance describes decodes in software, exactly as one whose caller passed `hardwareDecoding: false`. The mark lasts until
+   * `resetHardwareDecoderRefusal` or a new instance, and a consumer resets it when its source's dimensions or codec change.
+   */
+  public get hardwareDecoderRefused(): boolean {
+
+    return this.#hardwareDecoderRefused;
+  }
+
+  /**
+   * Record that the host's hardware video decoder refused this instance's source. A refusal is FFmpeg reporting that its hardware decoder could not be set up for the
+   * stream it was handed, and every `FfmpegProcess` built over this instance calls this when its stderr carries that report, whether or not the process then fails.
+   * From then on every pipeline this instance describes decodes in software and, where it encodes on hardware, uploads its frames to the encoder, exactly as one whose
+   * caller passed `hardwareDecoding: false`. The first call since construction or a reset logs the change at info, and a repeat does nothing. The mark lasts until
+   * `resetHardwareDecoderRefusal` or a new instance, and a consumer resets it when its source's dimensions or codec change.
+   */
+  public markHardwareDecoderRefusal(): void {
+
+    if(this.#hardwareDecoderRefused) {
+
+      return;
+    }
+
+    this.#hardwareDecoderRefused = true;
+
+    this.log.info("The hardware video decoder could not open this stream. " +
+      (this.config.hardwareTranscoding ? "It will be decoded in software, and hardware encoding stays on." : "It will be decoded in software."));
+  }
+
+  /**
+   * Clear a recorded refusal by the host's hardware video decoder, so the pipelines this instance describes decode on hardware again wherever its configuration and
+   * the source's codec allow. A refusal is FFmpeg reporting that its hardware decoder could not be set up for the stream it was handed, and its mark lasts until this
+   * call or a new instance. A consumer resets when its source's dimensions or codec change, since the refusal answered the source as it was, and a later refusal of
+   * the changed source marks the instance again. A refusal never touches the class config, so a reset restores exactly what construction resolved.
+   */
+  public resetHardwareDecoderRefusal(): void {
+
+    this.#hardwareDecoderRefused = false;
+  }
+
+  /**
    * Whether a pipeline's decoded frames live on the GPU. They stay there exactly when a hardware decoder feeds a hardware encode whose chain runs on the GPU from its
    * first filter: no crop is configured and the chain scales on the GPU. The GPU is then the next consumer, so keeping the frames there spares a download and an upload
    * per frame. Everywhere else the decoder hands frames over in system memory in the stream's own format - 8-bit and 10-bit alike - because a CPU-side filter or a
@@ -1008,7 +1057,8 @@ export class FfmpegOptions {
    * disagree about where the frames are. A pipeline that decodes on hardware and encodes on hardware keeps its frames on the GPU wherever its chain scales there. One
    * that decodes on hardware and encodes in software - a snapshot, say, which passes `{ hardwareTranscoding: false, inputCodec }` - receives them in system memory, in
    * the stream's own format, and so does a VideoToolbox pipeline whose caller-supplied filters run its chain on the CPU. A source the host's hardware decoder cannot
-   * take decodes in software, and the encoder side of the same pipeline uploads the frames it receives.
+   * take, or has refused on this instance (see `hardwareDecoderRefused`), decodes in software, and the encoder side of the same pipeline uploads the frames it
+   * receives.
    *
    * @param options - Optional. The pipeline's description - typically the `VideoEncoderOptions` the caller hands its encoder. Its source codec, its hardware flags, and
    *                  its caller-supplied filters decide whether the decoder runs on hardware and where it leaves its frames. Each flag resolves exactly as the encoders
@@ -1032,8 +1082,9 @@ export class FfmpegOptions {
     const codec = canonicalDecodeCodec(state.inputCodec);
 
     // Hardware decoding is an all-or-nothing gate for the pipeline. The resolver has already turned it off when the caller opted out, when configureHwAccel disabled it
-    // on this host, or when the host's hardware decoder cannot take the source's codec, and FFmpeg then falls through to software decoding transparently. A codec
-    // outside the supported set resolves it off too; testing the canonical codec here is what hands the handlers the narrowed codec.
+    // on this host, when the host's hardware decoder cannot take the source's codec, or when it has refused this instance's source, and FFmpeg then falls through to
+    // software decoding transparently. A codec outside the supported set resolves it off too; testing the canonical codec here is what hands the handlers the
+    // narrowed codec.
     if(!state.hardwareDecoding || !codec) {
 
       return [];
@@ -1406,11 +1457,11 @@ export class FfmpegOptions {
    *   `resolved = (caller ?? classDefault) && clamp`
    *
    * `??` coalesces undefined (whether from omission or explicit-undefined spread) to the class default; `&&` then clamps against the resolved class capability so a
-   * caller can only ever downgrade a flag, never upgrade one, and hardware decoding is clamped by the codec gate as well. `smartQuality` has no class-level counterpart
-   * and no clamp - it defaults to `true` when the caller omits it and passes through otherwise. `inputCodec` and `videoFilters` likewise have no clamp - the shared
-   * pipeline resolver defaults the codec to H.264 and normalizes the filters to an empty array on omission, so downstream code always reads definite values and never
-   * re-derives an undefined guard. The result satisfies `Required<Pick<...>>` at the type level *and* at runtime because the formula produces a concrete value on
-   * every branch; there is no code path that can leave a resolver-guaranteed field undefined.
+   * caller can only ever downgrade a flag, never upgrade one, and hardware decoding is clamped by the codec gate and a recorded refusal as well. `smartQuality` has no
+   * class-level counterpart and no clamp - it defaults to `true` when the caller omits it and passes through otherwise. `inputCodec` and `videoFilters` likewise have
+   * no clamp - the shared pipeline resolver defaults the codec to H.264 and normalizes the filters to an empty array on omission, so downstream code always reads
+   * definite values and never re-derives an undefined guard. The result satisfies `Required<Pick<...>>` at the type level *and* at runtime because the formula
+   * produces a concrete value on every branch; there is no code path that can leave a resolver-guaranteed field undefined.
    *
    * @param options - The caller-supplied encoder options.
    * @returns A resolved options object with defaults filled in and hardware flags clamped against the resolved class config. The resolver-guaranteed fields
@@ -1433,9 +1484,9 @@ export class FfmpegOptions {
    *
    *   `resolved = (caller ?? classDefault) && clamp`
    *
-   * and hardware decoding is further clamped by the codec gate (see `hardwareDecodes`), so the resolved flag says whether the decoder actually runs on hardware for this
-   * source. The source's codec defaults to H.264, and the caller filters, which on VideoToolbox decide where the decoder hands its frames over, normalize to an empty
-   * array on omission.
+   * and hardware decoding is further clamped by the codec gate (see `hardwareDecodes`) and by a refusal the instance has recorded (see `hardwareDecoderRefused`), so
+   * the resolved flag says whether the decoder actually runs on hardware for this source. The source's codec defaults to H.264, and the caller filters, which on
+   * VideoToolbox decide where the decoder hands its frames over, normalize to an empty array on omission.
    *
    * @param options - The caller's hardware flags, source codec, and caller filters, any of which may be omitted.
    * @returns The resolved view: each flag a definite boolean a caller can only ever have downgraded from the class config, never upgraded, a definite source codec, and
@@ -1447,7 +1498,8 @@ export class FfmpegOptions {
 
     return {
 
-      hardwareDecoding: (options.hardwareDecoding ?? this.config.hardwareDecoding) && this.config.hardwareDecoding && this.#hardwareDecodes(inputCodec),
+      hardwareDecoding: (options.hardwareDecoding ?? this.config.hardwareDecoding) && this.config.hardwareDecoding && !this.#hardwareDecoderRefused &&
+        this.#hardwareDecodes(inputCodec),
       hardwareTranscoding: (options.hardwareTranscoding ?? this.config.hardwareTranscoding) && this.config.hardwareTranscoding,
       inputCodec,
       videoFilters: options.videoFilters ?? []

@@ -21,7 +21,9 @@ Key features:
 - [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal)-driven teardown. Node's native `spawn({ signal, killSignal })` owns the kill path; no manual SIGKILL fallback timer.
 - `ready` promise resolves when FFmpeg produces its first stderr byte (the earliest reliable "we are actually running" signal).
 - `exited` promise resolves with the child's exit code and signal once it terminates. Rejects with `signal.reason` only when the child never started (e.g., `ENOENT`).
-- Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG.
+- Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG. A failure whose decoded frames were
+  asked on the GPU and whose hardware decoder refused the stream logs at DEBUG instead, because every refusal marks the process's
+  [FfmpegOptions](options.md#ffmpegoptions) and later pipelines over them decode in software.
 - Synchronous teardown classification. The abort that tears the process down runs its listeners inline, so the moment a consumer's listener on `this.signal`
   fires, `hasError` and the teardown reason already hold their final values. Shutdown logic may rely on that ordering: it is a contract of this class, and
   changing it is a breaking change rather than an implementation detail.

@@ -12,7 +12,7 @@
 import { AudioRecordingCodecType, H264Level, H264Profile } from "./hap-enums.ts";
 import type { FfmpegOptionsConfig, VideoEncoderOptions } from "./options.ts";
 import { after, before, describe, test } from "node:test";
-import { makeScratchRoot, silentLog } from "../testing/index.ts";
+import { capturingLog, linesAt, makeScratchRoot, silentLog } from "../testing/index.ts";
 import type { CodecsInit } from "./codecs.helpers.ts";
 import { FfmpegCodecs } from "./codecs.ts";
 import { FfmpegOptions } from "./options.ts";
@@ -27,13 +27,14 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-// Shape of the hardware-mode argument to makeOptions. Kept as its own type so the named MODE presets below can be typed against it without importing from the
-// function signature.
+// Shape of the hardware-mode argument to makeOptions, with the crop and the log a row may also set. Kept as its own type so the named MODE presets below can be
+// typed against it without importing from the function signature.
 interface MakeOptionsFlags {
 
   crop?: FfmpegOptionsConfig["crop"];
   hardwareDecoding?: boolean;
   hardwareTranscoding?: boolean;
+  log?: FfmpegOptionsConfig["log"];
 }
 
 // Build a config + FfmpegOptions pair in one call. We intentionally pass the caller's hardware flags through so the test can observe the resolved state on the
@@ -46,7 +47,7 @@ function makeOptions(codecsInit: CodecsInit, flags: MakeOptionsFlags = {}):
     codecSupport: makeCodecs(codecsInit),
     hardwareDecoding: flags.hardwareDecoding ?? false,
     hardwareTranscoding: flags.hardwareTranscoding ?? false,
-    log: silentLog(),
+    log: flags.log ?? silentLog(),
     name: (): string => "test-camera",
     ...(flags.crop ? { crop: flags.crop } : {})
   };
@@ -622,6 +623,125 @@ describe("FfmpegOptions - decoded frame residency", () => {
     assertHasArg(qsv.videoDecoder({ ...withFilters, inputCodec: "hevc" }), "-hwaccel_output_format", "qsv");
     assert.ok(filterChain(qsv.streamEncoder(withFilters)).startsWith("vpp_qsv=format=nv12:"), "the Quick Sync chain opens with its GPU scaler");
   });
+});
+
+describe("FfmpegOptions - hardware decoder refusal", () => {
+
+  // A refusal is the host's hardware decoder declining the stream it was handed, which FfmpegProcess reads on FFmpeg's stderr and reports through
+  // markHardwareDecoderRefusal. These rows run on a macOS Apple host with FFmpeg 8 and hardware decoding and transcoding on, where an unmarked pipeline keeps its
+  // decoded frames on the GPU, and they hold a marked instance to the pipeline its caller would get by passing hardwareDecoding: false.
+  const host: CodecsInit = { ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" };
+  const pipeline: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, inputCodec: "h264" };
+  const softwareDecode: VideoEncoderOptions = { ...pipeline, hardwareDecoding: false };
+
+  test("a marked instance decodes in software and uploads to its hardware encoder, exactly as a caller's hardwareDecoding: false", () => {
+
+    const { options } = makeOptions(host, HW_FULL);
+    const unmarked = { record: options.recordEncoder(pipeline), stream: options.streamEncoder(pipeline) };
+    const expected = { record: options.recordEncoder(softwareDecode), stream: options.streamEncoder(softwareDecode) };
+
+    // The software-decode pipeline differs from the unmarked one on this host, so the equalities below show the mark moving the arguments rather than leaving them.
+    assert.notDeepEqual(expected.stream, unmarked.stream, "a caller's software decode uploads where the unmarked pipeline keeps its frames on the GPU");
+    assert.notDeepEqual(expected.record, unmarked.record, "and so does the recording built from it");
+
+    options.markHardwareDecoderRefusal();
+
+    assert.deepEqual(options.videoDecoder(pipeline), [], "the marked instance's decoder asks for no hardware decode");
+    assert.deepEqual(options.streamEncoder(pipeline), expected.stream, "its livestream encoder takes the software-decode arguments");
+    assert.deepEqual(options.recordEncoder(pipeline), expected.record, "and so does its recording encoder");
+    assert.equal(filterChain(options.streamEncoder(pipeline)), "format=nv12, hwupload, " + SCALE_VT_1080P, "the chain uploads ahead of the GPU scaler");
+    assertHasArg(options.streamEncoder(pipeline), "-init_hw_device", "videotoolbox=hw");
+  });
+
+  test("a reset restores the arguments the instance described before the mark", () => {
+
+    const { options } = makeOptions(host, HW_FULL);
+    const unmarked = { record: options.recordEncoder(pipeline), stream: options.streamEncoder(pipeline) };
+
+    options.markHardwareDecoderRefusal();
+
+    assert.deepEqual(options.videoDecoder(pipeline), [], "the mark takes the decoder off the hardware");
+
+    options.resetHardwareDecoderRefusal();
+
+    assert.deepEqual(options.videoDecoder(pipeline), [ "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld" ],
+      "the reset puts the decoder back on the hardware, its frames kept on the GPU");
+    assert.deepEqual(options.streamEncoder(pipeline), unmarked.stream, "the livestream encoder takes its unmarked arguments again");
+    assert.deepEqual(options.recordEncoder(pipeline), unmarked.record, "and so does the recording encoder");
+  });
+
+  test("a mark leaves config.hardwareDecoding as construction resolved it", () => {
+
+    const { options } = makeOptions(host, HW_FULL);
+
+    options.markHardwareDecoderRefusal();
+
+    assert.deepEqual(options.videoDecoder(pipeline), [], "the mark takes the decoder off the hardware");
+    assert.equal(options.config.hardwareDecoding, true, "while the resolved flag still reads what construction resolved");
+  });
+
+  test("on an instance resolved without hardware decoding, a mark and a reset leave the decoder in software and the resolved flag false", () => {
+
+    // The caller turns hardware decoding off here, so construction resolves it off on this host, and a reset restores that rather than the hardware decoder.
+    const { options } = makeOptions(host, HW_TRANSCODE);
+
+    assert.equal(options.config.hardwareDecoding, false, "construction resolved hardware decoding off");
+
+    options.markHardwareDecoderRefusal();
+
+    assert.deepEqual(options.videoDecoder(pipeline), [], "a mark leaves the decoder in software");
+    assert.equal(options.config.hardwareDecoding, false, "and the resolved flag false");
+
+    options.resetHardwareDecoderRefusal();
+
+    assert.deepEqual(options.videoDecoder(pipeline), [], "a reset leaves the decoder in software, as construction resolved it");
+    assert.equal(options.config.hardwareDecoding, false, "and the resolved flag false");
+  });
+
+  test("hardwareDecoderRefused reads false at construction, true once marked, and false after a reset", () => {
+
+    const { options } = makeOptions(host, HW_FULL);
+
+    assert.equal(options.hardwareDecoderRefused, false, "a new instance carries no refusal");
+
+    options.markHardwareDecoderRefusal();
+
+    assert.equal(options.hardwareDecoderRefused, true, "a mark sets it");
+
+    options.resetHardwareDecoderRefusal();
+
+    assert.equal(options.hardwareDecoderRefused, false, "and a reset clears it");
+  });
+
+  // The sentence a mark logs reads the resolved transcoding flag, since a refusal leaves hardware encoding on wherever it was on.
+  const sentenceCases: { flags: MakeOptionsFlags; name: string; sentence: string }[] = [
+
+    { flags: HW_FULL, name: "hardware encoding on",
+      sentence: "The hardware video decoder could not open this stream. It will be decoded in software, and hardware encoding stays on." },
+    { flags: HW_DECODE, name: "software encoding", sentence: "The hardware video decoder could not open this stream. It will be decoded in software." }
+  ];
+
+  for(const { flags, name, sentence } of sentenceCases) {
+
+    test("with " + name + ", repeated marks log the sentence once, and a mark after a reset logs it again", () => {
+
+      const log = capturingLog();
+      const { options } = makeOptions(host, { ...flags, log });
+
+      // Construction logs its own hardware line, so the reading starts after it.
+      const start = log.entries.length;
+
+      options.markHardwareDecoderRefusal();
+      options.markHardwareDecoderRefusal();
+
+      assert.deepEqual(linesAt(log.entries.slice(start), "info"), [sentence], "a repeat mark logs nothing more");
+
+      options.resetHardwareDecoderRefusal();
+      options.markHardwareDecoderRefusal();
+
+      assert.deepEqual(linesAt(log.entries.slice(start), "info"), [ sentence, sentence ], "a mark after a reset logs the sentence again");
+    });
+  }
 });
 
 describe("FfmpegOptions - 10-bit sources", () => {

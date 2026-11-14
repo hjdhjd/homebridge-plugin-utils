@@ -19,7 +19,9 @@
  * - {@link AbortSignal}-driven teardown. Node's native `spawn({ signal, killSignal })` owns the kill path; no manual SIGKILL fallback timer.
  * - `ready` promise resolves when FFmpeg produces its first stderr byte (the earliest reliable "we are actually running" signal).
  * - `exited` promise resolves with the child's exit code and signal once it terminates. Rejects with `signal.reason` only when the child never started (e.g., `ENOENT`).
- * - Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG.
+ * - Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG. A failure whose decoded frames were
+ *   asked on the GPU and whose hardware decoder refused the stream logs at DEBUG instead, because every refusal marks the process's
+ *   {@link FfmpegOptions} and later pipelines over them decode in software.
  * - Synchronous teardown classification. The abort that tears the process down runs its listeners inline, so the moment a consumer's listener on `this.signal`
  *   fires, `hasError` and the teardown reason already hold their final values. Shutdown logic may rely on that ordering: it is a contract of this class, and
  *   changing it is a breaking change rather than an implementation detail.
@@ -37,6 +39,10 @@ import { spawn } from "node:child_process";
 // Matches non-printable control characters that #onStderrData replaces with EOL so control sequences become line boundaries rather than vanishing. Compiled once at
 // module scope rather than per data event.
 const NON_PRINTABLE_CHARS = /\p{C}+/gu;
+
+// FFmpeg's own words when the host's hardware decoder could not be set up for the stream it was handed, the close of its "Failed setup for format <format>:" line.
+// The line reports a refusal whether or not the process then fails: with its frames asked in system memory, FFmpeg goes on to decode in software by itself.
+const HARDWARE_DECODER_REFUSAL = "hwaccel initialisation returned error";
 
 // Shape-level type guard for exit-info-like cause values. The class attaches exit information to `HbpuAbortError`'s `cause` field for `"closed"` and `"failed"`
 // reasons, but `cause` is typed `unknown` at the error boundary, so any consumer that wants to read exit info (including our own teardown logger) must narrow.
@@ -256,6 +262,11 @@ export class FfmpegProcess implements AsyncDisposable {
   // Set `true` once the process has produced output - its first stderr byte. The ready promise resolves on that byte and the startup watchdog is cleared on it, so
   // each reads this field to act on the first byte alone.
   #firstStderr = false;
+
+  // Set `true` once this process's own stderr reports that the hardware decoder refused the stream, held apart from the options' mark, which another process over
+  // them may already have set. The drain reads it to mark the options once per process, and the teardown policy reads it to end a refused GPU decode at debug,
+  // because only a refusal this process read can explain its failure.
+  #sawHardwareDecoderRefusal = false;
 
   // The startup watchdog composed over this.signal, or `undefined` when no `startupTimeout` was configured. Armed at spawn, cleared by the first stderr byte, and
   // cleared by the primitive itself when the signal aborts for any reason, so no teardown wiring is needed.
@@ -512,8 +523,8 @@ export class FfmpegProcess implements AsyncDisposable {
   }
 
   // Stderr data listener. Responsibilities, in order: mark the process as "ready" and clear the startup watchdog on first byte (this is the only reliable signal that
-  // FFmpeg is running, since stdin and stdout may not be used at all depending on the invocation), append each complete line to the rolling stderr log, and emit
-  // live-log output if configured.
+  // FFmpeg is running, since stdin and stdout may not be used at all depending on the invocation), append each complete line to the rolling stderr log, mark the
+  // options when a line reports that the hardware decoder refused the stream, and emit live-log output if configured.
   #onStderrData(chunk: Buffer): void {
 
     if(!this.#firstStderr) {
@@ -544,6 +555,14 @@ export class FfmpegProcess implements AsyncDisposable {
       this.#stderrBuffer = this.#stderrBuffer.slice(lineIndex + EOL.length);
       this.#stderrLog.push(line);
 
+      // The decoder's refusal marks our options the moment we read it, whether or not this process then fails, so every pipeline built over them from here decodes in
+      // software. The test of the line stops once this process has seen the refusal, keeping a long-running process's drain at one flag read per line.
+      if(!this.#sawHardwareDecoderRefusal && line.includes(HARDWARE_DECODER_REFUSAL)) {
+
+        this.#sawHardwareDecoderRefusal = true;
+        this.options.markHardwareDecoderRefusal();
+      }
+
       if(this.#liveLog) {
 
         this.log.info(line);
@@ -565,6 +584,10 @@ export class FfmpegProcess implements AsyncDisposable {
 
   // Reason-based teardown logging. The policy is driven by `this.signal.reason`, mapping each reason variant to a log level and message shape:
   //
+  //   - A refused GPU decode             -> DEBUG naming the refusal: a `"failed"` reason on a process whose stderr reported the hardware decoder's refusal and whose
+  //                                         args asked for its decoded frames on the GPU (`-hwaccel_output_format`). Checked ahead of `logFailedTeardown()`, so no
+  //                                         subclass substitutes a verdict of its own: the refusal ended the process, and its options already decode every later
+  //                                         pipeline in software.
   //   - `HbpuAbortError("failed", ...)`  -> delegated to `logFailedTeardown()` (ERROR with full stderr dump and exit context by default; subclasses override to
   //                                         substitute a bespoke message for known benign error shapes).
   //   - `HbpuAbortError("timeout")`      -> delegated to `logTimeoutTeardown()` (a static WARN by default; the recording subclass overrides it to debug for a benign
@@ -587,6 +610,16 @@ export class FfmpegProcess implements AsyncDisposable {
       switch(reason.name) {
 
         case "failed": {
+
+          // A process that asked for its decoded frames on the GPU fails when the decoder refuses the stream, because the frames its chain then receives are not the GPU
+          // frames it was built for, so the refusal is what ended it. One that took its frames in system memory decodes on in software after a refusal, so the refusal
+          // cannot explain its failure, and it keeps the canonical verdict.
+          if(this.#sawHardwareDecoderRefusal && this.args.includes("-hwaccel_output_format")) {
+
+            this.log.debug("%s because the hardware video decoder could not open the stream (%s).", this.#teardownPrefix, describeCause(reason.cause));
+
+            return;
+          }
 
           this.logFailedTeardown(reason);
 
@@ -617,7 +650,7 @@ export class FfmpegProcess implements AsyncDisposable {
 
   /**
    * Log the "failed" teardown branch. Overridable by subclasses that want to substitute a bespoke message for known benign error shapes before falling through to the
-   * canonical ERROR dump.
+   * canonical ERROR dump. The base calls it for every `"failed"` teardown but a refused GPU decode, which it ends at debug first.
    *
    * The default implementation emits two ERROR lines (an "ended unexpectedly" summary and the command that produced it), then dumps every accumulated stderr line at
    * ERROR level. Subclasses may inspect `this.stderrLog` and `reason.cause`, log a friendly message, and return early to suppress the dump; or call

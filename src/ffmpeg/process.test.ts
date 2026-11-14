@@ -4,7 +4,7 @@
  * derived getters, startup timeout, and AsyncDisposable semantics.
  */
 import type { CapturingLog, TestLogEntry } from "../testing/index.ts";
-import { capturingLog, errnoError } from "../testing/index.ts";
+import { capturingLog, errnoError, linesAt, logCount } from "../testing/index.ts";
 import { describe, test } from "node:test";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
@@ -690,6 +690,128 @@ describe("FfmpegProcess - teardown logging", () => {
 
     assert.ok(logger.entries.some((entry) => (entry.level === "warn") && entry.message.includes("stalled past its watchdog window")),
       "the base FfmpegProcess timeout teardown logs at warn");
+  });
+
+  // FFmpeg's refusal line, its text as a VideoToolbox decode of a stream beyond the size its decoder opens printed it, behind the decoder's context prefix.
+  const refusalLine = "[h264 @ 0x7f8e4c00a200] Failed setup for format videotoolbox_vld: hwaccel initialisation returned error.";
+
+  // The opening of the sentence the options log when a refusal marks them.
+  const refusalSentence = "The hardware video decoder could not open this stream.";
+
+  test("a child that reports the hardware decoder's refusal and exits cleanly marks its options", async () => {
+
+    const logger = capturingLog();
+    const options = makeOptions(logger);
+
+    await using proc = new FfmpegProcess(options, { args: stderrThenExit(0, 10, refusalLine) });
+
+    await proc.exited;
+
+    assert.equal(proc.hasError, false, "the child exited cleanly");
+    assert.equal(options.hardwareDecoderRefused, true, "the refusal marks the options whether or not the process fails");
+    assert.equal(logCount(logger.entries, "info", refusalSentence), 1, "and the options log the change once");
+  });
+
+  test("a failed child that reports the refusal with its decoded frames asked on the GPU logs no error and one debug line", async () => {
+
+    const logger = capturingLog();
+    const options = makeOptions(logger);
+
+    // Node takes everything after `--` as positional argv, so the child runs its script while the class sees the GPU-frames arg in its command line.
+    await using proc = new FfmpegProcess(options, { args: [ ...stderrThenExit(178, 10, refusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ] });
+
+    await proc.exited;
+
+    assert.equal(proc.hasError, true, "the child failed");
+    assert.deepEqual(linesAt(logger.entries, "error"), [], "the refusal explains the failure, so nothing reaches error");
+    assert.deepEqual(linesAt(logger.entries, "debug").filter((line) => line.includes("hardware video decoder")),
+      ["test: FFmpeg process ended because the hardware video decoder could not open the stream (exit code 178)."], "one debug line names the refusal");
+  });
+
+  test("a failed child that reads the refusal over options another process already marked still ends at debug, the sentence logged once in all", async () => {
+
+    const logger = capturingLog();
+    const options = makeOptions(logger);
+
+    // The first child reads the refusal with its frames in system memory and exits cleanly, so the GPU-frames child after it is built over options already marked.
+    await using first = new FfmpegProcess(options, { args: stderrThenExit(0, 10, refusalLine) });
+
+    await first.exited;
+
+    assert.equal(options.hardwareDecoderRefused, true, "the first child marks the options");
+
+    await using proc = new FfmpegProcess(options, { args: [ ...stderrThenExit(178, 10, refusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ] });
+
+    await proc.exited;
+
+    assert.equal(proc.hasError, true, "the second child failed");
+    assert.deepEqual(linesAt(logger.entries, "error"), [], "its own reading of the refusal explains the failure, so nothing reaches error");
+    assert.deepEqual(linesAt(logger.entries, "debug").filter((line) => line.includes("hardware video decoder")),
+      ["test: FFmpeg process ended because the hardware video decoder could not open the stream (exit code 178)."], "one debug line names the refusal");
+    assert.equal(logCount(logger.entries, "info", refusalSentence), 1, "and the options log the change once in all");
+  });
+
+  test("a failed child that reports the refusal with its decoded frames in system memory keeps the canonical dump", async () => {
+
+    const logger = capturingLog();
+    const options = makeOptions(logger);
+
+    await using proc = new FfmpegProcess(options, { args: stderrThenExit(178, 10, refusalLine) });
+
+    await proc.exited;
+
+    const errorLines = linesAt(logger.entries, "error");
+
+    assert.ok(errorLines.includes("test: FFmpeg process ended unexpectedly. Reason: exit code 178."), "the failure logs its canonical summary at error");
+    assert.ok(errorLines.includes(refusalLine), "and dumps the stderr that carries the refusal");
+    assert.equal(logCount(logger.entries, "debug", "could not open the stream"), 0, "with no debug verdict in its place");
+    assert.equal(options.hardwareDecoderRefused, true, "while the refusal still marks the options");
+  });
+
+  // A GPU-frames child whose own stderr carries no refusal failed for some other reason, so it keeps the canonical dump whether or not its options were marked
+  // before it started: a mark another process set cannot explain this child's failure.
+  const unrefusedCases: { marked: boolean; name: string }[] = [
+
+    { marked: false, name: "unmarked options" },
+    { marked: true, name: "options marked beforehand" }
+  ];
+
+  for(const { marked, name } of unrefusedCases) {
+
+    test("a failed child that asks for its decoded frames on the GPU and reports no refusal keeps the canonical dump over " + name, async () => {
+
+      const logger = capturingLog();
+      const options = makeOptions(logger);
+
+      if(marked) {
+
+        options.markHardwareDecoderRefusal();
+      }
+
+      await using proc = new FfmpegProcess(options, { args: [ ...stderrThenExit(178, 10, "diagnostic-line"), "--", "-hwaccel_output_format", "videotoolbox_vld" ] });
+
+      await proc.exited;
+
+      const errorLines = linesAt(logger.entries, "error");
+
+      assert.ok(errorLines.includes("test: FFmpeg process ended unexpectedly. Reason: exit code 178."), "the failure logs its canonical summary at error");
+      assert.ok(errorLines.includes("diagnostic-line"), "and dumps its stderr");
+      assert.equal(logCount(logger.entries, "debug", "could not open the stream"), 0, "with no refusal verdict at debug");
+      assert.equal(options.hardwareDecoderRefused, marked, "and the options keep the mark they started with");
+    });
+  }
+
+  test("a line carrying only part of the refusal marks nothing", async () => {
+
+    const logger = capturingLog();
+    const options = makeOptions(logger);
+
+    await using proc = new FfmpegProcess(options, { args: stderrThenExit(0, 10, "hwaccel initialisation") });
+
+    await proc.exited;
+
+    assert.equal(options.hardwareDecoderRefused, false, "a near miss leaves the options unmarked");
+    assert.equal(logCount(logger.entries, "info", refusalSentence), 0, "and logs no change");
   });
 });
 

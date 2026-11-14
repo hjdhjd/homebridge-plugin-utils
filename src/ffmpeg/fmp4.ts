@@ -62,6 +62,10 @@ export const TRUN_FLAG_SAMPLE_SIZE = 0x000200;
  */
 export const TRUN_FLAG_SAMPLE_FLAGS = 0x000400;
 
+// TRUN fullbox flags bit indicating that each sample entry carries a 4-byte sample_composition_time_offset field. Only needed here to compute the per-sample entry
+// stride when walking past leading samples.
+const TRUN_FLAG_SAMPLE_COMPOSITION_TIME_OFFSET = 0x000800;
+
 /**
  * Sample-flags bit indicating a non-sync (non-keyframe) sample. When this bit is clear (0), the sample is a sync sample / IDR frame / keyframe.
  *
@@ -153,13 +157,18 @@ export function findBox(buffer: Buffer, type: string, start = 0, end?: number): 
 /**
  * Determines whether an fMP4 segment contains a keyframe (sync sample) by parsing the TRUN sample flags.
  *
- * Traverses the box hierarchy `moof -> traf -> trun` and inspects the sample flags to determine if the first sample is a sync sample (keyframe/IDR frame). Checks
- * `first_sample_flags` first (the common case for fragments generated with `frag_keyframe`), then falls back to per-sample flags if available. Returns `false` if the
- * box structure cannot be parsed or if the flags indicate a non-sync sample.
+ * Traverses the box hierarchy `moof -> traf -> trun` and inspects the sample flags to determine if the fragment's first presentable sample is a sync sample
+ * (keyframe/IDR frame). Checks `first_sample_flags` first (the common case for fragments generated with `frag_keyframe`), then falls back to per-sample flags if
+ * available. Returns `false` if the box structure cannot be parsed or if the flags indicate a non-sync sample.
+ *
+ * Some packagers emit zero-duration samples ahead of the first real frame in a fragment - UniFi Protect's livestream API in its "Improved" stream compatibility mode
+ * (used for third-party ONVIF cameras) carries the SPS/PPS in a small zero-duration, non-sync sample immediately before the IDR. A zero-duration sample is never
+ * presented, so when the trun carries explicit per-sample durations and flags, leading zero-duration samples are skipped and the fragment is judged by the first sample
+ * with a non-zero duration. When the trun does not carry both, the first sample decides, as it always has.
  *
  * @param segment      - A buffer containing a complete fMP4 segment (typically a moof+mdat pair).
  *
- * @returns `true` if the segment's first sample is a sync sample (keyframe), `false` otherwise.
+ * @returns `true` if the segment's first presentable sample is a sync sample (keyframe), `false` otherwise.
  *
  * @category FFmpeg
  */
@@ -194,8 +203,11 @@ export function isKeyframe(segment: Buffer): boolean {
     return false;
   }
 
+  const trunEnd = trun.offset + trun.size;
+
   // Read the flags from the fullbox header. The version occupies the top byte and the flags occupy the lower 24 bits.
   const flags = segment.readUInt32BE(trun.offset + BOX_HEADER_SIZE) & 0x00FFFFFF;
+  const sampleCount = segment.readUInt32BE(trun.offset + BOX_HEADER_SIZE + 4);
 
   // Start after the trun header (box header + version/flags + sample_count).
   let pos = trun.offset + TRUN_HEADER_SIZE;
@@ -206,41 +218,60 @@ export function isKeyframe(segment: Buffer): boolean {
     pos += 4;
   }
 
-  // Check first_sample_flags if present. This is the most common path for fMP4 fragments generated with the frag_keyframe movflag, where each fragment starts at a
-  // keyframe and the first sample's flags are stored separately from the per-sample entries.
+  // Read first_sample_flags if present. This is the most common arrangement for fMP4 fragments generated with the frag_keyframe movflag, where each fragment starts at
+  // a keyframe and the first sample's flags are stored separately from the per-sample entries.
+  let firstSampleFlags: number | null = null;
+
   if(flags & TRUN_FLAG_FIRST_SAMPLE_FLAGS) {
 
-    if((pos + 4) > (trun.offset + trun.size)) {
+    if((pos + 4) > trunEnd) {
 
       return false;
     }
 
-    return (segment.readUInt32BE(pos) & SAMPLE_FLAG_NON_SYNC) === 0;
+    firstSampleFlags = segment.readUInt32BE(pos);
+    pos += 4;
   }
 
-  // Fall back to per-sample flags. The per-sample entry fields appear in a fixed order: duration, size, flags, composition time offset. We skip duration and size to
-  // reach the first sample's flags field.
-  if(flags & TRUN_FLAG_SAMPLE_FLAGS) {
+  // The per-sample entry fields appear in a fixed order - duration, size, flags, composition time offset - each present only when its trun flag is set.
+  const hasDuration = (flags & TRUN_FLAG_SAMPLE_DURATION) !== 0;
+  const hasSampleFlags = (flags & TRUN_FLAG_SAMPLE_FLAGS) !== 0;
+  const flagsFieldOffset = (hasDuration ? 4 : 0) + ((flags & TRUN_FLAG_SAMPLE_SIZE) ? 4 : 0);
+  const entrySize = flagsFieldOffset + (hasSampleFlags ? 4 : 0) + ((flags & TRUN_FLAG_SAMPLE_COMPOSITION_TIME_OFFSET) ? 4 : 0);
 
-    if(flags & TRUN_FLAG_SAMPLE_DURATION) {
+  // Walk the samples until we reach the first presentable one. Without both explicit durations and explicit per-sample flags we cannot skip anything, so the first
+  // sample decides. A trun declaring zero samples is evaluated as if it declared one, matching the historical behavior of reading the first sample's flags.
+  for(let index = 0; index < Math.max(sampleCount, 1); index++) {
 
-      pos += 4;
-    }
+    const entry = pos + (index * entrySize);
+    let sampleFlags: number;
 
-    if(flags & TRUN_FLAG_SAMPLE_SIZE) {
+    if((index === 0) && (firstSampleFlags !== null)) {
 
-      pos += 4;
-    }
+      sampleFlags = firstSampleFlags;
+    } else if(hasSampleFlags) {
 
-    if((pos + 4) > (trun.offset + trun.size)) {
+      if((entry + flagsFieldOffset + 4) > trunEnd) {
 
+        return false;
+      }
+
+      sampleFlags = segment.readUInt32BE(entry + flagsFieldOffset);
+    } else {
+
+      // No sample flags information available in the trun...we can't determine keyframe status.
       return false;
     }
 
-    return (segment.readUInt32BE(pos) & SAMPLE_FLAG_NON_SYNC) === 0;
+    // Skip a zero-duration sample when another sample follows whose explicit flags we can inspect. It is never presented, so it can't make or break a keyframe.
+    if(hasDuration && hasSampleFlags && ((index + 1) < sampleCount) && ((entry + 4) <= trunEnd) && (segment.readUInt32BE(entry) === 0)) {
+
+      continue;
+    }
+
+    return (sampleFlags & SAMPLE_FLAG_NON_SYNC) === 0;
   }
 
-  // No sample flags information available in the trun...we can't determine keyframe status.
   return false;
 }
 

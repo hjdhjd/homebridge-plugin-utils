@@ -6,7 +6,8 @@
  * consumed both internally (the parser reuses `BOX_HEADER_SIZE` and the assembler compares box type codes via the `BOX_TYPE_*` constants) and externally (HBUP calls
  * `isKeyframe(buffer)` directly at its timeshift boundary), so the behavioral surface here must stay stable across the parser/assembler refactor.
  */
-import { HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, findBox, hasAudioTrack, isKeyframe, splitMoofMdat } from "./fmp4.ts";
+import { HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, TRUN_FLAG_DATA_OFFSET, TRUN_FLAG_FIRST_SAMPLE_FLAGS, TRUN_FLAG_SAMPLE_DURATION, TRUN_FLAG_SAMPLE_FLAGS,
+  TRUN_FLAG_SAMPLE_SIZE, findBox, hasAudioTrack, isKeyframe, splitMoofMdat } from "./fmp4.ts";
 import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeHdlrBox, makeTrunBox } from "./fmp4-builders.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -232,6 +233,158 @@ describe("isKeyframe", () => {
     const segment = wrapInMoofTraf(truncatedTrun);
 
     assert.equal(isKeyframe(segment), false);
+  });
+
+  describe("zero-duration leading samples", () => {
+
+    // A moof captured from the UniFi Protect livestream API (Protect 7.3.74, third-party ONVIF camera, "Improved" stream compatibility mode). Its trun (flags 0x000f01:
+    // data_offset, duration, size, flags, composition time offset) carries two samples: a 53-byte zero-duration non-sync sample holding the SPS/PPS, then the IDR
+    // itself (sample_flags 0x02600000, a sync sample). Only the moof is needed - it holds sample sizes, timings, and flags, no picture data.
+    const PROTECT_IMPROVED_KEYFRAME_MOOF = [
+      "0000007c6d6f6f66000000106d666864000000000000000400000064747261660000001474666864000200080000000100000bb8000000147466647401000000",
+      "0000000000008598000000347472756e00000f01000000020000008400000000000000350001000000000000000023280002e6140260000000000000"
+    ].join("");
+
+    // A delta fragment from the same stream: two zero-duration non-sync samples (11 and 53 bytes) ahead of five non-sync P-frames.
+    const PROTECT_IMPROVED_DELTA_MOOF = [
+      "000000cc6d6f6f66000000106d6668640000000000000005000000b4747261660000001474666864000200080000000100000bb8000000147466647401000000",
+      "000000000000a8c0000000847472756e00000f0100000007000000d4000000000000000b00010000000000000000000000000035000100000000000000001194",
+      "0000160100010000000000000000000000000035000100000000000000000a8c0000138400010000000000000000000000000035000100000000000000000e10",
+      "000012540001000000000000"
+    ].join("");
+
+    // Build a trun carrying explicit per-sample entries. Each entry always has a flags field; duration and size are included unless switched off, matching the order
+    // the spec mandates (duration, size, flags). `count` overrides the declared sample_count so truncated boxes can be expressed.
+    interface SamplesTrunOptions {
+
+      count?: number;
+      firstSampleFlags?: number;
+      includeDuration?: boolean;
+    }
+
+    function makeSamplesTrun(samples: { duration: number; flags: number }[], options: SamplesTrunOptions = {}): Buffer {
+
+      const { count = samples.length, firstSampleFlags, includeDuration = true } = options;
+
+      let flags = TRUN_FLAG_DATA_OFFSET | TRUN_FLAG_SAMPLE_SIZE | TRUN_FLAG_SAMPLE_FLAGS;
+
+      if(includeDuration) {
+
+        flags |= TRUN_FLAG_SAMPLE_DURATION;
+      }
+
+      if(firstSampleFlags !== undefined) {
+
+        flags |= TRUN_FLAG_FIRST_SAMPLE_FLAGS;
+      }
+
+      const header = Buffer.alloc(12);
+
+      header.writeUInt32BE(flags, 0);
+      header.writeUInt32BE(count, 4);
+
+      const parts = [header];
+
+      if(firstSampleFlags !== undefined) {
+
+        const first = Buffer.alloc(4);
+
+        first.writeUInt32BE(firstSampleFlags, 0);
+        parts.push(first);
+      }
+
+      for(const sample of samples) {
+
+        const entry = Buffer.alloc(includeDuration ? 12 : 8);
+        let offset = 0;
+
+        if(includeDuration) {
+
+          entry.writeUInt32BE(sample.duration, offset);
+          offset += 4;
+        }
+
+        // Sample size - irrelevant to the predicate.
+        entry.writeUInt32BE(100, offset);
+        entry.writeUInt32BE(sample.flags, offset + 4);
+        parts.push(entry);
+      }
+
+      return makeBox("trun", Buffer.concat(parts));
+    }
+
+    test("recognizes a UniFi Protect \"Improved\" mode keyframe fragment whose IDR follows a zero-duration parameter-set sample", () => {
+
+      const segment = Buffer.concat([ Buffer.from(PROTECT_IMPROVED_KEYFRAME_MOOF, "hex"), makeBox("mdat") ]);
+
+      assert.equal(isKeyframe(segment), true);
+    });
+
+    test("still rejects a UniFi Protect \"Improved\" mode delta fragment whose presentable samples are all non-sync", () => {
+
+      const segment = Buffer.concat([ Buffer.from(PROTECT_IMPROVED_DELTA_MOOF, "hex"), makeBox("mdat") ]);
+
+      assert.equal(isKeyframe(segment), false);
+    });
+
+    test("skips a zero-duration non-sync sample and reports the following sync sample", () => {
+
+      const trun = makeSamplesTrun([ { duration: 0, flags: SAMPLE_FLAG_NON_SYNC }, { duration: 3000, flags: 0 } ]);
+
+      assert.equal(isKeyframe(wrapInMoofTraf(trun)), true);
+    });
+
+    test("skips several zero-duration samples before the first presentable one", () => {
+
+      const trun = makeSamplesTrun([ { duration: 0, flags: SAMPLE_FLAG_NON_SYNC }, { duration: 0, flags: SAMPLE_FLAG_NON_SYNC }, { duration: 3000, flags: 0 } ]);
+
+      assert.equal(isKeyframe(wrapInMoofTraf(trun)), true);
+    });
+
+    test("reports a non-sync first presentable sample as not a keyframe", () => {
+
+      const trun = makeSamplesTrun([ { duration: 0, flags: SAMPLE_FLAG_NON_SYNC }, { duration: 3000, flags: SAMPLE_FLAG_NON_SYNC } ]);
+
+      assert.equal(isKeyframe(wrapInMoofTraf(trun)), false);
+    });
+
+    test("does not look past a presentable non-sync sample to a later sync sample", () => {
+
+      // A fragment that begins mid-GOP must not be treated as a keyframe just because an IDR appears later in it - emitting from its start would hand the decoder a
+      // P-frame first.
+      const trun = makeSamplesTrun([ { duration: 3000, flags: SAMPLE_FLAG_NON_SYNC }, { duration: 3000, flags: 0 } ]);
+
+      assert.equal(isKeyframe(wrapInMoofTraf(trun)), false);
+    });
+
+    test("uses first_sample_flags for a zero-duration first sample and per-sample flags for the next", () => {
+
+      const trun = makeSamplesTrun([ { duration: 0, flags: 0 }, { duration: 3000, flags: 0 } ], { firstSampleFlags: SAMPLE_FLAG_NON_SYNC });
+
+      assert.equal(isKeyframe(wrapInMoofTraf(trun)), true);
+    });
+
+    test("judges the last sample when every sample has zero duration", () => {
+
+      assert.equal(isKeyframe(wrapInMoofTraf(makeSamplesTrun([ { duration: 0, flags: SAMPLE_FLAG_NON_SYNC }, { duration: 0, flags: 0 } ]))), true);
+      assert.equal(isKeyframe(wrapInMoofTraf(makeSamplesTrun([ { duration: 0, flags: 0 }, { duration: 0, flags: SAMPLE_FLAG_NON_SYNC } ]))), false);
+    });
+
+    test("leaves the first sample in charge when per-sample durations are absent", () => {
+
+      // Without explicit durations every sample takes the default duration, so nothing can be skipped - the historical first-sample behavior is preserved.
+      const trun = makeSamplesTrun([ { duration: 0, flags: SAMPLE_FLAG_NON_SYNC }, { duration: 0, flags: 0 } ], { includeDuration: false });
+
+      assert.equal(isKeyframe(wrapInMoofTraf(trun)), false);
+    });
+
+    test("returns false when sample_count promises a sample the trun does not contain", () => {
+
+      // The first sample is skippable, but the second entry is missing from the box - the size guard must reject the read rather than run past the trun.
+      const trun = makeSamplesTrun([{ duration: 0, flags: SAMPLE_FLAG_NON_SYNC }], { count: 2 });
+
+      assert.equal(isKeyframe(wrapInMoofTraf(trun)), false);
+    });
   });
 });
 

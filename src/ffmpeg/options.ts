@@ -14,7 +14,7 @@
  * - Encapsulates all FFmpeg transcoding and streaming options (including bitrate, resolution, framerate, H.264 profiles/levels, and quality optimizations).
  * - Detects and configures hardware-accelerated encoding and decoding (macOS VideoToolbox, Intel Quick Sync Video, and Raspberry Pi 4), falling back to software
  *   processing when required.
- * - Dynamically generates the appropriate FFmpeg command-line arguments for livestreaming, HomeKit Secure Video (HKSV) event recording, and crop filters.
+ * - Dynamically generates the appropriate FFmpeg command-line arguments for livestreaming, HomeKit Secure Video (HKSV) event recording, and crop and fit filters.
  * - Provides strong TypeScript types and interfaces for reliable integration and extensibility in Homebridge.
  *
  * This module is intended for plugin authors and advanced users who need precise, robust control over FFmpeg processing pipelines, with platform-aware optimizations and
@@ -148,7 +148,8 @@ export interface AudioEncoderOptions {
  * @property hardwareTranscoding - Optional. If `true`, the emitted args select a hardware-accelerated encoder (`h264_videotoolbox` / `h264_qsv` / `h264_v4l2m2m`) and
  *                                 the matching filter pipeline. If `false`, the args fall back to the libx264 software encoder. Defaults to the resolved
  *                                 `FfmpegOptionsConfig.hardwareTranscoding` value on the owning `FfmpegOptions` instance.
- * @property height              - Output video height, in pixels.
+ * @property height              - Output video height, in pixels. The output fits inside this height and `width` together, keeping the source's aspect ratio, never
+ *                                 larger than the source, at even dimensions.
  * @property idrInterval         - Interval (in seconds) between keyframes (IDR frames).
  * @property inputCodec          - Optional. Codec of the source stream the pipeline decodes: `"av1"`, `"h264"`, or `"hevc"` (`"h265"` is accepted as an alias for
  *                                 `"hevc"`, and matching is case-insensitive). The host's hardware decoder takes only some codecs - AV1 needs Apple Silicon M3 or newer
@@ -165,7 +166,8 @@ export interface AudioEncoderOptions {
  *                                 run in system memory - the encoder's chain brings frames there ahead of them and hands their output on to a hardware encoder - so
  *                                 callers never reason about GPU residency. On VideoToolbox they move the whole chain onto the CPU, down to where the decoder hands
  *                                 its frames over, so pass `videoDecoder` this same options object. Omitted or empty means the chain is exactly the encoder's own.
- * @property width               - Output video width, in pixels.
+ * @property width               - Output video width, in pixels. The output fits inside this width and `height` together, keeping the source's aspect ratio, never
+ *                                 larger than the source, at even dimensions.
  *
  * @example
  *
@@ -244,8 +246,8 @@ interface HardwareStreamContext {
 }
 
 // Pure derivations that every encoder path - software livestream, software record, and each per-platform hardware handler - uses identically. Centralizing them in
-// module-scope functions prevents bitrate / buffer / keyframe math from drifting across platforms and keeps each caller a one-line interpolation rather than an inline
-// arithmetic expression.
+// module-scope functions prevents bitrate / buffer / keyframe / output-size math from drifting across platforms and keeps each caller a one-line interpolation rather
+// than an inline arithmetic expression.
 
 // `-g:v` value. HomeKit's idrInterval is expressed in seconds, so the GOP length in frames is (fps * idrInterval).
 function gopArg(options: VideoEncoderOptions): string {
@@ -270,6 +272,54 @@ function maxrateArg(options: VideoEncoderOptions): string {
 function bitrateArg(options: VideoEncoderOptions): string {
 
   return options.bitrate.toString() + "k";
+}
+
+/* The scaler filter of every transcode chain, rendered for the scaler that chain runs. The output fits inside the requested width and height, keeps the source's
+ * aspect ratio, is never larger than the source, and has even dimensions, so one request receives one size whichever chain serves it. The options carry the
+ * requested `height` and `width`, in pixels, and the `scaler` to render the rule for.
+ *
+ * The box is the request held to the source on each axis, which is what keeps every scaler from upscaling: a source already inside the request keeps its own size.
+ * The software scaler fits the source's aspect inside the box with its own options, keeps each dimension even as the chroma subsampling of every HomeKit stream
+ * needs, and lets FFmpeg infer the input and output color ranges rather than forcing a conversion. scale_vt has no aspect option, so each GPU scaler takes one shared
+ * rendering of FFmpeg's own decrease arithmetic written over iw and ih: the limiting axis takes the box, the other takes the source's aspect rounded to the nearest
+ * even pixel, and each is then held to the box and floored to even. That reproduces the software scaler's output to the pixel, so the CPU and GPU chains agree on
+ * every size. The expression uses no -2, so nothing rests on how a given FFmpeg build's vpp_qsv treats one. Quick Sync's rendering leads with the transfer format its
+ * chain fixes on the scaler.
+ */
+function fitScaler(options: Pick<VideoEncoderOptions, "height" | "width"> & { scaler: "scale" | "scale_vt" | "vpp_qsv" }): string {
+
+  const boxHeight = "min(ih\\," + options.height.toString() + ")";
+  const boxWidth = "min(iw\\," + options.width.toString() + ")";
+
+  // w=...:h=...                       The size each GPU scaler fits inside the box, by the decrease arithmetic above.
+  const gpuFit = [
+
+    "w=2*trunc(min(2*round(" + boxHeight + "*iw/ih/2)\\," + boxWidth + ")/2)",
+    "h=2*trunc(min(2*round(" + boxWidth + "*ih/iw/2)\\," + boxHeight + ")/2)"
+  ].join(":");
+
+  switch(options.scaler) {
+
+    case "scale":
+
+      return "scale=" + [
+
+        "w=" + boxWidth,
+        "h=" + boxHeight,
+        "force_original_aspect_ratio=decrease",
+        "force_divisible_by=2",
+        "in_range=auto",
+        "out_range=auto"
+      ].join(":");
+
+    case "scale_vt":
+
+      return "scale_vt=" + gpuFit;
+
+    case "vpp_qsv":
+
+      return "vpp_qsv=" + [ "format=" + GPU_TRANSFER_PIXEL_FORMAT, gpuFit ].join(":");
+  }
 }
 
 // The closed set of codecs this module's hardware decoder paths know how to emit args for. Carried as a discriminated string union so every handler downstream of
@@ -348,6 +398,9 @@ const GPU_TRANSFER_PIXEL_FORMAT = "nv12";
  *
  * // Generate crop filter string, if cropping is enabled.
  * const crop = ffmpegOpts.cropFilter;
+ *
+ * // Generate the scale filter that fits a frame inside a requested size, as every transcode chain here scales.
+ * const fit = ffmpegOpts.fitFilter({ height: 1080, width: 1920 });
  * ```
  *
  * @see AudioEncoderOptions
@@ -1087,6 +1140,26 @@ export class FfmpegOptions {
     ].join(":");
   }
 
+  /**
+   * Returns the FFmpeg scale filter string that fits a frame inside a requested width and height. The output keeps the source's aspect ratio, is never larger than the
+   * source, and has even dimensions. Every transcode chain this class builds scales by this same rule, so a consumer composing its own chain, such as a snapshot
+   * that follows `cropFilter` with it, receives the size a livestream or recording at that request would carry.
+   *
+   * @param size - The width and height, in pixels, the output fits inside. A caller may pass the `VideoEncoderOptions` it already holds.
+   * @returns The scale filter string for FFmpeg.
+   *
+   * @example
+   *
+   * ```ts
+   * // A filter chain that crops as configured and then fits the result inside 1920x1080.
+   * const filters = [ ffmpegOpts.cropFilter, ffmpegOpts.fitFilter({ height: 1080, width: 1920 }) ].join(", ");
+   * ```
+   */
+  public fitFilter(size: Pick<VideoEncoderOptions, "height" | "width">): string {
+
+    return fitScaler({ height: size.height, scaler: "scale", width: size.width });
+  }
+
   // Conditional splice of the crop filter into a larger filter chain: an array with the filter when cropping is enabled, an empty array otherwise. Both the software
   // (`defaultVideoEncoderOptions`) and hardware (`hardwareFilterChain`) paths inline this splice - centralizing it here keeps "do we emit a crop filter" a one-line
   // decision. Returning a readonly array so callers can only splice, not mutate.
@@ -1109,16 +1182,14 @@ export class FfmpegOptions {
    */
   #hardwareFilterChain(options: ResolvedVideoEncoderOptions): string[] {
 
-    // Determine the target dimensions for our scale operation. We maintain aspect ratio while ensuring the output doesn't exceed the requested height.
-    const targetHeight = options.height.toString();
     const upload = this.#getHardwareTransferFilters(options);
 
-    // Our default software scaler.
+    // Every scaler below fits the output inside the requested width and height by the one rule `fitScaler` states, so a request receives the same size whichever
+    // scaler the platform runs. This is our default software scaler.
     //
-    // scale=-2:min(ih\,height)          Scale the video to the size that's being requested while respecting aspect ratios and ensuring our final dimensions are
-    //                                   divisible by two.
+    // scale=w=...:h=...                 Fit the video inside the requested width and height, keeping its aspect ratio, never larger than the source, at even dimensions.
     // in_range/out_range=auto           Let FFmpeg infer the input and output color ranges rather than forcing a conversion.
-    const swScale = "scale=-2:min(ih\\, " + targetHeight + "):in_range=auto:out_range=auto";
+    const swScale = this.fitFilter(options);
 
     switch(this.#codecSupport.hostSystem) {
 
@@ -1129,8 +1200,8 @@ export class FfmpegOptions {
 
           // On macOS with FFmpeg 8.x, we can use the VideoToolbox scaler (scale_vt) which provides hardware-accelerated scaling. This is significantly more efficient
           // than software scaling and can handle higher throughput with lower CPU usage. Prior to FFmpeg 8.0, this would break under a variety of scenarios and was
-          // unreliable. scale_vt runs on the GPU and hands its output straight to the encoder.
-          return [ ...this.#cropFilterSegment, ...upload, "scale_vt=-2:min(ih\\, " + targetHeight + ")" ];
+          // unreliable. scale_vt runs on the GPU, fits the frame by the same rule as the software scaler, and hands its output straight to the encoder.
+          return [ ...this.#cropFilterSegment, ...upload, fitScaler({ height: options.height, scaler: "scale_vt", width: options.width }) ];
         }
 
         // The chain runs on the CPU. The decoder hands its frames over in system memory, we scale in software, the caller's filters follow, and on FFmpeg 8.x the
@@ -1149,12 +1220,12 @@ export class FfmpegOptions {
         //
         // format=nv12                   Hand the frames on in the transfer format, whatever the source's bit depth. The Quick Sync H.264 encoder takes only 8-bit
         //                               frames, and the download ahead of caller filters can only emit the format the scaler produced.
-        // w=...:h...                    Scale the video to the size that's being requested while respecting aspect ratios.
+        // w=...:h=...                   Fit the video inside the requested width and height, keeping its aspect ratio, never larger than the source, at even dimensions.
         return [
 
           ...this.#cropFilterSegment,
           ...upload,
-          "vpp_qsv=" + [ "format=" + GPU_TRANSFER_PIXEL_FORMAT, "w=min(iw\\, (iw / ih) * " + targetHeight + ")", "h=min(ih\\, " + targetHeight + ")" ].join(":"),
+          fitScaler({ height: options.height, scaler: "vpp_qsv", width: options.width }),
           ...(options.videoFilters.length ? [ "hwdownload", "format=" + GPU_TRANSFER_PIXEL_FORMAT ] : []),
           ...options.videoFilters
         ];
@@ -1178,11 +1249,12 @@ export class FfmpegOptions {
     //
     // crop=...                          Applied when `config.crop` is set. Uses relative iw/ih multipliers so the crop rectangle scales with source resolution;
     //                                   sized against the source frame and feeds the cropped region into the scaler so aspect-ratio math reflects the crop.
-    // scale=-2:min(ih\,height)          Scale to HomeKit's requested dimensions while respecting aspect ratios and ensuring final dimensions divisible by two.
+    // scale=w=...:h=...                 Fit the video inside HomeKit's requested width and height, keeping its aspect ratio, never larger than the source, at even
+    //                                   dimensions.
     const pixelFilters: string[] = [
 
       ...this.#cropFilterSegment,
-      "scale=-2:min(ih\\, " + options.height.toString() + "):in_range=auto:out_range=auto"
+      this.fitFilter(options)
     ];
 
     // Let's assemble our filter collection. If we're reducing our framerate, we want to frontload the fps filter so the downstream filters need to do less work. If we're
@@ -1208,8 +1280,8 @@ export class FfmpegOptions {
     //                                   HomeKit requests can carry. FFmpeg folds the conversion into the chain's scaler, so an 8-bit yuv420p source pays nothing for it.
     // -noautoscale                      Don't attempt to scale the video stream automatically.
     // -bf 0                             Disable B-frames when encoding to increase compatibility against occasionally finicky HomeKit clients.
-    // -filter:v                         Crop and scale the video to the size we want while respecting aspect ratios and ensuring our final dimensions are divisible
-    //                                   by two.
+    // -filter:v                         Crop the video and fit it inside the requested size, keeping its aspect ratio, never larger than the source, at even
+    //                                   dimensions.
     // -g:v                              Set the group of pictures to the number of frames per second * the interval in between keyframes to ensure a solid
     //                                   livestreaming experience.
     // -bufsize size                     This is the decoder buffer size, which drives the variability / quality of the output bitrate.

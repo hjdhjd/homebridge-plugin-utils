@@ -110,6 +110,13 @@ const BASE_ENCODER_OPTIONS: VideoEncoderOptions = {
 // memory. More than one entry, so the rows also lock in that the encoder joins them with ", ".
 const CALLER_VIDEO_FILTERS = [ "fps=30", "minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc" ];
 
+// Every chain's scaler for the canonical 1920x1080 request, written out literally so no row derives its expectation from the code it checks. The box is the request
+// held to the source on each axis, the software scaler fits the source's aspect inside it, and each GPU scaler takes the same arithmetic over iw and ih.
+const SCALE_1080P = "scale=w=min(iw\\,1920):h=min(ih\\,1080):force_original_aspect_ratio=decrease:force_divisible_by=2:in_range=auto:out_range=auto";
+const GPU_FIT_1080P = "w=2*trunc(min(2*round(min(ih\\,1080)*iw/ih/2)\\,min(iw\\,1920))/2):h=2*trunc(min(2*round(min(iw\\,1920)*ih/iw/2)\\,min(ih\\,1080))/2)";
+const SCALE_VT_1080P = "scale_vt=" + GPU_FIT_1080P;
+const VPP_QSV_1080P = "vpp_qsv=format=nv12:" + GPU_FIT_1080P;
+
 // Assert an ordered `-key value` pair is present in the args array. FFmpeg option parsing is strictly positional, so the key and value must appear adjacently.
 function assertHasArg(args: readonly string[], key: string, value?: string): void {
 
@@ -482,7 +489,7 @@ describe("FfmpegOptions - decoded frame residency", () => {
 
     assert.deepEqual(options.videoDecoder({ ...softwareEncode, inputCodec: "h264" }), [ "-hwaccel", "qsv", "-codec:v", "h264_qsv" ],
       "the decoder hands its frames over in system memory");
-    assert.equal(filterChain(options.streamEncoder(softwareEncode)), "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+    assert.equal(filterChain(options.streamEncoder(softwareEncode)), SCALE_1080P,
       "so the software chain runs on the CPU from its first filter, with no download");
   });
 
@@ -492,7 +499,7 @@ describe("FfmpegOptions - decoded frame residency", () => {
 
     assert.deepEqual(options.videoDecoder({ ...softwareEncode, inputCodec: "h264" }), [ "-hwaccel", "videotoolbox" ],
       "the decoder hands its frames over in system memory");
-    assert.equal(filterChain(options.streamEncoder(softwareEncode)), "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+    assert.equal(filterChain(options.streamEncoder(softwareEncode)), SCALE_1080P,
       "so the software chain runs on the CPU from its first filter, with no download");
   });
 
@@ -666,7 +673,7 @@ describe("FfmpegOptions - 10-bit sources", () => {
       "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
-      "-filter:v", "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+      "-filter:v", SCALE_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3000k",
@@ -789,7 +796,7 @@ describe("FfmpegOptions - 10-bit sources", () => {
                 if(framesOnGpu) {
 
                   assert.equal(chain.includes("hwupload"), false, "GPU frames are not uploaded: " + label);
-                  assert.equal(chain.includes("scale=-2"), false, "GPU frames never reach the software scaler: " + label);
+                  assert.equal(chain.includes("scale="), false, "GPU frames never reach the software scaler: " + label);
                 }
 
                 if(!decoderArgs.length && platformUploads) {
@@ -1224,7 +1231,7 @@ describe("FfmpegOptions - cropFilter", () => {
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
 
     const cropIdx = chain.indexOf("crop=w=iw*0.75");
-    const scaleIdx = chain.indexOf("scale=-2:min(ih");
+    const scaleIdx = chain.indexOf(SCALE_1080P);
 
     assert.equal(chain.includes("hwdownload"), false, "no download is needed ahead of crop - got " + chain);
     assert.equal(cropIdx, 0, "crop opens the chain so it operates on the frames the decoder handed over - got " + chain);
@@ -1238,7 +1245,7 @@ describe("FfmpegOptions - cropFilter", () => {
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
 
     const cropIdx = chain.indexOf("crop=w=iw*0.5");
-    const scaleIdx = chain.indexOf("scale=-2:min(ih");
+    const scaleIdx = chain.indexOf(SCALE_1080P);
 
     assert.ok(cropIdx >= 0, "expected crop in chain - got " + chain);
     assert.equal(chain.includes("hwdownload"), false, "no HW decode, so no download filter expected - got " + chain);
@@ -1274,7 +1281,7 @@ describe("FfmpegOptions - cropFilter", () => {
 
     assert.deepEqual(options.videoDecoder({ ...BASE_ENCODER_OPTIONS, inputCodec: "hevc" }), [ "-hwaccel", "videotoolbox" ],
       "the decoder hands its frames over in system memory");
-    assert.equal(filterChain(args), "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, format=nv12, hwupload, scale_vt=-2:min(ih\\, 1080)");
+    assert.equal(filterChain(args), "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, format=nv12, hwupload, " + SCALE_VT_1080P);
     assertHasArg(args, "-init_hw_device", "videotoolbox=hw");
     assertHasArg(args, "-filter_hw_device", "hw");
   });
@@ -1289,7 +1296,7 @@ describe("FfmpegOptions - cropFilter", () => {
 
     assert.deepEqual(options.videoDecoder({ ...BASE_ENCODER_OPTIONS, inputCodec: "hevc" }), [ "-hwaccel", "qsv", "-codec:v", "hevc_qsv" ],
       "the decoder hands its frames over in system memory");
-    assert.equal(filterChain(args), "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, hwupload, vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)");
+    assert.equal(filterChain(args), "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, hwupload, " + VPP_QSV_1080P);
     assertHasArg(args, "-init_hw_device", "qsv=hw");
     assertHasArg(args, "-filter_hw_device", "hw");
   });
@@ -1353,7 +1360,7 @@ describe("FfmpegOptions - scale filter per platform", () => {
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL);
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
 
-    assert.ok(chain.includes("scale_vt=-2:min(ih"), "macOS 8.x hardware path must use scale_vt - got " + chain);
+    assert.ok(chain.includes(SCALE_VT_1080P), "macOS 8.x hardware path must use scale_vt - got " + chain);
   });
 
   test("macOS.Apple pre-8.x hardware-transcode falls back to software scale", () => {
@@ -1362,7 +1369,7 @@ describe("FfmpegOptions - scale filter per platform", () => {
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
 
     assert.equal(chain.includes("scale_vt="), false, "pre-8.x macOS must not use scale_vt - got " + chain);
-    assert.ok(chain.includes("scale=-2:min(ih"), "pre-8.x macOS must fall back to software scale - got " + chain);
+    assert.ok(chain.includes(SCALE_1080P), "pre-8.x macOS must fall back to software scale - got " + chain);
   });
 
   test("macOS.Intel FFmpeg 8.x hardware-transcode uses scale_vt (same branch as Apple)", () => {
@@ -1370,7 +1377,7 @@ describe("FfmpegOptions - scale filter per platform", () => {
     const { options } = makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0", hostSystem: "macOS.Intel" }, HW_FULL);
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
 
-    assert.ok(chain.includes("scale_vt=-2:min(ih"), "Intel Mac 8.x must share the scale_vt branch with Apple Silicon - got " + chain);
+    assert.ok(chain.includes(SCALE_VT_1080P), "Intel Mac 8.x must share the scale_vt branch with Apple Silicon - got " + chain);
   });
 
   test("raspbian hardware-transcode uses software scale (v4l2m2m does not have a hardware scaler)", () => {
@@ -1380,7 +1387,7 @@ describe("FfmpegOptions - scale filter per platform", () => {
 
     assert.equal(chain.includes("scale_vt="), false);
     assert.equal(chain.includes("vpp_qsv="), false);
-    assert.ok(chain.includes("scale=-2:min(ih"), "RPi hardware path must use the software scale filter - got " + chain);
+    assert.ok(chain.includes(SCALE_1080P), "RPi hardware path must use the software scale filter - got " + chain);
   });
 
   test("generic QSV hardware-transcode uses vpp_qsv with format=nv12", () => {
@@ -1389,9 +1396,61 @@ describe("FfmpegOptions - scale filter per platform", () => {
     const chain = filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS));
 
     assert.ok(chain.includes("vpp_qsv=format=nv12"), "generic QSV hardware path must use vpp_qsv - got " + chain);
-    assert.ok(chain.includes("w=min(iw"), "vpp_qsv must carry the width scale expression");
-    assert.ok(chain.includes("h=min(ih"), "vpp_qsv must carry the height scale expression");
+    assert.ok(chain.includes(VPP_QSV_1080P), "vpp_qsv must carry the width and height of the fit rule - got " + chain);
   });
+});
+
+describe("FfmpegOptions - the fit rule (fitFilter and every chain's scaler)", () => {
+
+  // Every chain fits its output inside the requested width and height by one rule, and fitFilter hands a consumer that same rule as a scale filter. These rows read
+  // the rendering itself; the integration suite below reads the sizes real FFmpeg produces from it.
+
+  test("fitFilter renders the canonical request as the scaler the software chain carries", () => {
+
+    const { options } = makeOptions({ hostSystem: "generic" });
+
+    assert.equal(options.fitFilter({ height: 1080, width: 1920 }), SCALE_1080P);
+    assert.equal(filterChain(options.streamEncoder(BASE_ENCODER_OPTIONS)), SCALE_1080P, "the software chain scales by fitFilter's rule");
+  });
+
+  test("fitFilter writes a portrait request's width and height each into its own slot", () => {
+
+    const { options } = makeOptions({ hostSystem: "generic" });
+
+    assert.equal(options.fitFilter({ height: 1280, width: 960 }),
+      "scale=w=min(iw\\,960):h=min(ih\\,1280):force_original_aspect_ratio=decrease:force_divisible_by=2:in_range=auto:out_range=auto");
+  });
+
+  // A request whose width and height differ, so a box built from the wrong dimension shows as a missing or stray expression. Each chain names the scaler it must
+  // carry, so a row cannot pass on a chain other than the one it names.
+  const request: VideoEncoderOptions = { ...BASE_ENCODER_OPTIONS, height: 1080, width: 1280 };
+  const chains: { args: () => string[]; name: string; scaler: string }[] = [
+
+    { args: () => makeOptions({ hostSystem: "generic" }).options.streamEncoder(request), name: "the generic software chain", scaler: "scale=" },
+    { args: () => makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL).options.streamEncoder(request), name: "FFmpeg 8.x hardware on macOS",
+      scaler: "scale_vt=" },
+    { args: () => makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "7.1" }, HW_FULL).options.streamEncoder(request), name: "FFmpeg 7.1 hardware on macOS",
+      scaler: "scale=" },
+    { args: () => makeOptions({ ...VIDEOTOOLBOX_CODECS, ffmpegVersion: "8.0" }, HW_FULL).options.streamEncoder({ ...request, videoFilters: CALLER_VIDEO_FILTERS }),
+      name: "FFmpeg 8.x hardware on macOS with caller filters", scaler: "scale=" },
+    { args: () => makeOptions(RASPBIAN_CODECS, HW_FULL).options.streamEncoder(request), name: "Raspberry Pi hardware", scaler: "scale=" },
+    { args: () => makeOptions(QSV_CODECS, HW_TRANSCODE).options.streamEncoder(request), name: "Quick Sync hardware", scaler: "vpp_qsv=" },
+    { args: () => makeOptions(RASPBIAN_CODECS, HW_FULL).options.recordEncoder(request), name: "recordEncoder on the Raspberry Pi", scaler: "scale=" },
+    { args: () => makeOptions(QSV_CODECS, HW_TRANSCODE).options.recordEncoder(request), name: "recordEncoder on Quick Sync", scaler: "vpp_qsv=" }
+  ];
+
+  for(const { args, name, scaler } of chains) {
+
+    test("a 1280x1080 request bounds the width by 1280 and the height by 1080 on " + name, () => {
+
+      const chain = filterChain(args());
+
+      assert.ok(chain.includes(scaler), "expected the " + scaler + " scaler - got " + chain);
+      assert.ok(chain.includes("min(iw\\,1280)"), "the width box must read the requested width - got " + chain);
+      assert.ok(chain.includes("min(ih\\,1080)"), "the height box must read the requested height - got " + chain);
+      assert.equal(chain.includes("min(iw\\,1080)"), false, "the width box must never read the requested height - got " + chain);
+    });
+  }
 });
 
 describe("FfmpegOptions - maxSourcePixels", () => {
@@ -1604,7 +1663,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
-      "-filter:v", "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+      "-filter:v", SCALE_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1628,7 +1687,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
-      "-filter:v", "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+      "-filter:v", "crop=w=iw*0.5:h=ih*0.5:x=iw*0.25:y=ih*0.25, " + SCALE_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1649,7 +1708,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
-      "-filter:v", "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+      "-filter:v", SCALE_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1670,7 +1729,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "scale_vt=-2:min(ih\\, 1080)",
+      "-filter:v", SCALE_VT_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1693,7 +1752,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "format=nv12, hwupload, scale_vt=-2:min(ih\\, 1080)",
+      "-filter:v", "format=nv12, hwupload, " + SCALE_VT_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1714,7 +1773,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+      "-filter:v", SCALE_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1738,7 +1797,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+      "-filter:v", SCALE_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1763,7 +1822,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "format=nv12, hwupload, scale_vt=-2:min(ih\\, 1080)",
+      "-filter:v", "format=nv12, hwupload, " + SCALE_VT_1080P,
       "-b:v", "3000k",
       "-g:v", "60",
       "-bufsize", "6000k",
@@ -1784,7 +1843,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "scale_vt=-2:min(ih\\, 1080)",
+      "-filter:v", SCALE_VT_1080P,
       "-b:v", "3000k",
       "-g:v", "60",
       "-bufsize", "6000k",
@@ -1803,7 +1862,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-bf", "0",
       "-noautoscale",
       "-reset_timestamps", "1",
-      "-filter:v", "format=yuv420p, scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto",
+      "-filter:v", "format=yuv420p, " + SCALE_1080P,
       "-b:v", "3000k",
       "-g:v", "60",
       "-bufsize", "6000k",
@@ -1822,7 +1881,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)",
+      "-filter:v", VPP_QSV_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1841,7 +1900,7 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", "vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)",
+      "-filter:v", VPP_QSV_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3000k",
@@ -1914,18 +1973,15 @@ describe("FfmpegOptions - command-line snapshots (golden)", () => {
 describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filters)", () => {
 
   // Full-argv snapshots for the caller-filter boundary. Each row locks in the complete emission via deepEqual so a filter appended in the wrong position, a
-  // missing transfer, or a spurious one fails loudly. The platform scaler chains match the golden snapshots above. The caller filters follow the scaler and always
-  // run in system memory: after a download on Quick Sync, whose scaler hands its output over in the transfer format, and on VideoToolbox in a chain that runs on
-  // the CPU from the decoder onward and uploads at its tail.
-  const swScaleChain = "scale=-2:min(ih\\, 1080):in_range=auto:out_range=auto";
-  const scaleVtChain = "scale_vt=-2:min(ih\\, 1080)";
-  const vppQsvChain = "vpp_qsv=format=nv12:w=min(iw\\, (iw / ih) * 1080):h=min(ih\\, 1080)";
+  // missing transfer, or a spurious one fails loudly. The platform scalers are the same constants the golden snapshots above read. The caller filters follow the
+  // scaler and always run in system memory: after a download on Quick Sync, whose scaler hands its output over in the transfer format, and on VideoToolbox in a chain
+  // that runs on the CPU from the decoder onward and uploads at its tail.
 
   // The caller filters as the encoder appends them: the leading separator that joins them onto a non-empty chain, then the caller's filters comma-joined.
   const callerTail = ", " + CALLER_VIDEO_FILTERS.join(", ");
 
   // The VideoToolbox chain with caller filters: software scale, the caller's filters, and the upload that converts to the transfer format and closes the chain.
-  const vtCpuChain = swScaleChain + callerTail + ", format=nv12, hwupload";
+  const vtCpuChain = SCALE_1080P + callerTail + ", format=nv12, hwupload";
 
   test("software path appends the caller filters at the chain tail with a single separator", () => {
 
@@ -1940,7 +1996,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
-      "-filter:v", swScaleChain + callerTail,
+      "-filter:v", SCALE_1080P + callerTail,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -1962,7 +2018,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
-      "-filter:v", swScaleChain + callerTail,
+      "-filter:v", SCALE_1080P + callerTail,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -2012,7 +2068,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", swScaleChain + callerTail,
+      "-filter:v", SCALE_1080P + callerTail,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -2033,7 +2089,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", vppQsvChain + ", hwdownload, format=nv12" + callerTail,
+      "-filter:v", VPP_QSV_1080P + ", hwdownload, format=nv12" + callerTail,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -2054,7 +2110,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-bf", "0",
       "-noautoscale",
       "-reset_timestamps", "1",
-      "-filter:v", "format=yuv420p, " + swScaleChain + callerTail,
+      "-filter:v", "format=yuv420p, " + SCALE_1080P + callerTail,
       "-b:v", "3000k",
       "-g:v", "60",
       "-bufsize", "6000k",
@@ -2104,7 +2160,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
-      "-filter:v", swScaleChain + callerTail,
+      "-filter:v", SCALE_1080P + callerTail,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -2126,7 +2182,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", scaleVtChain,
+      "-filter:v", SCALE_VT_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -2147,7 +2203,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-level:v", "0",
       "-bf", "0",
       "-noautoscale",
-      "-filter:v", vppQsvChain,
+      "-filter:v", VPP_QSV_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -2170,7 +2226,7 @@ describe("FfmpegOptions - videoFilters boundary (caller-supplied CPU-side filter
       "-pix_fmt", "yuv420p",
       "-noautoscale",
       "-bf", "0",
-      "-filter:v", swScaleChain,
+      "-filter:v", SCALE_1080P,
       "-g:v", "60",
       "-bufsize", "6000k",
       "-maxrate", "3064k",
@@ -2516,7 +2572,8 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
 
         // eslint-disable-next-line no-await-in-loop
         const { stdout } = await execFileAsync(realCodecs.ffmpegExec, [ "-hide_banner", "-nostats", "-loglevel", "error", ...decoderArgs, "-i", file,
-          "-fps_mode", "vfr", "-frames:v", "1", "-q:v", "2", "-filter:v", "scale=320:180", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1" ], { encoding: "buffer" });
+          "-fps_mode", "vfr", "-frames:v", "1", "-q:v", "2", "-filter:v", options.fitFilter({ height: 180, width: 320 }), "-f", "image2pipe", "-c:v", "mjpeg",
+          "pipe:1" ], { encoding: "buffer" });
 
         assert.ok(stdout.length > 0, label + ": the snapshot must produce output");
         assert.deepEqual([ stdout[0], stdout[1] ], [ 0xFF, 0xD8 ], label + ": the output must open with the JPEG start-of-image marker");
@@ -2568,11 +2625,11 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
       await scratch[Symbol.asyncDispose]();
     });
 
-    // Encode each source through one pipeline description, its source codec included, and assert each result is 8-bit H.264 at the expected size - the sources scaled
-    // to the pipeline's height unless a row crops first. With an input and no output, FFmpeg prints the input's stream layout and exits non-zero, which is all the
-    // read-back needs, so the rejection is where the layout comes from.
+    // Encode each source through one pipeline description, its source codec included, and assert each result is 8-bit H.264 at the expected size - the sources fitted
+    // inside the pipeline's width and height unless a row crops first. With an input and no output, FFmpeg prints the input's stream layout and exits non-zero, which
+    // is all the read-back needs, so the rejection is where the layout comes from.
     //
-    // size                              The expected output dimensions. Defaults to the uncropped sources scaled to the pipeline's height.
+    // size                              The expected output dimensions. Defaults to the uncropped sources fitted inside the pipeline's width and height.
     // sources                           The sources to encode. Defaults to the 8-bit H.264 and 10-bit HEVC pair.
     const assertEightBitH264 = async (t: TestContext, options: FfmpegOptions, pipeline: VideoEncoderOptions,
       { size = "426x240", sources = SOURCES }: { size?: string; sources?: typeof SOURCES } = {}): Promise<void> => {
@@ -2662,6 +2719,37 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
       await assertEightBitH264(t, options, { ...PIPELINE, hardwareDecoding: false, videoFilters: CALLER_VIDEO_FILTERS });
     });
 
+    // Read the fit rule's output through real FFmpeg on libx264 from a software decode, then on VideoToolbox with the frames on the GPU and with caller filters
+    // running the chain on the CPU. The VideoToolbox paths are reported and passed over where this host cannot exercise them.
+    const assertFitsEveryPath = async (t: TestContext, pipeline: VideoEncoderOptions, size: string): Promise<void> => {
+
+      await assertEightBitH264(t, buildOptions({ hardwareDecoding: false, hardwareTranscoding: false }), pipeline, { size });
+
+      if(!hasVideoToolbox()) {
+
+        t.diagnostic("host does not advertise h264_videotoolbox / videotoolbox, so the VideoToolbox paths are not exercised");
+
+        return;
+      }
+
+      const options = buildOptions({ hardwareDecoding: true, hardwareTranscoding: true });
+
+      await assertEightBitH264(t, options, pipeline, { size });
+      await assertEightBitH264(t, options, { ...pipeline, videoFilters: CALLER_VIDEO_FILTERS }, { size });
+    };
+
+    test("a request narrower than the sources' aspect fits them to its width, on libx264 and VideoToolbox", async (t) => {
+
+      // A 320x240 request is narrower than the sources' 16:9 aspect, so the width limits the fit: 640x360 comes out 320x180, inside the request on each axis.
+      await assertFitsEveryPath(t, { ...PIPELINE, height: 240, width: 320 }, "320x180");
+    });
+
+    test("a request larger than the sources leaves them at their own size, on libx264 and VideoToolbox", async (t) => {
+
+      // A 1920x1080 request exceeds the 640x360 sources on each axis, and the box held to the source keeps every scaler from upscaling them.
+      await assertFitsEveryPath(t, { ...PIPELINE, height: 1080, width: 1920 }, "640x360");
+    });
+
     test("VideoToolbox decode and encode with a crop, which the chain cuts on frames in system memory (skipped when VideoToolbox is unavailable)", async (t) => {
 
       if(!hasVideoToolbox()) {
@@ -2671,7 +2759,7 @@ describe("FfmpegOptions integration (real ffmpeg binary)", { skip: !ffmpegIntegr
         return;
       }
 
-      // The centered quarter of each 640x360 source is 320x180, which is already under the requested height, so an honored crop comes out at 320x180. A crop lost on
+      // The centered quarter of each 640x360 source is 320x180, which already fits inside the requested size, so an honored crop comes out at 320x180. A crop lost on
       // GPU frames would leave the full frame to be scaled to 426x240 instead.
       const options = buildOptions({ crop: { height: 0.5, width: 0.5, x: 0.25, y: 0.25 }, hardwareDecoding: true, hardwareTranscoding: true });
 

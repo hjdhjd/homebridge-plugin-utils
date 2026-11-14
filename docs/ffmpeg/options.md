@@ -16,7 +16,7 @@ Key features:
 - Encapsulates all FFmpeg transcoding and streaming options (including bitrate, resolution, framerate, H.264 profiles/levels, and quality optimizations).
 - Detects and configures hardware-accelerated encoding and decoding (macOS VideoToolbox, Intel Quick Sync Video, and Raspberry Pi 4), falling back to software
   processing when required.
-- Dynamically generates the appropriate FFmpeg command-line arguments for livestreaming, HomeKit Secure Video (HKSV) event recording, and crop filters.
+- Dynamically generates the appropriate FFmpeg command-line arguments for livestreaming, HomeKit Secure Video (HKSV) event recording, and crop and fit filters.
 - Provides strong TypeScript types and interfaces for reliable integration and extensibility in Homebridge.
 
 This module is intended for plugin authors and advanced users who need precise, robust control over FFmpeg processing pipelines, with platform-aware optimizations and
@@ -54,6 +54,9 @@ const args = ffmpegOpts.streamEncoder(encoderOptions);
 
 // Generate crop filter string, if cropping is enabled.
 const crop = ffmpegOpts.cropFilter;
+
+// Generate the scale filter that fits a frame inside a requested size, as every transcode chain here scales.
+const fit = ffmpegOpts.fitFilter({ height: 1080, width: 1920 });
 ```
 
 #### See
@@ -198,6 +201,35 @@ Array of FFmpeg command-line arguments for audio encoding.
 
 ```ts
 const args = ffmpegOpts.audioEncoder();
+```
+
+##### fitFilter()
+
+```ts
+fitFilter(size): string;
+```
+
+Returns the FFmpeg scale filter string that fits a frame inside a requested width and height. The output keeps the source's aspect ratio, is never larger than the
+source, and has even dimensions. Every transcode chain this class builds scales by this same rule, so a consumer composing its own chain, such as a snapshot
+that follows `cropFilter` with it, receives the size a livestream or recording at that request would carry.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `size` | `Pick`\<[`VideoEncoderOptions`](#videoencoderoptions), `"height"` \| `"width"`\> | The width and height, in pixels, the output fits inside. A caller may pass the `VideoEncoderOptions` it already holds. |
+
+###### Returns
+
+`string`
+
+The scale filter string for FFmpeg.
+
+###### Example
+
+```ts
+// A filter chain that crops as configured and then fits the result inside 1920x1080.
+const filters = [ ffmpegOpts.cropFilter, ffmpegOpts.fitFilter({ height: 1080, width: 1920 }) ].join(", ");
 ```
 
 ##### hardwareEncodes()
@@ -460,7 +492,7 @@ const args = [ ...ffmpegOpts.videoDecoder(encoderOptions), ...ffmpegOpts.streamE
 | <a id="fps"></a> `fps` | `number` | Target output frames per second. |
 | <a id="hardwaredecoding-1"></a> `hardwareDecoding?` | `boolean` | Optional. If `true`, the pipeline decodes on hardware wherever the host's hardware decoder can take `inputCodec`, and in software where it cannot. Together with `hardwareTranscoding` it decides where the decoded frames live: a hardware decode feeding a hardware encode keeps them on the GPU, and a hardware decode feeding a software encode hands them over in system memory. Defaults to the resolved `FfmpegOptionsConfig.hardwareDecoding` value on the owning `FfmpegOptions` instance. |
 | <a id="hardwaretranscoding-1"></a> `hardwareTranscoding?` | `boolean` | Optional. If `true`, the emitted args select a hardware-accelerated encoder (`h264_videotoolbox` / `h264_qsv` / `h264_v4l2m2m`) and the matching filter pipeline. If `false`, the args fall back to the libx264 software encoder. Defaults to the resolved `FfmpegOptionsConfig.hardwareTranscoding` value on the owning `FfmpegOptions` instance. |
-| <a id="height"></a> `height` | `number` | Output video height, in pixels. |
+| <a id="height"></a> `height` | `number` | Output video height, in pixels. The output fits inside this height and `width` together, keeping the source's aspect ratio, never larger than the source, at even dimensions. |
 | <a id="idrinterval"></a> `idrInterval` | `number` | Interval (in seconds) between keyframes (IDR frames). |
 | <a id="inputcodec"></a> `inputCodec?` | `string` | Optional. Codec of the source stream the pipeline decodes: `"av1"`, `"h264"`, or `"hevc"` (`"h265"` is accepted as an alias for `"hevc"`, and matching is case-insensitive). The host's hardware decoder takes only some codecs - AV1 needs Apple Silicon M3 or newer with FFmpeg 8, or 11th-generation Intel silicon - and a source it cannot take, or a codec outside that list, decodes in software, so the encoder side needs the codec to know where the frames arrive. Defaults to `"h264"`. |
 | <a id="inputfps"></a> `inputFps` | `number` | Input (source) frames per second. |
@@ -468,7 +500,7 @@ const args = [ ...ffmpegOpts.videoDecoder(encoderOptions), ...ffmpegOpts.streamE
 | <a id="profile"></a> `profile` | `H264Profile` | H.264 profile for output. |
 | <a id="smartquality"></a> `smartQuality?` | `boolean` | Optional. Enables variable-bitrate quality-constrained encoding on encoders that support it - libx264 (`-crf 20`), Apple Silicon VideoToolbox (`-q:v 90`), and Intel QSV (`-global_quality 20`). Intel VideoToolbox and v4l2m2m have no quality-constraint mode and always emit a fixed `-b:v` regardless. In all cases, `smartQuality` also adds `HOMEKIT_STREAMING_HEADROOM` to `-maxrate`, giving the encoder a narrow band of variation above the target bitrate. Defaults to `true`. |
 | <a id="videofilters"></a> `videoFilters?` | readonly `string`[] | Optional. Caller-supplied CPU-side video filters, run in caller order after the encoder's own crop and scale filters. They always run in system memory - the encoder's chain brings frames there ahead of them and hands their output on to a hardware encoder - so callers never reason about GPU residency. On VideoToolbox they move the whole chain onto the CPU, down to where the decoder hands its frames over, so pass `videoDecoder` this same options object. Omitted or empty means the chain is exactly the encoder's own. |
-| <a id="width"></a> `width` | `number` | Output video width, in pixels. |
+| <a id="width"></a> `width` | `number` | Output video width, in pixels. The output fits inside this width and `height` together, keeping the source's aspect ratio, never larger than the source, at even dimensions. |
 
 ***
 

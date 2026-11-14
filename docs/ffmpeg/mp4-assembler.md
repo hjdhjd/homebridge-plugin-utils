@@ -44,7 +44,7 @@ await using assembler = new Mp4SegmentAssembler(ffmpegStdout, { segmentTimeout: 
 
 const initSegment = await assembler.initSegment;
 
-for await (const segment of assembler.segments()) {
+for await(const segment of assembler.segments()) {
 
   // Forward segment bytes to HomeKit.
 }

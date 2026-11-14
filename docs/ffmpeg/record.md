@@ -328,7 +328,7 @@ await using proc = new FfmpegLivestreamProcess(ffmpegOptions, {
 
 const init = await proc.getInitSegment();
 
-for await (const segment of proc.segments()) {
+for await(const segment of proc.segments()) {
 
   // Forward each media segment to the downstream consumer.
 }
@@ -657,7 +657,7 @@ await using proc = new FfmpegRecordingProcess(ffmpegOptions, {
 
 const init = await proc.getInitSegment();
 
-for await (const segment of proc.segments()) {
+for await(const segment of proc.segments()) {
 
   // Forward each media segment to HomeKit.
 }

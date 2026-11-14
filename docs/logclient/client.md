@@ -45,7 +45,7 @@ await using client = new HomebridgeLogClient({ credentials: { kind: "password", 
 
 await using stream = client.tail({ mode: "follow-history", quantity: 200 });
 
-for await (const record of stream) {
+for await(const record of stream) {
 
   process.stdout.write(record.raw + "\n");
 }
@@ -234,7 +234,7 @@ Construction-time options for [HomebridgeLogClient](#homebridgelogclient).
 
 A consumer-facing log stream: an async iterable of parsed [LogRecord](types.md#logrecord)s that is also [AsyncDisposable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose).
 
-Every [HomebridgeLogClient](#homebridgelogclient) channel returns one. Iterate it with `for await (const record of stream)`; dispose it with `await using stream = client.follow()` (or
+Every [HomebridgeLogClient](#homebridgelogclient) channel returns one. Iterate it with `for await(const record of stream)`; dispose it with `await using stream = client.follow()` (or
 an early `break`) to tear down the underlying transport with no leak. The two super-interfaces capture exactly that contract: it is iterable, and it cleans up after
 itself when the scope exits. A plain async generator satisfies it structurally - its `[Symbol.asyncIterator]` makes it iterable and its `[Symbol.asyncDispose]` (which
 delegates to the generator's `return()`, running the `finally` that disposes the per-call socket) makes it disposable.

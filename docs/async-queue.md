@@ -49,7 +49,7 @@ const lines = new AsyncQueue<string>({ highWaterMark: 10000 });
 socket.on("line", (line: string) => lines.push(line));
 
 // The consumer reads at its own pace, and the loop ends when the lifetime does - with everything staged before the abort already handed over.
-for await (const line of lines.drain(this.signal)) {
+for await(const line of lines.drain(this.signal)) {
 
   await render(line);
 }

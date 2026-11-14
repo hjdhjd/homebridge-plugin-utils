@@ -1806,7 +1806,7 @@ void superviseLoop({
 
   loop: async (signal) => {
 
-    for await (const event of client.observe(selector, { signal })) {
+    for await(const event of client.observe(selector, { signal })) {
 
       this.handle(event);
     }
@@ -1871,7 +1871,7 @@ import { loopFaultReporter, superviseStream } from "homebridge-plugin-utils";
 
 // A supervised poll whose values feed both HomeKit and MQTT. Tearing down `this.signal` ends the loop silently; any other failure is reported once and the stream
 // ends, so this `for await` never has to catch.
-for await (const reading of superviseStream({
+for await(const reading of superviseStream({
 
   onError: loopFaultReporter(this.log, "sensor"),
   signal: this.signal,

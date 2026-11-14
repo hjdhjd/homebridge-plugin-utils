@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.8.0 (2026-11-14)
+  * Improvement: FFmpeg pipelines scale a transcoded stream to fit inside the requested width and height, keeping its aspect ratio, and `fitFilter` gives your own filter chains the same rule.
+  * Improvement: a stream the hardware decoder can't open decodes in software from then on, still encoding on hardware, rather than failing every livestream and recording. Call `resetHardwareDecoderRefusal()` when your source's resolution or codec changes.
+  * Improvement: the shared ESLint preset's own `@hjdhjd/array-bracket-spacing` replaces the stylistic rule that `@stylistic/eslint-plugin` 6 deprecates, with the same findings. On stylistic 6, write `for await(` the way you write `for(`.
+  * Housekeeping.
+
 ## 2.7.4 (2026-11-07)
   * Fix: in the feature options reference, an option that starts with no value - an API key, say, or a list that starts empty - reads simply "none" as its default, rather than "disabled, none when enabled", which says the same thing twice. Re-run `prepare-docs` when you rebuild against this release.
   * Housekeeping.

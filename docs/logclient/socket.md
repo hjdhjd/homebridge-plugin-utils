@@ -53,7 +53,7 @@ await using socket = new LogSocket({
   signal: session.signal
 });
 
-for await (const line of socket.stdout()) {
+for await(const line of socket.stdout()) {
 
   process.stdout.write(line + "\n");
 }

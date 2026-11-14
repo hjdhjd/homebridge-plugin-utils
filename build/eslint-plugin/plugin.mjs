@@ -3,6 +3,7 @@
  * plugin.mjs: The `@hjdhjd` ESLint plugin object - meta block plus the rule registry.
  */
 import packageJson from "../../package.json" with { type: "json" };
+import ruleArrayBracketSpacing from "./rules/array-bracket-spacing.mjs";
 import ruleBlankAfterOpenBrace from "./rules/blank-line-after-open-brace.mjs";
 import ruleCommentStyle from "./rules/comment-style.mjs";
 import ruleEnforceNodeProtocol from "./rules/enforce-node-protocol.mjs";
@@ -38,6 +39,7 @@ const plugin = {
   },
   rules: {
 
+    "array-bracket-spacing": ruleArrayBracketSpacing,
     "blank-line-after-open-brace": ruleBlankAfterOpenBrace,
     "comment-style": ruleCommentStyle,
     "enforce-node-protocol": ruleEnforceNodeProtocol,

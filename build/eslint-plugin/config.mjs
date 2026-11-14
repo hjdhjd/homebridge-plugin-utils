@@ -117,6 +117,7 @@ const jsRules = {
  */
 const commonRules = {
 
+  "@hjdhjd/array-bracket-spacing": "warn",
   "@hjdhjd/blank-line-after-open-brace": "warn",
   "@hjdhjd/comment-style": "error",
   "@hjdhjd/enforce-node-protocol": "warn",
@@ -125,7 +126,6 @@ const commonRules = {
   "@hjdhjd/no-numeric-separators": "warn",
   "@hjdhjd/paren-comparisons-in-logical": "warn",
   "@hjdhjd/split-type-imports": "warn",
-  "@stylistic/array-bracket-spacing": [ "warn", "always", { "arraysInArrays": true, "objectsInArrays": true, "singleValue": false } ],
   "@stylistic/block-spacing": "warn",
   "@stylistic/brace-style": [ "warn", "1tbs", { "allowSingleLine": true } ],
   "@stylistic/comma-dangle": "warn",

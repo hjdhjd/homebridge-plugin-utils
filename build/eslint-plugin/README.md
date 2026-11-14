@@ -58,6 +58,8 @@ build/eslint-plugin/
 ├── config.mjs                                      # opinionated flat-config builder and rule presets
 ├── test-setup.mjs                                  # shared RuleTester scaffold for the rule test suites
 └── rules/
+    ├── array-bracket-spacing.mjs                   # @hjdhjd/array-bracket-spacing
+    ├── array-bracket-spacing.test.mjs              # co-located RuleTester suite
     ├── blank-line-after-open-brace.mjs             # @hjdhjd/blank-line-after-open-brace
     ├── blank-line-after-open-brace.test.mjs        # co-located RuleTester suite
     ├── comment-style.mjs                           # @hjdhjd/comment-style
@@ -107,6 +109,7 @@ Each rule is described in detail by its own file's header comment. One-line summ
 
 | Rule | Purpose |
 |---|---|
+| `@hjdhjd/array-bracket-spacing` | Require a space inside array brackets, except around a single element: `[ a, b ]` but `[a]`. Covers array expressions and destructuring patterns, a hole counting as an element; checks a bracket only against a neighbor on its own line, leaves empty arrays alone, and keeps any comment beside a bracket when it fixes the spacing. |
 | `@hjdhjd/blank-line-after-open-brace` | Require a blank line after an opening brace when the brace is followed by a newline and the next line carries non-whitespace content. Covers block statements, class bodies, object expressions, and TypeScript interface/type-literal bodies. |
 | `@hjdhjd/comment-style` | Enforce ASCII-first comment style. Substitutes Unicode arrows/comparison glyphs/em-dash with ASCII equivalents, removes decorative banner separators, and strips characters from the Unicode Box Drawing block. |
 | `@hjdhjd/enforce-node-protocol` | Require the `node:` protocol prefix on every reference to a Node.js built-in module. |

@@ -47,7 +47,7 @@ import { timeWindow } from "./time-window.ts";
 /**
  * A consumer-facing log stream: an async iterable of parsed {@link LogRecord}s that is also {@link AsyncDisposable}.
  *
- * Every {@link HomebridgeLogClient} channel returns one. Iterate it with `for await (const record of stream)`; dispose it with `await using stream = client.follow()` (or
+ * Every {@link HomebridgeLogClient} channel returns one. Iterate it with `for await(const record of stream)`; dispose it with `await using stream = client.follow()` (or
  * an early `break`) to tear down the underlying transport with no leak. The two super-interfaces capture exactly that contract: it is iterable, and it cleans up after
  * itself when the scope exits. A plain async generator satisfies it structurally - its `[Symbol.asyncIterator]` makes it iterable and its `[Symbol.asyncDispose]` (which
  * delegates to the generator's `return()`, running the `finally` that disposes the per-call socket) makes it disposable.
@@ -147,7 +147,7 @@ interface WindowRequest {
  *
  * await using stream = client.tail({ mode: "follow-history", quantity: 200 });
  *
- * for await (const record of stream) {
+ * for await(const record of stream) {
  *
  *   process.stdout.write(record.raw + "\n");
  * }
@@ -414,7 +414,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
     const gate = new SeedGate(SEED_GATE_MAX_SKIP);
 
-    for await (const line of socket.stdout()) {
+    for await(const line of socket.stdout()) {
 
       if(gate.admit(line)) {
 
@@ -431,7 +431,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
     try {
 
-      for await (const line of this.#gatedStdout(socket)) {
+      for await(const line of this.#gatedStdout(socket)) {
 
         yield parseLogLine(line);
       }
@@ -918,7 +918,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
     const all: LogRecord[] = [];
 
-    for await (const record of records) {
+    for await(const record of records) {
 
       all.push(record);
     }
@@ -933,7 +933,7 @@ export class HomebridgeLogClient implements AsyncDisposable {
 
     const token = await this.#tokenProvider(callSignal);
 
-    for await (const line of downloadLog({ clock: this.#clock, fetch: this.#fetch, host: this.#host, port: this.#port, signal: callSignal, tls: this.#tls, token })) {
+    for await(const line of downloadLog({ clock: this.#clock, fetch: this.#fetch, host: this.#host, port: this.#port, signal: callSignal, tls: this.#tls, token })) {
 
       yield parseLogLine(line);
     }

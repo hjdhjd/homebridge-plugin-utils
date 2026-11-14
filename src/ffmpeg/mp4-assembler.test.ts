@@ -147,7 +147,7 @@ describe("Mp4SegmentAssembler - media segments generator", () => {
 
     const segments: Buffer[] = [];
 
-    for await (const segment of assembler.segments()) {
+    for await(const segment of assembler.segments()) {
 
       segments.push(segment);
     }
@@ -230,7 +230,7 @@ describe("Mp4SegmentAssembler - signal-aware termination", () => {
 
     const segments: Buffer[] = [];
 
-    for await (const segment of assembler.segments()) {
+    for await(const segment of assembler.segments()) {
 
       segments.push(segment);
     }
@@ -626,7 +626,7 @@ describe("Mp4SegmentAssembler - kind-tagged stream", () => {
 
     const collected: Mp4Segment[] = [];
 
-    for await (const item of assembler.stream()) {
+    for await(const item of assembler.stream()) {
 
       collected.push({ bytes: item.bytes, kind: item.kind });
     }

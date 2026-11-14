@@ -118,7 +118,7 @@ describe("TestLogSocket", () => {
 
     const consumer = (async (): Promise<void> => {
 
-      for await (const line of socket.stdout()) {
+      for await(const line of socket.stdout()) {
 
         collected.push(line);
 
@@ -177,7 +177,7 @@ describe("TestLogSocket", () => {
 
     const collected: string[] = [];
 
-    for await (const line of socket.stdout()) {
+    for await(const line of socket.stdout()) {
 
       collected.push(line);
     }

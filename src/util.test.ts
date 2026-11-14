@@ -1420,7 +1420,7 @@ describe("superviseStream", () => {
 
     const received: T[] = [];
 
-    for await (const value of stream) {
+    for await(const value of stream) {
 
       received.push(value);
     }
@@ -1589,7 +1589,7 @@ describe("superviseStream", () => {
       }
     });
 
-    for await (const value of stream) {
+    for await(const value of stream) {
 
       assert.equal(value, 1);
 

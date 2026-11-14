@@ -52,7 +52,7 @@ async function windowed(records: readonly LogRecord[], bounds: { since: Nullable
 
   const kept: string[] = [];
 
-  for await (const record of timeWindow(fromArray(records), bounds)) {
+  for await(const record of timeWindow(fromArray(records), bounds)) {
 
     kept.push(record.message);
   }

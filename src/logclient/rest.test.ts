@@ -44,7 +44,7 @@ async function collect(options: DownloadLogOptions): Promise<string[]> {
 
   const lines: string[] = [];
 
-  for await (const line of downloadLog(options)) {
+  for await(const line of downloadLog(options)) {
 
     lines.push(line);
   }
@@ -385,7 +385,7 @@ describe("downloadLog - abort", () => {
 
     await assert.rejects((async (): Promise<void> => {
 
-      for await (const line of downloadLog({ ...TARGET, fetch, signal: controller.signal })) {
+      for await(const line of downloadLog({ ...TARGET, fetch, signal: controller.signal })) {
 
         lines.push(line);
       }

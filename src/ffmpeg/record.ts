@@ -816,7 +816,7 @@ export interface RecordingProcessFactory {
  *
  * const init = await proc.getInitSegment();
  *
- * for await (const segment of proc.segments()) {
+ * for await(const segment of proc.segments()) {
  *
  *   // Forward each media segment to HomeKit.
  * }
@@ -974,7 +974,7 @@ export interface LivestreamProcessFactory {
  *
  * const init = await proc.getInitSegment();
  *
- * for await (const segment of proc.segments()) {
+ * for await(const segment of proc.segments()) {
  *
  *   // Forward each media segment to the downstream consumer.
  * }

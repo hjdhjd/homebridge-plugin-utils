@@ -154,7 +154,7 @@ describe("AsyncQueue - the signal that ends a read", () => {
 
     const first: string[] = [];
 
-    for await (const item of queue.drain(controller.signal)) {
+    for await(const item of queue.drain(controller.signal)) {
 
       first.push(item);
     }
@@ -165,7 +165,7 @@ describe("AsyncQueue - the signal that ends a read", () => {
 
     const second: string[] = [];
 
-    for await (const item of queue.drain(controller.signal)) {
+    for await(const item of queue.drain(controller.signal)) {
 
       second.push(item);
     }
@@ -193,7 +193,7 @@ describe("AsyncQueue - the high-water mark", () => {
 
     const survivors: string[] = [];
 
-    for await (const item of queue.drain(controller.signal)) {
+    for await(const item of queue.drain(controller.signal)) {
 
       survivors.push(item);
     }
@@ -243,7 +243,7 @@ describe("AsyncQueue - the high-water mark", () => {
 
     const survivors: string[] = [];
 
-    for await (const item of queue.drain(controller.signal)) {
+    for await(const item of queue.drain(controller.signal)) {
 
       survivors.push(item);
     }

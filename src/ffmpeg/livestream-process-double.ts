@@ -229,7 +229,7 @@ export class TestLivestreamProcess implements LivestreamProcess {
 
     yield { bytes: initBytes, kind: "init" };
 
-    for await (const segment of this.segments(init)) {
+    for await(const segment of this.segments(init)) {
 
       yield { bytes: segment, kind: "media" };
     }

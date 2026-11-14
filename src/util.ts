@@ -1512,7 +1512,7 @@ export async function takeLast<T>(source: AsyncIterable<T>, n: number): Promise<
   let count = 0;
   let write = 0;
 
-  for await (const value of source) {
+  for await(const value of source) {
 
     ring[write] = value;
     write = (write + 1) % n;
@@ -1629,7 +1629,7 @@ export function composeSignals(...signals: (AbortSignal | undefined)[]): AbortSi
  *
  *   loop: async (signal) => {
  *
- *     for await (const event of client.observe(selector, { signal })) {
+ *     for await(const event of client.observe(selector, { signal })) {
  *
  *       this.handle(event);
  *     }
@@ -1747,7 +1747,7 @@ export function loopFaultReporter(log: HomebridgePluginLogging, label: string): 
  *
  * // A supervised poll whose values feed both HomeKit and MQTT. Tearing down `this.signal` ends the loop silently; any other failure is reported once and the stream
  * // ends, so this `for await` never has to catch.
- * for await (const reading of superviseStream({
+ * for await(const reading of superviseStream({
  *
  *   onError: loopFaultReporter(this.log, "sensor"),
  *   signal: this.signal,
@@ -1778,7 +1778,7 @@ export async function *superviseStream<T>(options: { onError: (error: unknown) =
 
     // `source` is invoked inside the try, not merely awaited there, so a factory that throws before it ever returns an iterable is supervised exactly like one that
     // fails mid-stream. A consumer that stops early unwinds through this `for await`, which drives the source iterator's own return path and its `finally`.
-    for await (const value of source(signal)) {
+    for await(const value of source(signal)) {
 
       yield value;
     }

@@ -55,7 +55,7 @@ describe("TestRecordingProcess - configured init and media segments", () => {
 
     const collected: Buffer[] = [];
 
-    for await (const segment of proc.segments()) {
+    for await(const segment of proc.segments()) {
 
       collected.push(segment);
     }
@@ -71,7 +71,7 @@ describe("TestRecordingProcess - configured init and media segments", () => {
 
     const collected: { bytes: Buffer; kind: string }[] = [];
 
-    for await (const item of proc.stream()) {
+    for await(const item of proc.stream()) {
 
       collected.push({ bytes: item.bytes, kind: item.kind });
     }
@@ -88,7 +88,7 @@ describe("TestRecordingProcess - configured init and media segments", () => {
 
     const collected: unknown[] = [];
 
-    for await (const item of proc.stream()) {
+    for await(const item of proc.stream()) {
 
       collected.push(item);
     }
@@ -120,7 +120,7 @@ describe("TestRecordingProcess - configured init and media segments", () => {
 
     const collected: Buffer[] = [];
 
-    for await (const segment of proc.segments()) {
+    for await(const segment of proc.segments()) {
 
       collected.push(segment);
     }
@@ -197,7 +197,7 @@ describe("TestRecordingProcess - segments() terminates on either signal", () => 
 
     const collected: Buffer[] = [];
 
-    for await (const segment of proc.segments()) {
+    for await(const segment of proc.segments()) {
 
       collected.push(segment);
 
@@ -216,7 +216,7 @@ describe("TestRecordingProcess - segments() terminates on either signal", () => 
     const controller = new AbortController();
     const collected: Buffer[] = [];
 
-    for await (const segment of proc.segments({ signal: controller.signal })) {
+    for await(const segment of proc.segments({ signal: controller.signal })) {
 
       collected.push(segment);
 

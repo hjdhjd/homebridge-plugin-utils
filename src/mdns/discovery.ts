@@ -114,7 +114,7 @@ export interface MdnsDiscovery<T> extends AsyncIterable<MdnsDiscoveryEvent<T>>, 
  *   signal: this.signal
  * });
  *
- * for await (const event of discovery) {
+ * for await(const event of discovery) {
  *
  *   this.log.info("%s: %s.", event.kind, event.device.mac);
  * }

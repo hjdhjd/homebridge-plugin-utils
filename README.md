@@ -113,7 +113,7 @@ await using client = new HomebridgeLogClient({ credentials: { kind: "password", 
 
 await using stream = client.tail({ mode: "follow-history", quantity: 200 });
 
-for await (const record of stream) {
+for await(const record of stream) {
 
   process.stdout.write(record.raw + "\n");
 }

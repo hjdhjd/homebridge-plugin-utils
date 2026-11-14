@@ -139,7 +139,7 @@ describe("LogSocket - stdout routing", () => {
 
       const collected: string[] = [];
 
-      for await (const line of socket.stdout()) {
+      for await(const line of socket.stdout()) {
 
         collected.push(line);
 
@@ -178,7 +178,7 @@ describe("LogSocket - stdout routing", () => {
 
       const collected: string[] = [];
 
-      for await (const line of socket.stdout()) {
+      for await(const line of socket.stdout()) {
 
         collected.push(line);
 
@@ -677,7 +677,7 @@ describe("LogSocket - teardown and abort", () => {
 
       // The stdout generator must terminate (return) when the socket aborts mid-stream.
 
-      for await (const _line of socket.stdout()) {
+      for await(const _line of socket.stdout()) {
 
         // No lines are delivered in this test; the loop exists only to observe termination on abort.
       }
@@ -760,7 +760,7 @@ describe("LogSocket - teardown and abort", () => {
 
     const lines: string[] = [];
 
-    for await (const line of socket.stdout()) {
+    for await(const line of socket.stdout()) {
 
       lines.push(line);
     }
@@ -769,7 +769,7 @@ describe("LogSocket - teardown and abort", () => {
 
     const afterwards: string[] = [];
 
-    for await (const line of socket.stdout()) {
+    for await(const line of socket.stdout()) {
 
       afterwards.push(line);
     }
@@ -895,7 +895,7 @@ describe("LogSocket - bounded stdout queue", () => {
     // Drain what remains; the most recent three lines must survive.
     const remaining: string[] = [];
 
-    for await (const line of socket.stdout()) {
+    for await(const line of socket.stdout()) {
 
       remaining.push(line);
 
@@ -963,7 +963,7 @@ describe("LogSocket - pre-aborted construction", () => {
     // The stdout stream must terminate immediately on a pre-aborted socket rather than hanging.
     const lines: string[] = [];
 
-    for await (const line of socket.stdout()) {
+    for await(const line of socket.stdout()) {
 
       lines.push(line);
     }
@@ -1071,7 +1071,7 @@ describe("LogSocket - the production dial", () => {
 
     const first = await (async (): Promise<string | undefined> => {
 
-      for await (const line of socket.stdout()) {
+      for await(const line of socket.stdout()) {
 
         return line;
       }
@@ -1097,7 +1097,7 @@ describe("LogSocket - the production dial", () => {
     });
 
     // The first line is the session streaming, so the reset lands on a stream rather than on its handshake.
-    for await (const line of socket.stdout()) {
+    for await(const line of socket.stdout()) {
 
       assert.equal(line, UPGRADE_PEER_LINE);
 
@@ -1121,7 +1121,7 @@ describe("LogSocket - the production dial", () => {
 
     const first = await (async (): Promise<string | undefined> => {
 
-      for await (const line of socket.stdout()) {
+      for await(const line of socket.stdout()) {
 
         return line;
       }

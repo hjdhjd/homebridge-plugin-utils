@@ -29,7 +29,7 @@ async function collect(stream: AsyncIterable<LogRecord>, limit?: number): Promis
 
   const records: LogRecord[] = [];
 
-  for await (const record of stream) {
+  for await(const record of stream) {
 
     records.push(record);
 
@@ -474,7 +474,7 @@ describe("HomebridgeLogClient - token lifecycle", () => {
     // Iterate the follow stream to completion. If the remediation regressed (infinite reconnect), this would never resolve; the terminal abort is what lets it return.
     const followDone = (async (): Promise<void> => {
 
-      for await (const _record of client.follow()) {
+      for await(const _record of client.follow()) {
 
         // No records are delivered; the loop exists only to observe that the stream terminates when the socket aborts terminally.
       }

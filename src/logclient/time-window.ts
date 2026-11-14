@@ -48,7 +48,7 @@ export async function *timeWindow(source: AsyncIterable<LogRecord>, bounds: { si
   // The carried epoch of the most recent record that parsed to an instant. A null-epoch line inherits this so it is kept iff its parent is.
   let carried: Nullable<number> = null;
 
-  for await (const record of source) {
+  for await(const record of source) {
 
     // Derive the epoch on demand; a null timestamp (or an unrecognized format) yields null and the record falls back to the carried parent instant.
     const epoch = (record.timestamp !== null) ? parseLogTimestamp(record.timestamp) : null;

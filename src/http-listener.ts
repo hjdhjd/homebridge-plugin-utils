@@ -493,7 +493,7 @@ export class HttpListener implements AsyncDisposable {
       // `chunk` without a cast, and the runtime yields buffers because a request stream is never in object mode.
       const body: AsyncIterable<Buffer> = request;
 
-      for await (const chunk of body) {
+      for await(const chunk of body) {
 
         length += chunk.length;
 

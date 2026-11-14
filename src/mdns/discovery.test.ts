@@ -235,7 +235,7 @@ describe("discoverServices - lifetime", () => {
 
       const reading = (async (): Promise<void> => {
 
-        for await (const event of devices) {
+        for await(const event of devices) {
 
           seen.push(event.kind);
         }
@@ -285,7 +285,7 @@ describe("discoverServices - lifetime", () => {
       const seen: string[] = [];
       const reading = (async (): Promise<void> => {
 
-        for await (const event of devices) {
+        for await(const event of devices) {
 
           seen.push(event.kind);
         }
@@ -313,7 +313,7 @@ describe("discoverServices - lifetime", () => {
 
     browser.found(service({ instance: "First" }));
 
-    for await (const event of devices) {
+    for await(const event of devices) {
 
       seen.push(event.kind);
 
@@ -324,7 +324,7 @@ describe("discoverServices - lifetime", () => {
     browser.found(service({ instance: "Second", strings: ["mac=001122334455"] }));
     assert.equal(devices.devices.size, 2);
 
-    for await (const event of devices) {
+    for await(const event of devices) {
 
       seen.push(event.kind);
     }
@@ -342,7 +342,7 @@ describe("discoverServices - lifetime", () => {
     browser.found(service({ instance: "Second", strings: ["mac=001122334455"] }));
     assert.equal(devices.devices.size, 2);
 
-    for await (const event of devices) {
+    for await(const event of devices) {
 
       seen.push(event.kind);
 
@@ -353,7 +353,7 @@ describe("discoverServices - lifetime", () => {
 
     // The consumer's one iteration ended on that break, and the event it never reached is not what a later loop is given: the stream is read once, and the
     // snapshot is where the rest of what the browser said lives.
-    for await (const event of devices) {
+    for await(const event of devices) {
 
       seen.push(event.kind);
     }

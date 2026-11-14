@@ -214,7 +214,7 @@ describe("FfmpegRecordingProcess - initialization segment and media segments", (
 
     const collected: Buffer[] = [];
 
-    for await (const segment of proc.segments()) {
+    for await(const segment of proc.segments()) {
 
       collected.push(segment);
     }
@@ -241,7 +241,7 @@ describe("FfmpegRecordingProcess - initialization segment and media segments", (
     const mediaSegments: Buffer[] = [];
     let initBytes: Buffer | undefined;
 
-    for await (const item of proc.stream()) {
+    for await(const item of proc.stream()) {
 
       kinds.push(item.kind);
 
@@ -424,7 +424,7 @@ describe("FfmpegLivestreamProcess - init segment and media segments", () => {
 
     const collected: Buffer[] = [];
 
-    for await (const segment of proc.segments()) {
+    for await(const segment of proc.segments()) {
 
       collected.push(segment);
     }

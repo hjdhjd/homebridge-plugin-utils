@@ -95,7 +95,7 @@ export interface Mp4Segment {
  *
  * const initSegment = await assembler.initSegment;
  *
- * for await (const segment of assembler.segments()) {
+ * for await(const segment of assembler.segments()) {
  *
  *   // Forward segment bytes to HomeKit.
  * }
@@ -343,7 +343,7 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
     // one place rather than being reimplemented here.
     yield { bytes: initBytes, kind: "init" };
 
-    for await (const segment of this.segments(init)) {
+    for await(const segment of this.segments(init)) {
 
       yield { bytes: segment, kind: "media" };
     }
@@ -375,7 +375,7 @@ export class Mp4SegmentAssembler implements AsyncDisposable {
       // typing stays explicit. The `{ signal }` option wires abort-driven termination into the iterator directly - when the signal fires, the iterator rejects its next
       // call with the signal's reason. `events.on` also listens to the source's `"error"` events internally and rejects the iterator with the emitted error; the catch
       // block below classifies both exit paths.
-      for await (const eventArgs of on(this.#source, "data", { signal: this.signal })) {
+      for await(const eventArgs of on(this.#source, "data", { signal: this.signal })) {
 
         const [chunk] = eventArgs as [Buffer];
 

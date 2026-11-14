@@ -836,7 +836,7 @@ async function streamRecords(state: StreamRecordsState): Promise<number> {
 
     // Stream the selected channel's records directly. Time-bounded selection lives in the engine's `window` channel (it alone holds the merged seed/download instant the
     // coverage gate and the snapshot horizon need); the CLI owns only the content filtering below.
-    for await (const record of stream) {
+    for await(const record of stream) {
 
       received = true;
       lastTimestamp = record.timestamp ?? lastTimestamp;

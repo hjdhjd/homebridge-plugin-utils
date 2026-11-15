@@ -6,7 +6,7 @@
  * resolves. Specifiers are read from the TypeScript parser rather than matched out of the source text, so every form a runtime edge can take arrives as a node
  * and a form nobody anticipated fails by exclusion rather than slipping past an enumeration. Beside it stands the load rule - that every script dist/ui/ ships,
  * the compiled modules BROWSER_MODULES names and the hand-written scripts alike, loads in JavaScriptCore, Safari's engine, wherever macOS provides its shell, and
- * the naming module answers there exactly as it does in V8.
+ * the naming module answers there as it does in V8 wherever the engines' Unicode property data agrees.
  */
 import { UI_OUTPUT, UI_SOURCE } from "./build-paths.mjs";
 import { after, describe, test } from "node:test";
@@ -285,31 +285,21 @@ function browserCompilerOptions() {
 }
 
 /**
- * Reduce the naming module's answers for every Unicode scalar value to a run-length digest: one series per placement, each a list of `[codePoint, answer]` pairs
- * marking where the answer changes. The validator's answer is 1 or 0, and the sanitizer's is its output with the character marked, which keeps the runs long while
- * still telling apart every output the character could produce. The digest is exact, so the digests of JavaScriptCore and V8 match only when every answer does.
+ * Sweep every Unicode scalar value through each answer and reduce what each one answers to a run-length series: a list of `[codePoint, answer]` pairs marking
+ * where the answer changes, so a series holds its answer from one pair's code point up to the next. Every digest the parity row compares is built on this one
+ * sweep, which is what keeps their series aligned code point for code point.
  *
- * The parity row runs this in JavaScriptCore and in V8, reaching JavaScriptCore as its own source text inside the probe, so it reads nothing from outside its
- * parameter.
+ * The parity row runs this in JavaScriptCore and in V8, reaching JavaScriptCore as source text the probe carries beside the digests that call it, so it reads
+ * nothing from outside its parameter.
  *
- * @param {object} module
- * @param {(name: string) => string} module.sanitizeName - The naming module's sanitizer.
- * @param {(name: string) => boolean} module.validateName - The naming module's validator.
+ * @param {[string, (character: string) => number | string][]} answers - Each series' name, with what it answers for a character holding one scalar value.
  *
- * @returns {Record<string, [number, number | string][]>} The digest, keyed by placement.
+ * @returns {Record<string, [number, number | string][]>} One series per answer, keyed by its name.
  */
-function namingDigest({ sanitizeName, validateName }) {
+function scalarDigest(answers) {
 
-  const MARKER = "\u0001";
-  const placements = [
-    [ "validateName with the character alone", (character) => validateName(character) ? 1 : 0 ],
-    [ "validateName with the character between letters", (character) => validateName("a" + character + "b") ? 1 : 0 ],
-    [ "validateName with the character last after a letter", (character) => validateName("a" + character) ? 1 : 0 ],
-    [ "sanitizeName with the character at the start, inside and at the end",
-      (character) => sanitizeName(character + "a" + character + "b" + character).replaceAll(character, MARKER) ]
-  ];
-  const digest = Object.fromEntries(placements.map(([name]) => [ name, [] ]));
-  const previous = placements.map(() => undefined);
+  const digest = Object.fromEntries(answers.map(([name]) => [ name, [] ]));
+  const previous = answers.map(() => undefined);
 
   for(let codePoint = 0; codePoint <= 0x10FFFF; codePoint++) {
 
@@ -321,7 +311,7 @@ function namingDigest({ sanitizeName, validateName }) {
 
     const character = String.fromCodePoint(codePoint);
 
-    for(const [ index, [ name, answer ] ] of placements.entries()) {
+    for(const [ index, [ name, answer ] ] of answers.entries()) {
 
       const key = answer(character);
 
@@ -337,28 +327,157 @@ function namingDigest({ sanitizeName, validateName }) {
 }
 
 /**
- * Find the first code point at which one run-length series answers differently from another. Each series holds its answer from one run's start to the next, so
- * the first difference falls on a run start of one series or the other, and only those code points need comparing.
+ * Reduce the naming module's answers for every Unicode scalar value to a run-length digest through scalarDigest(), one series per placement. The validator's
+ * answer is 1 or 0, and the sanitizer's is its output with the character marked, which keeps the runs long while still telling apart every output the character
+ * could produce. The digest is exact, so the digests of JavaScriptCore and V8 match only when every answer does.
  *
- * @param {[number, number | string][]} left - One engine's series.
- * @param {[number, number | string][]} right - The other engine's series for the same placement.
+ * The parity row runs this in JavaScriptCore and in V8, reaching JavaScriptCore as source text the probe carries beside scalarDigest(), so it reads nothing but
+ * its parameter and that sweep.
  *
- * @returns {number | null} The first code point the series disagree on, or `null` when they agree everywhere.
+ * @param {object} module
+ * @param {(name: string) => string} module.sanitizeName - The naming module's sanitizer.
+ * @param {(name: string) => boolean} module.validateName - The naming module's validator.
+ *
+ * @returns {Record<string, [number, number | string][]>} The digest, keyed by placement.
  */
-function firstDivergence(left, right) {
+function namingDigest({ sanitizeName, validateName }) {
 
-  const answerAt = (series, codePoint) => series.findLast(([start]) => start <= codePoint)?.[1];
-  const starts = [...new Set([ ...left, ...right ].map(([start]) => start))].sort((a, b) => a - b);
+  const MARKER = "\u0001";
 
-  return starts.find((start) => answerAt(left, start) !== answerAt(right, start)) ?? null;
+  return scalarDigest([
+    [ "validateName with the character alone", (character) => validateName(character) ? 1 : 0 ],
+    [ "validateName with the character between letters", (character) => validateName("a" + character + "b") ? 1 : 0 ],
+    [ "validateName with the character last after a letter", (character) => validateName("a" + character) ? 1 : 0 ],
+    [ "sanitizeName with the character at the start, inside and at the end",
+      (character) => sanitizeName(character + "a" + character + "b" + character).replaceAll(character, MARKER) ]
+  ]);
+}
+
+/**
+ * Reduce the engine's own Unicode property data for every scalar value to a run-length digest through scalarDigest(), one series per pattern, the answer 1 where the
+ * pattern matches the character and 0 where it does not. Each pattern holds one property or class alone, so no answer here rests on the set composition the
+ * parity row checks.
+ *
+ * The patterns are every piece of Unicode data src/homekit-name.ts reads for the answers the naming digest records: the properties nameClass() composes its
+ * classes from, and the whitespace class the sanitizer collapses, which reads every space separator the engine's data names. The list must follow the module's
+ * patterns, so a change to what they read has to change it too: a pattern missing here leaves its data differences counted against the module, and one left over
+ * sets aside code points the module never reads it for. The parity row runs this in JavaScriptCore and in V8 beside the naming digest, reaching JavaScriptCore as
+ * source text the probe carries beside scalarDigest(), so it reads nothing but that sweep.
+ *
+ * @returns {Record<string, [number, number][]>} The digest, keyed by the source of each pattern.
+ */
+function unicodePropertyDigest() {
+
+  return scalarDigest([ /\p{L}/u, /\p{N}/u, /\p{Extended_Pictographic}/u, /\s/u ].map((pattern) => [ pattern.source, (character) => pattern.test(character) ? 1 : 0 ]));
+}
+
+/**
+ * Read a run-length series at code points asked for in ascending order. The series holds its answer from one run's start to the next, so the reader keeps a
+ * cursor that only moves forward, and each lookup resumes where the one before it stopped.
+ *
+ * @param {[number, number | string][]} series - The series to read.
+ *
+ * @returns {(codePoint: number) => number | string | undefined} A lookup answering the series at each code point it is given, every one no lower than the one
+ * before it, with `undefined` below the series' first run.
+ */
+function seriesReader(series) {
+
+  let run = -1;
+
+  return (codePoint) => {
+
+    while(((run + 1) < series.length) && (series[run + 1][0] <= codePoint)) {
+
+      run++;
+    }
+
+    return series[run]?.[1];
+  };
+}
+
+/**
+ * Answer every half-open range of code points on which a pair of run-length series answer differently, each pair being one engine's series and the other's for
+ * the same subject. Each series holds its answer from one run's start to the next, so the answers can change only at some series' run start, and one walk over
+ * those starts in ascending order reads every series once through seriesReader(). Given several pairs, a range is wherever any pair differs, so one call answers
+ * the union of their differences, and adjacent stretches that differ join into one range.
+ *
+ * @param {...[[number, number | string][], [number, number | string][]]} pairs - The pairs of series to compare, each series compared with its partner in its pair.
+ *
+ * @returns {[number, number][]} Each `[start, end)` range some pair disagrees on, ascending with no two touching, and empty when every pair agrees everywhere.
+ */
+function differingRanges(...pairs) {
+
+  const readers = pairs.map((pair) => pair.map((series) => seriesReader(series)));
+  const starts = [...new Set(pairs.flat(2).map(([start]) => start))].sort((a, b) => a - b);
+  const ranges = [];
+
+  for(const [ index, start ] of starts.entries()) {
+
+    if(readers.every(([ left, right ]) => left(start) === right(start))) {
+
+      continue;
+    }
+
+    // The last stretch runs to the end of the codespace, one past the highest code point Unicode defines.
+    const end = starts[index + 1] ?? 0x110000;
+    const last = ranges.at(-1);
+
+    if(last?.[1] === start) {
+
+      last[1] = end;
+
+      continue;
+    }
+
+    ranges.push([ start, end ]);
+  }
+
+  return ranges;
+}
+
+/**
+ * Find the lowest code point that one list of ranges holds and another does not.
+ *
+ * @param {[number, number][]} ranges - The `[start, end)` ranges to search, in ascending order.
+ * @param {[number, number][]} excluded - The `[start, end)` ranges set aside, in ascending order, as differingRanges() answers them.
+ *
+ * @returns {number | null} The lowest code point inside `ranges` that no range in `excluded` covers, or `null` when `excluded` covers all of them.
+ */
+function firstUncovered(ranges, excluded) {
+
+  for(const [ start, end ] of ranges) {
+
+    // A code point inside an excluded range moves on to that range's end, and the excluded ranges run in ascending order, so one pass over them lands on the
+    // first code point from this start that none of them covers.
+    const codePoint = excluded.reduce((at, [ from, to ]) => ((from <= at) && (at < to)) ? to : at, start);
+
+    if(codePoint < end) {
+
+      return codePoint;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Name a code point as Unicode writes it, so a failure message names a character whether or not it prints.
+ *
+ * @param {number} codePoint - The code point to name.
+ *
+ * @returns {string} The code point in Unicode's `U+` notation, padded with leading zeros as that notation pads it.
+ */
+function codePointName(codePoint) {
+
+  return "U+" + codePoint.toString(16).toUpperCase().padStart(4, "0");
 }
 
 /* The load rule and the naming module's parity check. Node's run of the unit suite loads every script dist/ui/ ships, or the source it compiles from, in V8,
  * Chrome's engine, so V8 needs no rows of its own here. JavaScriptCore, Safari's engine, refuses some patterns V8 accepts and computes some character classes
  * differently, and a script that throws while it loads takes its settings page down in Safari while every Node row stays green. So each load row loads one shipped
- * script in JavaScriptCore's shell, and the parity row holds the naming module's answers there to V8's. The scratch tree is laid out as the build lays out
- * dist/ui/, by the build's own copy step and with its own compiler options, so a script's relative imports resolve as they do on the page and the rows need no
- * prior build.
+ * script in JavaScriptCore's shell, and the parity row holds the naming module's answers there to V8's wherever the engines' Unicode property data agrees.
+ * The scratch tree is laid out as the build lays out dist/ui/, by the build's own copy step and with its own compiler options, so a script's relative imports
+ * resolve as they do on the page and the rows need no prior build.
  */
 describe("browser-modules in JavaScriptCore", { skip: existsSync(JSC_SHELL) ? false : "The macOS JavaScriptCore shell is not present on this host." }, async () => {
 
@@ -418,29 +537,73 @@ describe("browser-modules in JavaScriptCore", { skip: existsSync(JSC_SHELL) ? fa
     });
   }
 
-  // Loading proves the naming module's classes compile in JavaScriptCore, not that they hold the same characters there, and the classes rest on Unicode property
-  // sets each engine computes on its own. So this row sweeps every scalar value through the module in each engine and compares the digests, which are all that
-  // crosses the process boundary.
-  test("answers every scalar value in JavaScriptCore as V8 does for src/homekit-name.ts", async (t) => {
+  /* Loading proves the naming module's classes compile in JavaScriptCore, not that they hold the same characters there. So this row sweeps every scalar value
+   * through the module in each engine and compares the digests, which are all that crosses the process boundary. The module's patterns rest on Unicode property
+   * data each engine carries for its own Unicode version, and those versions differ whenever one engine updates before the other, so a code point whose raw
+   * property answers differ between the engines tells nothing about the module. Each engine therefore also digests every property the module reads, and the
+   * naming answers are compared wherever those agree, which is where a difference in how the engines compose the module's classes shows. Pairing each engine's
+   * naming answers with its own property data, rather than with a table of any one Unicode version, keeps the row true as each engine updates.
+   */
+  test("answers in JavaScriptCore as V8 does for src/homekit-name.ts wherever the engines' Unicode data agrees", async (t) => {
 
     const probe = join(scratch.path, "homekit-name-parity.mjs");
 
-    await writeFile(probe, "import { sanitizeName, validateName } from \"./" + posix.join(UI_OUTPUT, "homekit-name.js") + "\";\n\nprint(JSON.stringify((" +
-      namingDigest.toString() + ")({ sanitizeName, validateName })));\n");
+    // The probe carries the source of every function the digests run, the shared sweep among them, so JavaScriptCore runs exactly what V8 runs here.
+    const sources = [ scalarDigest, namingDigest, unicodePropertyDigest ].map(String).join("\n\n");
+
+    await writeFile(probe, "import { sanitizeName, validateName } from \"./" + posix.join(UI_OUTPUT, "homekit-name.js") + "\";\n\n" + sources +
+      "\n\nprint(JSON.stringify({ naming: namingDigest({ sanitizeName, validateName }), properties: unicodePropertyDigest() }));\n");
 
     const { code, stderr, stdout } = await runToExit(JSC_SHELL, [ "-m", probe ], { signal: t.signal });
 
     assert.equal(code, 0, "src/homekit-name.ts fails its parity probe in JavaScriptCore. The shell printed:\n" + stdout + stderr);
 
     const inJavaScriptCore = JSON.parse(stdout);
-    const inV8 = namingDigest({ sanitizeName, validateName });
-    const divergences = Object.keys(inV8).flatMap((placement) => {
+    const inV8 = { naming: namingDigest({ sanitizeName, validateName }), properties: unicodePropertyDigest() };
+    const excluded = differingRanges(...Object.keys(inV8.properties).map((property) => [ inJavaScriptCore.properties[property], inV8.properties[property] ]));
 
-      const codePoint = firstDivergence(inJavaScriptCore[placement], inV8[placement]);
+    // The sweep passes over the surrogate code points, so a range reaching across them counts none of them.
+    const excludedSize = excluded.reduce((size, [ start, end ]) => size + (end - start) - Math.max(0, Math.min(end, 0xE000) - Math.max(start, 0xD800)), 0);
 
-      return (codePoint === null) ? [] : [placement + " first differs at U+" + codePoint.toString(16).toUpperCase().padStart(4, "0")];
+    t.diagnostic("JavaScriptCore and V8 differ in Unicode property data on " + excludedSize + " code points in " + excluded.length + " ranges, which the " +
+      "comparison sets aside.");
+
+    // A property probe that misreads its engine sets aside every code point it misreads, so one that answered nothing at all would excuse the differences the row
+    // exists to find. Each character here holds its properties in every Unicode version an engine able to run the module could carry, and together they span
+    // every property the module reads, in the Basic Multilingual Plane and above it wherever the property has members there, so a data difference covering one
+    // of them is a broken probe rather than an engine update.
+    const excused = [ "a", "é", "中", "\u{20000}", "5", "٣", "\u{1D7CE}", "©", "😀", " " ].map((character) => character.codePointAt(0))
+      .filter((codePoint) => firstUncovered([[ codePoint, codePoint + 1 ]], excluded) === null);
+
+    assert.deepEqual(excused, [], "The Unicode property probe sets aside " + excused.map(codePointName).join(", ") + ", characters whose properties every engine " +
+      "agrees on, so the probe is broken.");
+
+    const divergences = Object.keys(inV8.naming).flatMap((placement) => {
+
+      const codePoint = firstUncovered(differingRanges([ inJavaScriptCore.naming[placement], inV8.naming[placement] ]), excluded);
+
+      return (codePoint === null) ? [] : [placement + " first differs at " + codePointName(codePoint)];
     });
 
-    assert.deepEqual(divergences, [], "src/homekit-name.ts answers differently in JavaScriptCore and V8: " + divergences.join("; ") + ".");
+    assert.deepEqual(divergences, [], "src/homekit-name.ts answers differently in JavaScriptCore and V8 where their Unicode property data agrees: " +
+      divergences.join("; ") + ".");
+
+    // A comparison that finds no difference passes just as well when the shared sweep answers nothing at all, so each engine's naming series must also hold the
+    // answers HomeKit's naming rule fixes for long-assigned characters, in the Basic Multilingual Plane and above it. This guard comes after the comparison, which
+    // reports any difference between the engines at the code point where it starts, leaving this guard the failure the engines share.
+    const ruled = Object.entries({
+
+      "sanitizeName with the character at the start, inside and at the end": [[ "😀", "a b" ]],
+      "validateName with the character alone": [ [ "a", 1 ], [ "\u{20000}", 1 ], [ "😀", 0 ] ],
+      "validateName with the character between letters": [ [ "-", 1 ], [ "😀", 0 ] ],
+      "validateName with the character last after a letter": [ [ ".", 1 ], [ "-", 0 ] ]
+    }).flatMap(([ placement, controls ]) => controls.map(([ character, answer ]) => ({ answer, codePoint: character.codePointAt(0), placement })));
+
+    const misread = Object.entries({ JavaScriptCore: inJavaScriptCore, V8: inV8 }).flatMap(([ engine, { naming } ]) => ruled
+      .filter(({ answer, codePoint, placement }) => seriesReader(naming[placement])(codePoint) !== answer)
+      .map(({ codePoint, placement }) => codePointName(codePoint) + " in " + engine + "'s " + placement));
+
+    assert.deepEqual(misread, [], "The naming digest answers otherwise than HomeKit's naming rule where the rule fixes the answer, so the digest is broken: " +
+      misread.join("; ") + ".");
   });
 });

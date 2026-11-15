@@ -26,7 +26,7 @@
  * The subtraction is outermost, applied once to the whole class, rather than to a letter-and-number class nested inside a union with the punctuation.
  * JavaScriptCore, Safari's engine, computes a subtracted class nested inside a union wrongly: the nested set loses every code point above U+FFFF and gains U+0000,
  * and a hyphen placed right after it is refused outright, which fails the whole module's load. With the subtraction outermost, JavaScriptCore and V8 compute the
- * same set.
+ * same set from the same property data.
  */
 function nameClass(members: string): string {
 

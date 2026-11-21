@@ -8,8 +8,9 @@
  *
  * This module provides lightweight, Buffer-based utilities for inspecting ISO Base Media File Format (ISO BMFF) structures commonly found in fragmented MP4 (fMP4)
  * streams. It enables locating specific box types, splitting fragments into their moof/mdat components, finding a fragment's first keyframe (sync sample) from its
- * samples' flags, identifying audio track presence in initialization segments, finding an initialization segment's video track, and cutting a fragment into pieces
- * that each end where one of that track's frames ends, with the frame's duration, for a paced write.
+ * samples' flags and whether a decoder can take the fragment from its first byte, identifying audio track presence in initialization segments, finding an
+ * initialization segment's video track, and cutting a fragment into pieces that each end where one of that track's frames ends, with the frame's duration, for a
+ * paced write.
  *
  * These utilities operate on complete Buffers and are independent of FFmpeg processes or streaming pipelines.
  *
@@ -262,6 +263,9 @@ export function findBox(buffer: Buffer, type: string, start = 0, end?: number): 
  * The first run's first-sample flags, or its first entry's, are read even when it declares no samples, so the fragment's first sample answers from what it states
  * alone. A run that declares no samples adds nothing to the index, and past the first run it holds no keyframe.
  *
+ * A caller handing a decoder the fragment as its first asks {@link startsWithKeyframe} rather than comparing this index with zero, because samples of no duration
+ * can stand ahead of a keyframe that a decoder still shows first.
+ *
  * @remarks **Hot path.** A plugin reads every fragment of a live stream through this, so the walk allocates nothing per sample and stops at the first keyframe. A
  * run whose entries carry no flags is answered in one step, because every sample after its first takes the same default, so a run that declares billions of
  * samples it does not list costs no more than one that declares two. A run whose entries do carry flags is read one entry at a time, never past its box.
@@ -278,17 +282,9 @@ export function findBox(buffer: Buffer, type: string, start = 0, end?: number): 
  */
 export function findKeyframe(segment: Buffer, track?: FMp4Track): Nullable<number> {
 
-  const moof = findBox(segment, "moof");
-
-  if(!moof) {
-
-    return null;
-  }
-
-  // With a track, the track fragment that names it comes from the shared walk, with its header. Without one, the moof's first track fragment is read, and its header
-  // is looked up only if a sample's flags turn out to need the header's default, so a fragment whose runs state their flags costs no header lookup.
-  const named = track ? findTrackFragment(segment, moof, track) : null;
-  const traf = track ? named?.traf : findBox(segment, "traf", moof.offset + BOX_HEADER_SIZE, moof.offset + moof.size);
+  // The track fragment every keyframe reader reads. Its header is read for a default only if a sample's flags turn out to need one, so without a track a fragment
+  // whose runs state their flags costs no header lookup. With a track, choosing the track fragment reads each header's track_ID.
+  const traf = findKeyframeTrackFragment(segment, track);
 
   if(!traf) {
 
@@ -353,8 +349,7 @@ export function findKeyframe(segment: Buffer, track?: FMp4Track): Nullable<numbe
 
       // The run's entries state no flags, so every sample from here to its end takes the header's default, and the first of them answers for them all. The default is
       // read once, by the first run that needs it, and a header that states none marks no keyframe.
-      defaultFlags ??= readTrackFragmentHeader(segment, named ? named.tfhd : findBox(segment, "tfhd", traf.offset + BOX_HEADER_SIZE, trafEnd))?.defaultFlags ??
-        SAMPLE_FLAG_NON_SYNC;
+      defaultFlags ??= readKeyframeHeader(segment, traf)?.defaultFlags ?? SAMPLE_FLAG_NON_SYNC;
 
       if(isSyncSample(defaultFlags)) {
 
@@ -373,6 +368,9 @@ export function findKeyframe(segment: Buffer, track?: FMp4Track): Nullable<numbe
  * A producer that cuts its fragments by time rather than at keyframes leaves a keyframe wherever the cut falls, often after the first sample, so every sample of
  * every run counts, each read as {@link findKeyframe} reads it.
  *
+ * A caller handing a decoder the fragment as its first asks {@link startsWithKeyframe} instead, because a keyframe somewhere in the fragment is not always the first
+ * sample a decoder shows.
+ *
  * @param segment - A buffer containing a complete fMP4 fragment (typically a moof followed by its mdat).
  * @param track   - Optional. The track whose track fragment to read, as {@link findKeyframe} takes it. Without it, the moof's first track fragment is read.
  *
@@ -383,6 +381,99 @@ export function findKeyframe(segment: Buffer, track?: FMp4Track): Nullable<numbe
 export function isKeyframe(segment: Buffer, track?: FMp4Track): boolean {
 
   return findKeyframe(segment, track) !== null;
+}
+
+/**
+ * Determines whether an fMP4 fragment starts with a keyframe (sync sample): whether a decoder handed the fragment as its first, from its first byte, shows a
+ * keyframe first.
+ *
+ * Answers from {@link findKeyframe}: a keyframe that is the first sample starts the fragment, and a keyframe at a later index does when every sample ahead of it,
+ * in the track fragment {@link findKeyframe} reads, states a duration of zero. A sample of zero duration takes no time on the track's timeline, so the keyframe
+ * behind it is the first picture the fragment presents, and some packagers put the parameter sets in such a sample, flagged non-sync, ahead of each keyframe. A
+ * sample's duration is read where the fragment states it: its entry's when its run carries per-sample durations, else the `tfhd`'s default sample duration, read
+ * only from a `tfhd` that holds its track_ID and every field its flags announce. A duration stated nowhere is not zero, and a default only the initialization
+ * segment states, in its `trex`, is not read.
+ *
+ * Each keyframe reader answers its own question: this one whether a decoder can be handed the fragment as its first, {@link isKeyframe} whether the fragment holds a
+ * keyframe anywhere, and {@link findKeyframe} where the keyframe sits.
+ *
+ * @remarks A run whose entries carry no durations is answered in one step from the default, and a run whose entries do carry them is read one entry at a time,
+ * never past its box, so the walk is bounded by the bytes the fragment holds whatever count a run declares.
+ *
+ * @param segment - A buffer containing a complete fMP4 fragment (typically a moof followed by its mdat). No `mdat` is read.
+ * @param track   - Optional. The track whose track fragment to read, as {@link findKeyframe} takes it. Without it, the moof's first track fragment is read.
+ *
+ * @returns `true` when the track fragment's first keyframe is its first sample or every sample ahead of it states a duration of zero, `false` when it holds no
+ *          keyframe, when a sample ahead of the keyframe states a duration other than zero or states none, or when a duration field ahead of the keyframe lies past
+ *          its run's box.
+ *
+ * @example
+ *
+ * ```ts
+ * const video = findVideoTrack(initSegment);
+ *
+ * // Hold a recording back until a fragment arrives that a decoder can take from its first byte.
+ * if(video && startsWithKeyframe(fragment, video)) {
+ *
+ *   recording.start(initSegment, fragment);
+ * }
+ * ```
+ *
+ * @category FFmpeg
+ */
+export function startsWithKeyframe(segment: Buffer, track?: FMp4Track): boolean {
+
+  const keyframe = findKeyframe(segment, track);
+
+  // An index of zero or none settles the answer alone, so the track fragment is looked up again only when samples stand ahead of the keyframe.
+  const traf = keyframe ? findKeyframeTrackFragment(segment, track) : null;
+
+  if(!keyframe || !traf) {
+
+    return keyframe === 0;
+  }
+
+  const trafEnd = traf.offset + traf.size;
+  let ahead = keyframe;
+  let defaultDuration: Nullable<number> | undefined;
+  let trun = findBox(segment, "trun", traf.offset + BOX_HEADER_SIZE, trafEnd);
+  let run = trun && readTrackRun(segment, trun);
+
+  // Each run in order while samples stand ahead of the keyframe. These are the runs findKeyframe counted the keyframe's index across, so the walk reaches the
+  // keyframe with no sample left ahead of it unless a duration answers first.
+  while(trun && run && (ahead > 0)) {
+
+    const trunEnd = trun.offset + trun.size;
+    const count = Math.min(run.sampleCount, ahead);
+
+    if(run.flags & TRUN_FLAG_SAMPLE_DURATION) {
+
+      // Each sample states its duration in its entry, read one entry at a time, and a duration field the box does not hold answers false.
+      for(let position = run.firstEntry + entryFieldOffset(run.flags, TRUN_FLAG_SAMPLE_DURATION), sample = 0; sample < count; position += run.stride, sample++) {
+
+        if(((position + 4) > trunEnd) || (segment.readUInt32BE(position) !== 0)) {
+
+          return false;
+        }
+      }
+    } else if(count > 0) {
+
+      // The run's entries state no durations, so every sample of it ahead of the keyframe takes the header's default, and the default answers for them all. It is
+      // read once, by the first run that needs it, and a header that states none answers false.
+      defaultDuration ??= readKeyframeHeader(segment, traf)?.defaultDuration;
+
+      if(defaultDuration !== 0) {
+
+        return false;
+      }
+    }
+
+    ahead -= count;
+    trun = findBox(segment, "trun", trunEnd, trafEnd);
+    run = trun && readTrackRun(segment, trun);
+  }
+
+  return ahead === 0;
 }
 
 /**
@@ -560,6 +651,36 @@ function findTrackFragment(buffer: Buffer, moof: FMp4Box, track: FMp4Track): Nul
   }
 }
 
+/* The track fragment every keyframe reader reads, from an fMP4 fragment's first `moof`: with a track, the first whose `tfhd` names it, and without one, the moof's
+ * first. It answers the track fragment alone, and a reader that needs a default finds the header then, so without a track a read whose runs state everything it
+ * needs costs no header lookup. With a track, the choice itself reads each track fragment's header for its track_ID. Null when the segment has no `moof`, or when
+ * no track fragment names the track (or, without one, the moof holds none). The keyframe readers each go through this, so the samples a keyframe's index counts
+ * are the samples each of them reads.
+ */
+function findKeyframeTrackFragment(buffer: Buffer, track?: FMp4Track): Nullable<FMp4Box> {
+
+  const moof = findBox(buffer, "moof");
+
+  if(!moof) {
+
+    return null;
+  }
+
+  if(track) {
+
+    return findTrackFragment(buffer, moof, track)?.traf ?? null;
+  }
+
+  return findBox(buffer, "traf", moof.offset + BOX_HEADER_SIZE, moof.offset + moof.size);
+}
+
+// The header a keyframe read takes a sample's defaults from: its track fragment's first `tfhd`, which for a named track is the header that names it, because a
+// track fragment is chosen by its first header. A reader calls this only when a sample first needs a default.
+function readKeyframeHeader(buffer: Buffer, traf: FMp4Box): Nullable<TrackFragmentHeader> {
+
+  return readTrackFragmentHeader(buffer, findBox(buffer, "tfhd", traf.offset + BOX_HEADER_SIZE, traf.offset + traf.size));
+}
+
 /* The first track in an init segment whose media handler is `handlerType`, as the boxes of its `trak` and its `mdia`, or null when no track has that handler.
  *
  * Walks each trak box inside the moov, advancing past each one it finds. Once it has passed the last trak, findBox runs out of range and returns null, which is how
@@ -635,9 +756,9 @@ function readFieldAfterTimes(buffer: Buffer, box: Nullable<FMp4Box>): Nullable<n
 }
 
 /* Read a TRUN's fixed header: its flags, its sample count, and the positions of its optional fields, its first entry and its entry stride. Null for a run too short
- * to hold that header. Nothing past the fixed header is bounded here, because the readers of a run need different things from it: the keyframe reader reads one
- * flags field at a time and answers from a sample ahead of entries that are cut short, while the frame reader needs every entry. Each reader checks what it reads
- * against the box.
+ * to hold that header. Nothing past the fixed header is bounded here, because the readers of a run need different things from it: the keyframe readers read one
+ * flags or duration field at a time and answer from a sample ahead of entries that are cut short, while the frame reader needs every entry. Each reader checks what
+ * it reads against the box.
  */
 function readTrackRun(buffer: Buffer, trun: FMp4Box): Nullable<TrackRunLayout> {
 
@@ -699,8 +820,8 @@ function isSyncSample(flags: number): boolean {
   return (flags & SAMPLE_FLAG_NON_SYNC) === 0;
 }
 
-// The fields of a TFHD its readers read: its flags, and the defaults a TRUN's samples fall back to, the duration and size the frame reader reads and the flags the
-// keyframe reader reads. A default the header does not carry is null.
+// The fields of a TFHD its readers read: its flags, and the defaults a TRUN's samples fall back to, the duration the frame reader and `startsWithKeyframe` read, the
+// size the frame reader reads and the flags `findKeyframe` reads. A default the header does not carry is null.
 interface TrackFragmentHeader {
 
   readonly defaultDuration: Nullable<number>;

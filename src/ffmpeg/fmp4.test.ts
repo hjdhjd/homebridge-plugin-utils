@@ -1,7 +1,8 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ffmpeg/fmp4.test.ts: Unit tests for the stateless ISO BMFF (fMP4) predicates exported from fmp4.ts - findBox, isKeyframe, hasAudioTrack, and splitMoofMdat - for
- * the keyframe reader isKeyframe answers through, findKeyframe, and for the frame reader beside them, findVideoTrack and splitVideoFrames.
+ * the keyframe reader isKeyframe answers through, findKeyframe, for startsWithKeyframe, which answers from it, and for the frame reader beside them, findVideoTrack
+ * and splitVideoFrames.
  *
  * These are the one-shot counterparts to the streaming `Mp4BoxParser` / `Mp4SegmentAssembler`: each predicate accepts a complete Buffer and returns a verdict. They are
  * consumed both internally (the parser reuses `BOX_HEADER_SIZE` and the assembler compares box type codes via the `BOX_TYPE_*` constants) and externally (HBUP calls
@@ -15,7 +16,7 @@
  * readers read no mdat.
  */
 import { BOX_HEADER_SIZE, HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, findBox, findKeyframe, findVideoTrack, hasAudioTrack, isKeyframe, splitMoofMdat,
-  splitVideoFrames } from "./fmp4.ts";
+  splitVideoFrames, startsWithKeyframe } from "./fmp4.ts";
 import { BOX_TYPE_MOOF, Mp4BoxParser } from "./mp4-parser.ts";
 import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeFragment, makeHdlrBox, makeInitSegment, makeMdhdBox, makeTfhdBox, makeTkhdBox,
   makeTrunBox } from "./fmp4-builders.ts";
@@ -969,6 +970,170 @@ describe("findKeyframe", () => {
     assert.equal(keyframeOf(moofOf([ makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }), makeTrunBox({ samples: [] }) ])), null);
     assert.equal(keyframeOf(moofOf([ tfhd, makeTrunBox({ samples: flaggedOf([NON_SYNC]), usePerSampleFlags: true }),
       makeTrunBox({ samples: [], useFirstSampleFlags: true }) ])), null);
+  });
+});
+
+describe("startsWithKeyframe", () => {
+
+  const NON_SYNC = SAMPLE_FLAG_NON_SYNC;
+  const flagged = { includeDuration: true, includeSize: true, usePerSampleFlags: true } as const;
+
+  // Samples whose entries state each pair's duration and flags, in order, every sample of one invented size.
+  function samplesOf(pairs: readonly (readonly [ number, number ])[]): TrunSample[] {
+
+    return pairs.map(([ duration, flags ]) => ({ duration, flags, size: 10 }));
+  }
+
+  test("answers true for a fragment whose first sample is a keyframe, stated by its run's first-sample flags or by its entry's flags", () => {
+
+    const fragment = makeFragment({ samples: framesOf([ 3000, 3000 ], [ 30, 20 ]), secondTrack: AUDIO, trackId: VIDEO.id });
+
+    assert.equal(startsWithKeyframe(fragment), true);
+    assert.equal(startsWithKeyframe(fragment, VIDEO), true);
+    assert.equal(startsWithKeyframe(makeFragment({ run: flagged, samples: samplesOf([ [ 3000, 0 ], [ 3000, NON_SYNC ] ]), trackId: VIDEO.id })), true);
+  });
+
+  test("answers false for a fragment that holds no keyframe, even one whose every sample lasts no time, and for a buffer with no moof", () => {
+
+    assert.equal(startsWithKeyframe(makeFragment({ run: flagged, samples: samplesOf([ [ 0, NON_SYNC ], [ 0, NON_SYNC ] ]), trackId: VIDEO.id })), false);
+    assert.equal(startsWithKeyframe(Buffer.concat([ makeBox("ftyp"), makeBox("mdat") ])), false);
+  });
+
+  test("answers true when samples of zero duration, flagged non-sync, are all that stand ahead of the keyframe", () => {
+
+    const one = makeFragment({ run: flagged, samples: samplesOf([ [ 0, NON_SYNC ], [ 3000, 0 ], [ 3000, NON_SYNC ] ]), trackId: VIDEO.id });
+    const several = makeFragment({ run: flagged, samples: samplesOf([ [ 0, NON_SYNC ], [ 0, NON_SYNC ], [ 0, NON_SYNC ], [ 3000, 0 ] ]), trackId: VIDEO.id });
+
+    assert.equal(findKeyframe(one), 1);
+    assert.equal(startsWithKeyframe(one), true);
+    assert.equal(findKeyframe(several), 3);
+    assert.equal(startsWithKeyframe(several), true);
+  });
+
+  test("answers false when a sample ahead of the keyframe states a duration other than zero", () => {
+
+    assert.equal(startsWithKeyframe(makeFragment({ run: flagged, samples: samplesOf([ [ 3000, NON_SYNC ], [ 3000, 0 ] ]), trackId: VIDEO.id })), false);
+
+    // The first sample ahead of the keyframe lasts no time, and the one after it does.
+    assert.equal(startsWithKeyframe(makeFragment({ run: flagged, samples: samplesOf([ [ 0, NON_SYNC ], [ 3000, NON_SYNC ], [ 3000, 0 ] ]), trackId: VIDEO.id })),
+      false);
+  });
+
+  test("answers true for a first sample of zero duration that is itself a keyframe", () => {
+
+    const fragment = makeFragment({ run: flagged, samples: samplesOf([ [ 0, 0 ], [ 3000, NON_SYNC ] ]), trackId: VIDEO.id });
+
+    assert.equal(findKeyframe(fragment), 0);
+    assert.equal(startsWithKeyframe(fragment), true);
+  });
+
+  test("reads the header's default duration for a run whose entries carry none: zero answers true, any other value false, and none false", () => {
+
+    // The entries carry each sample's size and flags, the second sample is the keyframe, and the header alone can state a duration.
+    const fragmentOf = (header: { defaultSampleDuration?: number }): Buffer => makeFragment({ header, run: { includeSize: true, usePerSampleFlags: true },
+      samples: [ { flags: NON_SYNC, size: 12 }, { flags: 0, size: 30 } ], trackId: VIDEO.id });
+
+    assert.equal(findKeyframe(fragmentOf({})), 1);
+    assert.equal(startsWithKeyframe(fragmentOf({ defaultSampleDuration: 0 })), true);
+    assert.equal(startsWithKeyframe(fragmentOf({ defaultSampleDuration: 3000 })), false);
+    assert.equal(startsWithKeyframe(fragmentOf({})), false);
+  });
+
+  test("reads the samples ahead of the keyframe in every run before the keyframe's own", () => {
+
+    // A run whose entries state the durations given and mark no keyframe, then a run whose first sample is the keyframe.
+    const segmentOf = (durations: readonly number[]): Buffer => makeContainer("moof", [makeContainer("traf", [ makeTfhdBox({ trackId: VIDEO.id }),
+      makeTrunBox({ includeDuration: true, samples: samplesOf(durations.map((duration) => [ duration, NON_SYNC ] as const)), usePerSampleFlags: true }),
+      makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ])]);
+
+    assert.equal(findKeyframe(segmentOf([ 0, 0 ])), 2);
+    assert.equal(startsWithKeyframe(segmentOf([ 0, 0 ])), true);
+    assert.equal(startsWithKeyframe(segmentOf([ 0, 3000 ])), false);
+
+    // A run whose one sample lasts no time, then the keyframe's own run with a sample ahead of the keyframe, so the walk has samples left to read past the first run.
+    const acrossOf = (duration: number): Buffer => makeContainer("moof", [makeContainer("traf", [ makeTfhdBox({ trackId: VIDEO.id }),
+      makeTrunBox({ includeDuration: true, samples: samplesOf([[ 0, NON_SYNC ]]), usePerSampleFlags: true }),
+      makeTrunBox({ includeDuration: true, samples: samplesOf([ [ duration, NON_SYNC ], [ 3000, 0 ] ]), usePerSampleFlags: true }) ])]);
+
+    assert.equal(findKeyframe(acrossOf(0)), 2);
+    assert.equal(startsWithKeyframe(acrossOf(0)), true);
+    assert.equal(startsWithKeyframe(acrossOf(3000)), false);
+  });
+
+  test("reads a track fragment's first header for its defaults, with a track and without one", () => {
+
+    // Each track fragment holds a header ahead of its run and another behind it. The run states its first sample as no keyframe and nothing else, so the second
+    // sample's flags and the first sample's duration each come from a header's default.
+    const segmentOf = (first: Parameters<typeof makeTfhdBox>[0], last: Parameters<typeof makeTfhdBox>[0]): Buffer => makeContainer("moof", [makeContainer("traf",
+      [ makeTfhdBox(first), makeTrunBox({ sampleFlagsValue: NON_SYNC, samples: [ {}, {} ], useFirstSampleFlags: true }), makeTfhdBox(last) ])]);
+    const flags = segmentOf({ defaultSampleDuration: 0, defaultSampleFlags: 0, trackId: VIDEO.id },
+      { defaultSampleDuration: 0, defaultSampleFlags: NON_SYNC, trackId: VIDEO.id });
+    const durations = segmentOf({ defaultSampleDuration: 0, defaultSampleFlags: 0, trackId: VIDEO.id },
+      { defaultSampleDuration: 3000, defaultSampleFlags: 0, trackId: VIDEO.id });
+
+    for(const track of [ undefined, VIDEO ]) {
+
+      assert.equal(findKeyframe(flags, track), 1);
+      assert.equal(startsWithKeyframe(durations, track), true);
+    }
+  });
+
+  test("passes over a run ahead of the keyframe that declares no samples, which leaves no duration to read", () => {
+
+    // The first run declares no samples and carries no entry fields, under a header that states no default duration, and the second states its own.
+    const segment = makeContainer("moof", [makeContainer("traf", [ makeTfhdBox({ trackId: VIDEO.id }), makeTrunBox({ samples: [] }),
+      makeTrunBox({ includeDuration: true, samples: samplesOf([ [ 0, NON_SYNC ], [ 3000, 0 ] ]), usePerSampleFlags: true }) ])]);
+
+    assert.equal(findKeyframe(segment), 1);
+    assert.equal(startsWithKeyframe(segment), true);
+  });
+
+  test("with a track, reads the track fragment that names it, past another track's fragment standing first", () => {
+
+    // Each track fragment holds a sample ahead of its keyframe: the audio one lasts, and the video one lasts no time.
+    const audio = makeContainer("traf", [ makeTfhdBox({ trackId: AUDIO.trackId }),
+      makeTrunBox({ includeDuration: true, samples: samplesOf([ [ 1920, NON_SYNC ], [ 1920, 0 ] ]), usePerSampleFlags: true }) ]);
+    const video = makeContainer("traf", [ makeTfhdBox({ trackId: VIDEO.id }),
+      makeTrunBox({ includeDuration: true, samples: samplesOf([ [ 0, NON_SYNC ], [ 3000, 0 ] ]), usePerSampleFlags: true }) ]);
+    const segment = makeContainer("moof", [ audio, video ]);
+
+    assert.equal(findKeyframe(segment, VIDEO), 1);
+    assert.equal(startsWithKeyframe(segment, VIDEO), true);
+    assert.equal(startsWithKeyframe(segment), false, "without a track, the first track fragment is read");
+  });
+
+  test("answers false when a duration field ahead of the keyframe lies past its run's box", () => {
+
+    // The run carries per-sample durations and no entry flags, and its box ends before its entries. Its first-sample flags mark no keyframe and the header's default
+    // flags mark one, so findKeyframe answers the second sample without reading an entry. Zero bytes as wide as a duration field follow the run inside its track
+    // fragment, so a read past the run's box would find a duration of zero there.
+    const segment = makeContainer("moof", [makeContainer("traf", [ makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }),
+      makeTrunBox({ includeDuration: true, sampleCount: 2, sampleFlagsValue: NON_SYNC, samples: [], useFirstSampleFlags: true }), Buffer.alloc(4) ])]);
+
+    assert.equal(findKeyframe(segment), 1);
+    assert.equal(startsWithKeyframe(segment), false);
+  });
+
+  test("reads a duration field that ends its run's box", () => {
+
+    // The first run's one entry is a duration alone, the last bytes of its box, under first-sample flags that mark no keyframe, and the next run's first sample is
+    // the keyframe.
+    const segment = makeContainer("moof", [makeContainer("traf", [ makeTfhdBox({ trackId: VIDEO.id }),
+      makeTrunBox({ includeDuration: true, sampleFlagsValue: NON_SYNC, samples: [{ duration: 0 }], useFirstSampleFlags: true }),
+      makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ])]);
+
+    assert.equal(findKeyframe(segment), 1);
+    assert.equal(startsWithKeyframe(segment), true);
+  });
+
+  test("answers true in one step for a run ahead of the keyframe that declares the largest count its field holds and lists no entry fields", () => {
+
+    // Every sample of the first run takes the header's zero duration and non-sync flags, and a walk of one sample at a time would take billions of steps to answer.
+    const segment = makeContainer("moof", [makeContainer("traf", [ makeTfhdBox({ defaultSampleDuration: 0, defaultSampleFlags: NON_SYNC, trackId: VIDEO.id }),
+      makeTrunBox({ sampleCount: 0xFFFFFFFF, samples: [] }), makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ])]);
+
+    assert.equal(findKeyframe(segment), 0xFFFFFFFF);
+    assert.equal(startsWithKeyframe(segment), true);
   });
 });
 

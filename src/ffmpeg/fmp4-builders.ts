@@ -16,9 +16,9 @@
  * - {@link makeContainer} - a convenience wrapper that concatenates nested box bytes into a parent container (e.g., `makeContainer("moov", [ trak1, trak2 ])`).
  * - {@link makeHdlrBox} / {@link makeTkhdBox} / {@link makeMdhdBox} / {@link makeTfhdBox} / {@link makeTrunBox} - fullbox builders that encode the specific header
  *   layouts the `fmp4.ts` readers read (`hasAudioTrack` and `findVideoTrack` walk the handler-type field, and `findVideoTrack` reads a track's ID and timescale;
- *   `findKeyframe` and `isKeyframe` read each run's sample flags and the track fragment header's default flags; `splitVideoFrames` reads a track fragment's header
- *   and its run's entries). Routing every test through one parser-aligned construction path means a future tweak to any reader's wire layout has exactly one builder
- *   to update.
+ *   `findKeyframe`, `isKeyframe` and `startsWithKeyframe` read each run's sample flags and the track fragment header's default flags, and `startsWithKeyframe` the
+ *   durations ahead of the keyframe and the header's default duration; `splitVideoFrames` reads a track fragment's header and its run's entries). Routing every test
+ *   through one parser-aligned construction path means a future tweak to any reader's wire layout has exactly one builder to update.
  * - {@link makeInitSegment} / {@link makeFragment} - composers that build a whole initialization segment from its tracks and a whole fragment from its samples,
  *   in the layout a stream's producer writes, so a suite feeding a reader or a feed a stream states its tracks and frames rather than assembling their boxes. A
  *   malformed segment or fragment, one no producer writes, is built from the fullbox builders directly.

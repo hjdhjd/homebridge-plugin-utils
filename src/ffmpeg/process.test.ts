@@ -1,18 +1,19 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ffmpeg/process.test.ts: Unit tests for the FfmpegProcess base class - spawn-on-construction, composed signal lifecycle, ready/exited promises, reason-based teardown,
- * derived getters, startup timeout, and AsyncDisposable semantics.
+ * the ending callbacks, derived getters, startup timeout, and AsyncDisposable semantics.
  */
 import type { CapturingLog, TestLogEntry } from "../testing/index.ts";
-import { capturingLog, errnoError, linesAt, logCount } from "../testing/index.ts";
-import { describe, test } from "node:test";
+import type { FfmpegEnding, FfmpegEndingVerdict, FfmpegProcessExitInfo } from "./process.ts";
+import { capturingLog, errnoError, expectAt, linesAt, logCount, settle } from "../testing/index.ts";
+import { describe, mock, test } from "node:test";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
-import type { FfmpegProcessExitInfo } from "./process.ts";
 import { HbpuAbortError } from "../util.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
+import { captureUncaughtExceptions } from "./process-parity.helpers.ts";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { once } from "node:events";
 
@@ -75,6 +76,9 @@ function silentExit(): string[] {
 
   return [ "-e", "process.exit(0);" ];
 }
+
+// FFmpeg's refusal line, its text as a VideoToolbox decode of a stream beyond the size its decoder opens printed it, behind the decoder's context prefix.
+const refusalLine = "[h264 @ 0x7f8e4c00a200] Failed setup for format videotoolbox_vld: hwaccel initialisation returned error.";
 
 describe("FfmpegProcess - construction and readiness", () => {
 
@@ -620,6 +624,14 @@ describe("FfmpegProcess - teardown logging", () => {
     assert.ok(fragments.some((fragment) => fragment.includes("signal SIGKILL")), "signal-only exit-info cause must render as \"signal S\"");
   });
 
+  test("exit-info cause with neither a code nor a signal renders as no exit information", async () => {
+
+    const errorEntries = await failWithCause({ exitCode: null, exitSignal: null });
+    const fragments = errorEntries.flatMap((entry) => entry.params).filter((param) => typeof param === "string");
+
+    assert.ok(fragments.some((fragment) => fragment === "no exit information"), "an empty exit-info cause must render as \"Reason: no exit information.\"");
+  });
+
   test("Error cause renders via the error message", async () => {
 
     const errorEntries = await failWithCause(new Error("underlying boom"));
@@ -691,9 +703,6 @@ describe("FfmpegProcess - teardown logging", () => {
     assert.ok(logger.entries.some((entry) => (entry.level === "warn") && entry.message.includes("stalled past its watchdog window")),
       "the base FfmpegProcess timeout teardown logs at warn");
   });
-
-  // FFmpeg's refusal line, its text as a VideoToolbox decode of a stream beyond the size its decoder opens printed it, behind the decoder's context prefix.
-  const refusalLine = "[h264 @ 0x7f8e4c00a200] Failed setup for format videotoolbox_vld: hwaccel initialisation returned error.";
 
   // The opening of the sentence the options log when a refusal marks them.
   const refusalSentence = "The hardware video decoder could not open this stream.";
@@ -812,6 +821,225 @@ describe("FfmpegProcess - teardown logging", () => {
 
     assert.equal(options.hardwareDecoderRefused, false, "a near miss leaves the options unmarked");
     assert.equal(logCount(logger.entries, "info", refusalSentence), 0, "and logs no change");
+  });
+});
+
+describe("FfmpegProcess - ending callbacks", () => {
+
+  // The line a failed child's report names its command in: the stand-in binary, then the args it was spawned with.
+  function commandLine(args: readonly string[]): string {
+
+    return "FFmpeg (test) command that errored out was: " + process.execPath + " " + args.join(" ") + ".";
+  }
+
+  test("a failed exit asks onFailed once with its reason and the stderr lines read, and handled leaves no error line", async () => {
+
+    const logger = capturingLog();
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+    const onTimeout = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+    await using proc = new FfmpegProcess(makeOptions(logger), { args: stderrThenExit(3, 10, "an invented diagnostic line"), onFailed, onTimeout });
+
+    await proc.exited;
+
+    assert.deepEqual({ onFailed: onFailed.mock.callCount(), onTimeout: onTimeout.mock.callCount() }, { onFailed: 1, onTimeout: 0 }, "onFailed alone is asked, once");
+
+    const ending = expectAt(onFailed.mock.calls, 0, "the asking").arguments[0];
+
+    assert.equal(ending.reason, proc.signal.reason, "with the reason the process ended for");
+    assert.deepEqual(ending.stderrLog, ["an invented diagnostic line"], "and the stderr lines it read");
+    assert.equal(ending.stderrLog, proc.stderrLog, "handed as the very array stderrLog returns, not a copy");
+    assert.deepEqual(linesAt(logger.entries, "error"), [], "the callback handled the failure, so nothing reaches error");
+  });
+
+  test("a failed exit whose onFailed answers default keeps the summary, the command line and the stderr dump", async () => {
+
+    const logger = capturingLog();
+    const args = stderrThenExit(3, 10, "an invented diagnostic line");
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "default");
+
+    await using proc = new FfmpegProcess(makeOptions(logger), { args, onFailed });
+
+    await proc.exited;
+
+    assert.equal(onFailed.mock.callCount(), 1, "onFailed is asked once");
+    assert.deepEqual(linesAt(logger.entries, "error"), [ "test: FFmpeg process ended unexpectedly. Reason: exit code 3.", commandLine(args),
+      "an invented diagnostic line" ], "and its default leaves the base's report standing");
+  });
+
+  const timeoutCases: { name: string; verdict: FfmpegEndingVerdict; warnings: string[] }[] = [
+
+    { name: "handled leaves no warning", verdict: "handled", warnings: [] },
+    { name: "default keeps the warning", verdict: "default", warnings: ["test: FFmpeg process ended: stalled past its watchdog window."] }
+  ];
+
+  for(const { name, verdict, warnings } of timeoutCases) {
+
+    test("a timeout asks onTimeout once with its reason and the stderr lines read, and " + name, async () => {
+
+      const logger = capturingLog();
+      const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+      const onTimeout = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => verdict);
+      const reason = new HbpuAbortError("timeout");
+
+      await using proc = new FfmpegProcess(makeOptions(logger), { args: stderrThenIdle(), onFailed, onTimeout });
+
+      await proc.ready;
+      proc.abort(reason);
+      await proc.exited;
+
+      assert.deepEqual({ onFailed: onFailed.mock.callCount(), onTimeout: onTimeout.mock.callCount() }, { onFailed: 0, onTimeout: 1 }, "onTimeout alone is asked, once");
+
+      const ending = expectAt(onTimeout.mock.calls, 0, "the asking").arguments[0];
+
+      assert.equal(ending.reason, reason, "with the reason the process ended for");
+      assert.deepEqual(ending.stderrLog, ["ready"], "and the stderr lines it read");
+      assert.deepEqual(linesAt(logger.entries, "warn"), warnings, "the verdict decides whether the base warns");
+    });
+  }
+
+  // Endings that select no callback, each with the plain debug line it logs. A platform TimeoutError reads as a timeout to `isTimedOut`, but it is not the process's
+  // own timeout reason, so it asks no callback.
+  const unaskedCases: { args: string[]; end: (proc: FfmpegProcess) => void; line: string; name: string }[] = [
+
+    { args: stderrThenExit(0, 10), end: (): void => { /* The child exits with code 0 on its own. */ }, line: "test: FFmpeg process ended (closed).",
+      name: "a clean exit" },
+    { args: stderrThenIdle(), end: (proc): void => proc.abort(), line: "test: FFmpeg process ended (shutdown).", name: "a shutdown" },
+    { args: stderrThenIdle(), end: (proc): void => proc.abort(new DOMException("An invented deadline elapsed.", "TimeoutError")),
+      line: "test: FFmpeg process ended (TimeoutError).", name: "a platform TimeoutError" }
+  ];
+
+  for(const { args, end, line, name } of unaskedCases) {
+
+    test(name + " asks neither callback and logs its plain debug line", async () => {
+
+      const logger = capturingLog();
+      const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+      const onTimeout = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+      await using proc = new FfmpegProcess(makeOptions(logger), { args, onFailed, onTimeout });
+
+      await proc.ready;
+      end(proc);
+      await proc.exited;
+
+      assert.deepEqual({ onFailed: onFailed.mock.callCount(), onTimeout: onTimeout.mock.callCount() }, { onFailed: 0, onTimeout: 0 }, "neither callback is asked");
+      assert.deepEqual(linesAt(logger.entries, "debug").filter((entry) => entry.startsWith("test: FFmpeg process ended")), [line], "and the ending logs its plain line");
+    });
+  }
+
+  test("a refused GPU decode with onFailed handed in logs its one debug line and asks nothing", async () => {
+
+    const logger = capturingLog();
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+    await using proc = new FfmpegProcess(makeOptions(logger), { args: [ ...stderrThenExit(178, 10, refusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ],
+      onFailed });
+
+    await proc.exited;
+
+    assert.equal(proc.hasError, true, "the child failed");
+    assert.equal(onFailed.mock.callCount(), 0, "the refusal ends the process ahead of every callback");
+    assert.deepEqual(linesAt(logger.entries, "error"), [], "so nothing reaches error");
+    assert.deepEqual(linesAt(logger.entries, "debug").filter((line) => line.includes("hardware video decoder")),
+      ["test: FFmpeg process ended because the hardware video decoder could not open the stream (exit code 178)."], "and one debug line names the refusal");
+  });
+
+  test("a throwing callback logs its throw at error and then the default report, and nothing reaches the uncaught-exception channel", async () => {
+
+    await captureUncaughtExceptions(async (captured) => {
+
+      const logger = capturingLog();
+      const args = stderrThenExit(3, 10, "an invented diagnostic line");
+      const onFailed = (): FfmpegEndingVerdict => {
+
+        throw new Error("An invented callback failure.");
+      };
+
+      await using proc = new FfmpegProcess(makeOptions(logger), { args, onFailed });
+
+      await proc.exited;
+
+      // A throw that escaped the abort's dispatch would reach the channel on a later turn, so the row crosses one before it looks.
+      await settle();
+
+      assert.deepEqual(linesAt(logger.entries, "error"), [ "test: FFmpeg process ended, and its ending callback threw: An invented callback failure.",
+        "test: FFmpeg process ended unexpectedly. Reason: exit code 3.", commandLine(args), "an invented diagnostic line" ], "the throw is logged, then the report runs");
+      assert.deepEqual(captured, [], "and the throw stays inside the process");
+    });
+  });
+
+  test("a consumer's abort listener added after construction finds onFailed asked and, on default, the report already logged", async () => {
+
+    const logger = capturingLog();
+    const args = stderrThenIdle("an invented diagnostic line");
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "default");
+    const seen: { asked: number; errors: string[] }[] = [];
+
+    await using proc = new FfmpegProcess(makeOptions(logger), { args, onFailed });
+
+    proc.signal.addEventListener("abort", () => seen.push({ asked: onFailed.mock.callCount(), errors: linesAt(logger.entries, "error") }), { once: true });
+
+    await proc.ready;
+    proc.abort(new HbpuAbortError("failed", { cause: new Error("an invented failure") }));
+
+    assert.deepEqual(seen, [{ asked: 1, errors: [ "test: FFmpeg process ended unexpectedly. Reason: an invented failure.", commandLine(args),
+      "an invented diagnostic line" ] }], "the asking and the report run inside the abort, ahead of the consumer's listener");
+
+    await proc.exited;
+  });
+
+  test("a parent already aborted as failed has onFailed asked once, with no stderr lines, before the constructor returns, and handled leaves no error line",
+    async () => {
+
+      const logger = capturingLog();
+      const parent = new AbortController();
+      const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+      parent.abort(new HbpuAbortError("failed", { cause: new Error("an invented parent failure") }));
+
+      await using proc = new FfmpegProcess(makeOptions(logger), { args: stderrThenIdle(), onFailed, signal: parent.signal });
+
+      assert.equal(onFailed.mock.callCount(), 1, "onFailed is asked inside the constructor");
+
+      const ending = expectAt(onFailed.mock.calls, 0, "the asking").arguments[0];
+
+      assert.equal(ending.reason, parent.signal.reason, "with the parent's reason");
+      assert.deepEqual(ending.stderrLog, [], "and no stderr lines, since none can have been read");
+      assert.deepEqual(linesAt(logger.entries, "error"), [], "the callback handled the failure, so nothing reaches error");
+
+      await proc.exited;
+
+      assert.equal(onFailed.mock.callCount(), 1, "and the exit that follows asks nothing more");
+      assert.deepEqual(linesAt(logger.entries, "error"), [], "or logs anything at error");
+    });
+
+  test("a spawn failure keeps its start line when onFailed handles the failure", async () => {
+
+    const logger = capturingLog();
+    const ffmpegExec = "/an/invented/missing/binary/ffmpeg-" + Date.now().toString();
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+    await using proc = new FfmpegProcess(makeOptions(logger, { ffmpegExec }), { args: [], onFailed });
+
+    await assert.rejects(proc.exited, { constructor: HbpuAbortError, name: "failed" });
+
+    assert.equal(onFailed.mock.callCount(), 1, "onFailed is asked about the spawn failure");
+    assert.deepEqual(linesAt(logger.entries, "error"), ["FFmpeg failed to start: unable to find \"" + ffmpegExec + "\"."],
+      "and the start line stands outside the callback, the report it handled gone");
+  });
+
+  test("a spawn failure's default report logs its start line ahead of its summary", async () => {
+
+    const logger = capturingLog();
+    const ffmpegExec = "/an/invented/missing/binary/ffmpeg-" + Date.now().toString();
+
+    await using proc = new FfmpegProcess(makeOptions(logger, { ffmpegExec }), { args: [] });
+
+    await assert.rejects(proc.exited, { constructor: HbpuAbortError, name: "failed" });
+
+    assert.deepEqual(linesAt(logger.entries, "error").slice(0, 2), [ "FFmpeg failed to start: unable to find \"" + ffmpegExec + "\".",
+      "test: FFmpeg process ended unexpectedly. Reason: spawn " + ffmpegExec + " ENOENT." ], "the start line comes first, then the report's summary");
   });
 });
 

@@ -38,21 +38,24 @@
  *
  * The shared pipeline primitive ({@link Mp4SegmentAssembler}) also means this module avoids template-method coupling between
  * the base and the concrete subclasses: no abstract hook methods, no mode-specific state on the base. The base is pure lifecycle
- * composition; the subclasses are pure args builders plus (for recording) a known-error message substitution.
+ * composition; the subclasses are pure args builders, and the recording also hands its base the ending callbacks that state its known-error line and its quiet
+ * timeout.
  *
  * @module
  */
 import { AudioRecordingCodecType, AudioRecordingSamplerate } from "./hap-enums.ts";
+import type { FfmpegEnding, FfmpegEndingVerdict } from "./process-ending.ts";
 import type { FfmpegOptions, VideoEncoderOptions } from "./options.ts";
 import { HKSV_IDR_INTERVAL, HKSV_TIMEOUT } from "./settings.ts";
-import type { HbpuAbortError, PartialWithId } from "../util.ts";
 import { isHbpuAbortReason, onAbort } from "../util.ts";
 import type { CameraRecordingConfiguration } from "homebridge";
 import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessInit } from "./process.ts";
 import type { Mp4Segment } from "./mp4-assembler.ts";
 import { Mp4SegmentAssembler } from "./mp4-assembler.ts";
+import type { PartialWithId } from "../util.ts";
 import type { Writable } from "node:stream";
+import { ffmpegEndingVerdict } from "./process-ending.ts";
 
 // Translation tables for the hap-nodejs enum values that shape the FFmpeg audio encoder args. `as const satisfies` holds the map shape to exhaustively cover every
 // enum member at compile time - a new enum value added upstream would require updating the maps or the build breaks.
@@ -713,7 +716,7 @@ export interface RecordingProcess {
   /**
    * Abort the recording process and tear it down. Defaults to `HbpuAbortError("shutdown")` when no reason is supplied; explicit reasons pass through unchanged.
    *
-   * @param reason - Optional abort reason. Typically an {@link HbpuAbortError}.
+   * @param reason - Optional abort reason. Typically an {@link util!HbpuAbortError | HbpuAbortError}.
    */
   abort(reason?: unknown): void;
 
@@ -799,10 +802,11 @@ export interface RecordingProcessFactory {
 
 /**
  * FFmpeg process specialization for HomeKit Secure Video (HKSV) event recording. Builds its command line from the provided HKSV recording configuration and delegates
- * segment production to {@link FfmpegFMp4Process}. Overrides `FfmpegProcess.logFailedTeardown` to substitute a friendly user-facing message when the stderr log
- * matches one of the tolerated HKSV error patterns, suppressing the canonical ERROR dump for those known benign cases. Also overrides
- * `FfmpegProcess.logTimeoutTeardown` to demote the benign inter-segment watchdog reap to debug - a recording ends exactly this way when its segment source quiets,
- * so the base's WARN would be alarming.
+ * segment production to {@link FfmpegFMp4Process}. It answers its own failed and timed-out endings through the ending callbacks it hands its base: a failure whose
+ * stderr log matches one of the tolerated HKSV error patterns logs one friendly user-facing line in place of the canonical ERROR dump, and the inter-segment
+ * watchdog's reap logs at debug - a recording ends exactly this way when its segment source quiets, so the base's WARN would be alarming. A plugin's own `onFailed`
+ * and `onTimeout` are asked first, and a plugin's `"default"` passes to the recording's answer and from there to the base's report, while a plugin callback that
+ * throws skips the recording's answer, so its throw is logged and the base's report runs.
  *
  * @example
  *
@@ -837,33 +841,48 @@ export class FfmpegRecordingProcess extends FfmpegFMp4Process implements Recordi
    */
   public constructor(options: FfmpegOptions, init: FfmpegRecordingInit) {
 
-    super(options, { ...init, args: init.args ?? buildRecordingCommandLine(options, init) }, HKSV_TIMEOUT);
-  }
+    // The recording's own answers, built from `options` alone: the base may ask them inside `super()`, when a parent signal has already aborted, and this instance
+    // does not exist yet then. Each holds no state, reading only the ending and the options it was built over.
+    const own: Pick<FfmpegProcessInit, "onFailed" | "onTimeout"> = {
 
-  // Known-HKSV-error friendly message. When the abort reason is `"failed"`, inspect the accumulated stderr for any of the tolerated HKSV error patterns and substitute
-  // a single user-facing log line for the canonical ERROR dump. Non-matching failures fall through to the base's canonical ERROR dump via `super.logFailedTeardown`.
-  // Policy is driven entirely by `signal.reason` and the observed stderr, with no class state of our own.
-  protected override logFailedTeardown(reason: HbpuAbortError): void {
+      // Known-HKSV-error friendly message. A failure whose stderr carries any of the tolerated HKSV error patterns logs a single user-facing line in place of the
+      // canonical ERROR dump, and any other failure answers `"default"`, so the base's dump runs.
+      onFailed: (ending: FfmpegEnding): FfmpegEndingVerdict => {
 
-    if(this.stderrLog.some((line) => FFMPEG_KNOWN_HKSV_ERROR.test(line))) {
+        if(!ending.stderrLog.some((line) => FFMPEG_KNOWN_HKSV_ERROR.test(line))) {
 
-      this.log.error("%s: FFmpeg ended unexpectedly due to issues processing the media stream. This error can be safely ignored - it will occur occasionally.",
-        this.options.name());
+          return "default";
+        }
 
-      return;
-    }
+        options.log.error("%s: FFmpeg ended unexpectedly due to issues processing the media stream. This error can be safely ignored - it will occur occasionally.",
+          options.name());
 
-    super.logFailedTeardown(reason);
-  }
+        return "handled";
+      },
 
-  // FfmpegRecordingProcess is the only fMP4 process that arms an inter-segment watchdog - it alone passes HKSV_TIMEOUT to super, while the sibling
-  // FfmpegLivestreamProcess passes no segmentTimeout, so that watchdog never fires there. The watchdog firing is benign by default - it is simply how an HKSV recording
-  // ends when its segment source quiets. The watchdog is output-only (it re-arms on completed output segments and never sees stdin), so the library cannot tell a starved
-  // source (a benign wire stall) from a fed-but-stuck FFmpeg (a real local hang); it reports the reap quietly at debug and leaves the severity verdict to the consumer,
-  // which alone holds the input-feed and reachability context. The base class warns here because a stall on a general (streaming) process genuinely is a problem.
-  protected override logTimeoutTeardown(_reason: HbpuAbortError): void {
+      // FfmpegRecordingProcess is the only fMP4 process that arms an inter-segment watchdog - it alone passes HKSV_TIMEOUT to super, while the sibling
+      // FfmpegLivestreamProcess passes no segmentTimeout, so that watchdog never fires there. The watchdog firing is benign by default - it is simply how an HKSV
+      // recording ends when its segment source quiets. The watchdog is output-only (it re-arms on completed output segments and never sees stdin), so the library cannot
+      // tell a starved source (a benign wire stall) from a fed-but-stuck FFmpeg (a real local hang); it reports the reap quietly at debug and leaves the severity
+      // verdict to the consumer, which alone holds the input-feed and reachability context. The base warns by default because a stall on a general (streaming) process
+      // genuinely is a problem.
+      onTimeout: (): FfmpegEndingVerdict => {
 
-    this.log.debug("%s: the recording's inter-segment watchdog window elapsed with no new segment.", this.options.name());
+        options.log.debug("%s: the recording's inter-segment watchdog window elapsed with no new segment.", options.name());
+
+        return "handled";
+      }
+    };
+
+    // The callbacks the plugin's init held at construction, copied as the base holds its own, so a plugin that changes its init afterward leaves the recording's
+    // answers unchanged.
+    const plugin: Pick<FfmpegProcessInit, "onFailed" | "onTimeout"> = { onFailed: init.onFailed, onTimeout: init.onTimeout };
+
+    // The plugin's callbacks are asked first and the recording's own after them, so a plugin that answers `"default"` reaches the recording's answer and, past a
+    // `"default"` there, the base's report.
+    const answer = (ending: FfmpegEnding): FfmpegEndingVerdict => ffmpegEndingVerdict(ending, plugin, own);
+
+    super(options, { ...init, args: init.args ?? buildRecordingCommandLine(options, init), onFailed: answer, onTimeout: answer }, HKSV_TIMEOUT);
   }
 }
 

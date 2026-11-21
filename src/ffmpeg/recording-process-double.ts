@@ -54,8 +54,9 @@ export interface TestRecordingProcessInit {
  * composes its own signal with the passed per-call signal as the real assembler composes the two. Where it departs from the real process: `getInitSegment()` rejects
  * with `signal.reason` after any abort, where the real init wait stays resolved when the init segment arrived before the abort; and `segments()` returns at the first
  * item after either signal aborts, dropping the configured segments it has not yet yielded, where the real read hands over every segment already assembled before it
- * returns. The `stdin` sink records every written chunk and stays writable across abort, so a consumer driving a `BackpressureWriter` over it can assert the segment
- * feed regardless of abort ordering.
+ * returns; and its `stdin` sink, which records every written chunk, is never destroyed, because the double has no exit, where a real process's stdin stays writable
+ * after an abort and is destroyed at the child's exit. A consumer driving a `BackpressureWriter` over the sink can therefore assert the segment feed whenever the
+ * abort lands. It asks no ending callback: an `onFailed` or `onTimeout` in the init its factory recorded is never called, whatever reason ends the double.
  *
  * @see RecordingProcess
  * @see TestRecordingProcessFactory
@@ -95,10 +96,10 @@ export class TestRecordingProcess implements RecordingProcess {
     this.#segments = init.segments ?? [];
     this.#stderrLog = init.stderrLog ?? [];
 
-    // A genuine recording sink that records each chunk and immediately acknowledges the write. It is intentionally independent of the abort path: `abort()` never ends or
-    // destroys it, so it stays `writable` and a consumer's writes land regardless of abort ordering. This is a deliberate divergence from the real `FfmpegProcess.stdin`,
-    // which Node destroys as soon as the abort signal fires and the kill signal takes effect; the double stays open indefinitely so a recording consumer can flush its
-    // in-flight segment feed and assert on it without racing the abort-triggered teardown the real stream would otherwise undergo.
+    // A genuine recording sink that records each chunk and immediately acknowledges the write. It is independent of the abort path: `abort()` never ends or destroys
+    // it, so it stays `writable` and a consumer's writes land whenever the abort lands. The real `FfmpegProcess.stdin` stays writable after an abort as well and is
+    // destroyed at the child's exit, which the double does not have, so the sink stays open indefinitely...a recording consumer can flush its in-flight segment feed
+    // after any abort and assert on what it fed.
     this.stdin = new Writable({
 
       write: (chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void => {

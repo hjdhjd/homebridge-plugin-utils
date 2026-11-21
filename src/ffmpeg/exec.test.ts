@@ -1,21 +1,23 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/exec.test.ts: Unit tests for FfmpegExec - canned stdin, stdout collection, bundled result, abort cancellation.
+ * ffmpeg/exec.test.ts: Unit tests for FfmpegExec - canned stdin, stdout collection, bundled result, abort cancellation, and an ending callback.
  */
-import { describe, test } from "node:test";
+import type { FfmpegEnding, FfmpegEndingVerdict } from "./process.ts";
+import { capturingLog, linesAt, silentLog } from "../testing/index.ts";
+import { describe, mock, test } from "node:test";
 import type { ExecResult } from "./exec.ts";
 import { FfmpegExec } from "./exec.ts";
 import { FfmpegOptions } from "./options.ts";
 import { HbpuAbortError } from "../util.ts";
+import type { HomebridgePluginLogging } from "../util.ts";
 import type { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
-import { silentLog } from "../testing/index.ts";
 
 // Construct a real `FfmpegOptions`. `ffmpegExec` resolves to the running Node binary so every test spawns Node with an inline `-e` script; the script determines
 // per-test behavior. Hardware flags stay false because FfmpegExec doesn't read them and software-only configs exercise the spawn plumbing this suite covers.
-function makeOptions(): FfmpegOptions {
+function makeOptions(logger: HomebridgePluginLogging = silentLog()): FfmpegOptions {
 
   return new FfmpegOptions({
 
@@ -23,7 +25,7 @@ function makeOptions(): FfmpegOptions {
     debug: false,
     hardwareDecoding: false,
     hardwareTranscoding: false,
-    log: silentLog(),
+    log: logger,
     name: (): string => "test"
   });
 }
@@ -145,6 +147,30 @@ describe("FfmpegExec - abort cancellation", () => {
     // 3. The OS-level exit info is populated. Kill-driven exit surfaces either a signal or a non-zero code; this is the second SSOT for disposition, complementing
     //    `signal.reason` with the syscall-level facts.
     assert.ok((exit.exitSignal !== null) || (exit.exitCode !== 0), "kill-driven exit should expose either a signal or a non-zero exit code");
+  });
+});
+
+describe("FfmpegExec - ending callbacks", () => {
+
+  test("a failed run whose onFailed logs one debug line and handles the failure logs no error, and result() resolves with the exit code", async () => {
+
+    const logger = capturingLog();
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => {
+
+      logger.debug("An invented one-shot pipeline ended without completing.");
+
+      return "handled";
+    });
+
+    await using exec = new FfmpegExec(makeOptions(logger), { args: emitThenExit("QUIET", 3), onFailed });
+
+    const result = await exec.result();
+
+    assert.equal(result.exitCode, 3, "result() resolves with the exit code");
+    assert.equal(onFailed.mock.callCount(), 1, "onFailed is asked once");
+    assert.deepEqual(linesAt(logger.entries, "error"), [], "its handled leaves nothing at error");
+    assert.equal(linesAt(logger.entries, "debug").filter((line) => line === "An invented one-shot pipeline ended without completing.").length, 1,
+      "and its own debug line is the failure's one report");
   });
 });
 

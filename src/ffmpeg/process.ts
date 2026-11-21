@@ -19,22 +19,29 @@
  * - {@link AbortSignal}-driven teardown. Node's native `spawn({ signal, killSignal })` owns the kill path; no manual SIGKILL fallback timer.
  * - `ready` promise resolves when FFmpeg produces its first stderr byte (the earliest reliable "we are actually running" signal).
  * - `exited` promise resolves with the child's exit code and signal once it terminates. Rejects with `signal.reason` only when the child never started (e.g., `ENOENT`).
- * - Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG. A failure whose decoded frames were
- *   asked on the GPU and whose hardware decoder refused the stream logs at DEBUG instead, because every refusal marks the process's
- *   {@link FfmpegOptions} and later pipelines over them decode in software.
+ * - Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG. The init's `onFailed` and `onTimeout`
+ *   callbacks are asked about a failed or timed-out ending first, and each reports the ending its own way or leaves that report to stand. A failure whose
+ *   decoded frames were asked on the GPU and whose hardware decoder refused the stream logs at DEBUG ahead of any callback, because every refusal marks the
+ *   process's {@link FfmpegOptions} and later pipelines over them decode in software.
  * - Synchronous teardown classification. The abort that tears the process down runs its listeners inline, so the moment a consumer's listener on `this.signal`
  *   fires, `hasError` and the teardown reason already hold their final values. Shutdown logic may rely on that ordering: it is a contract of this class, and
  *   changing it is a breaking change rather than an implementation detail.
  *
  * @module
  */
-import { HbpuAbortError, Watchdog, composeSignals, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, markHandled, onAbort } from "../util.ts";
+import type { FfmpegEnding, FfmpegEndingVerdict } from "./process-ending.ts";
+import { HbpuAbortError, Watchdog, composeSignals, formatErrorMessage, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, markHandled, onAbort } from "../util.ts";
 import type { HbpuAbortReason, HomebridgePluginLogging, Nullable } from "../util.ts";
 import type { Readable, Writable } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EOL } from "node:os";
 import type { FfmpegOptions } from "./options.ts";
+import { ffmpegEndingVerdict } from "./process-ending.ts";
 import { spawn } from "node:child_process";
+
+// Re-export the ending a callback is handed and the verdict it answers, so a plugin names them from the package root beside the init that carries the callbacks.
+// The single source is `process-ending.ts`, which shares the rule for asking them with a test double; this file is just a forwarding re-export.
+export type { FfmpegEnding, FfmpegEndingVerdict } from "./process-ending.ts";
 
 // Matches non-printable control characters that #onStderrData replaces with EOL so control sequences become line boundaries rather than vanishing. Compiled once at
 // module scope rather than per data event.
@@ -121,7 +128,21 @@ export interface FfmpegProcessExitInfo {
 /**
  * Construction-time options for {@link FfmpegProcess}.
  *
+ * The ending callbacks let a plugin say how a failed or timed-out process is reported, in place of the default report, without subclassing. Each is asked at most
+ * once, synchronously inside the abort that ends the process: the reason is final by then, and the asking comes before any abort listener a consumer added to the
+ * process's own `signal`, or inside the constructor when the parent signal has already aborted. A listener on the parent signal the consumer passed in runs first,
+ * since the parent dispatches its abort to its own listeners before the process's signal dispatches to its. A callback that throws has its throw logged at error, and
+ * the default report runs in its place. A subclass that builds a callback for its base reads its own constructor's parameters and never the instance, which may not
+ * yet be built when the callback is asked.
+ *
  * @property args            - Optional. FFmpeg command-line arguments. Defaults to an empty array.
+ * @property onFailed        - Optional. Asked when the process fails: an exit other than with code 0, a spawn failure, or a `"failed"` reason handed in through
+ *                             `abort()` or the parent signal. A failed process that asked for its decoded frames on the GPU and read its hardware decoder's refusal
+ *                             ends at debug ahead of this callback, which it does not ask. On `"handled"` the process logs nothing more for the failure; on
+ *                             `"default"` it logs its summary, its command line and every stderr line at error.
+ * @property onTimeout       - Optional. Asked when the process ends with `HbpuAbortError("timeout")` alone, whether a watchdog or the code that aborted the process
+ *                             raised it, and never for a platform `TimeoutError`, which ends at debug. On `"handled"` the process logs nothing more for the
+ *                             timeout; on `"default"` it logs one warning.
  * @property signal          - Optional. Parent {@link AbortSignal} to compose with the process's internal controller. When the parent aborts, the process tears down.
  * @property startupTimeout  - Optional. If FFmpeg does not produce stderr output within this many milliseconds, the process is aborted with
  *                             `HbpuAbortError("timeout")`. The window is armed on the options' clock, so a consumer's virtual clock drives it.
@@ -131,6 +152,8 @@ export interface FfmpegProcessExitInfo {
 export interface FfmpegProcessInit {
 
   args?: string[];
+  onFailed?: (ending: FfmpegEnding) => FfmpegEndingVerdict;
+  onTimeout?: (ending: FfmpegEnding) => FfmpegEndingVerdict;
   signal?: AbortSignal;
   startupTimeout?: number;
 }
@@ -244,6 +267,10 @@ export class FfmpegProcess implements AsyncDisposable {
   // signal with the parent's; otherwise `this.signal` is this controller's signal directly.
   readonly #controller: AbortController;
 
+  // The init's ending callbacks, held from the constructor's first lines so the teardown can ask them even when it runs inside the constructor under a parent signal
+  // already aborted.
+  readonly #endingCallbacks: Pick<FfmpegProcessInit, "onFailed" | "onTimeout">;
+
   // The underlying Node ChildProcess. Held privately so subclasses route through `_stdin` / `_stdout` / `_stderr` rather than reaching into the raw object.
   readonly #process: ChildProcessWithoutNullStreams;
 
@@ -287,10 +314,11 @@ export class FfmpegProcess implements AsyncDisposable {
    */
   public constructor(options: FfmpegOptions, init: FfmpegProcessInit = {}) {
 
-    const { args = [], signal: parentSignal, startupTimeout } = init;
+    const { args = [], onFailed, onTimeout, signal: parentSignal, startupTimeout } = init;
 
     this.options = options;
     this.log = options.log;
+    this.#endingCallbacks = { onFailed, onTimeout };
 
     // Freeze a copy of the caller's args so the `readonly` type is enforced at runtime as well as in TypeScript. Without the copy, a caller mutating their own array
     // post-construction would silently mutate our stored value - visible in the teardown log, invisible during review.
@@ -340,16 +368,19 @@ export class FfmpegProcess implements AsyncDisposable {
 
     // Attach listeners to the ChildProcess and its streams. Node's `EventEmitter.on` / `.once` do not accept the `{ signal }` option that `EventTarget.addEventListener`
     // does - that helper lives on the module-level `events.on` / `events.once` wrappers, which are oriented around promises and async iterators rather than callbacks.
-    // For the base class's single-producer-single-consumer callbacks, manual attachment is fine: the underlying ChildProcess and its pipes are destroyed when the signal
-    // aborts (Node's `spawn({ signal, killSignal })` owns the kill path), so post-abort events simply never fire and there is no runaway-listener risk.
+    // For the base class's single-producer-single-consumer callbacks, manual attachment is fine: every listener sits on the child or one of its own pipes, which close
+    // at the child's exit, so none outlives the process and there is no runaway-listener risk. The abort kills the child (Node's `spawn({ signal, killSignal })` owns
+    // the kill path), but its pipes live until it exits, so events still arrive between the abort and the exit - the `"error"` Node raises for the kill, stderr the
+    // child had already written, the exit itself - and each handler expects them: the spawn-error handler passes over an error on a child that spawned, the drain goes
+    // on filling the log, and the exit handler keeps the abort's reason.
     this.#process.once("error", (error: NodeJS.ErrnoException) => this.#onSpawnError(error));
     this.#process.once("exit", (exitCode, exitSignal) => this.#onExit(exitCode, exitSignal));
     this.#process.stdin.on("error", (error: Error) => this.#onStdinError(error));
     this.#process.stderr.on("data", (chunk: Buffer) => this.#onStderrData(chunk));
 
     // Single teardown convergence point. `onAbort` registers the one-shot teardown listener for the normal abort path AND runs it synchronously when the signal is
-    // already aborted at construction time - typically because the caller passed a pre-aborted parent signal. `#onSpawnError` will later settle `exited` when Node's
-    // pre-aborted spawn emits its `"error"` event on the next microtask.
+    // already aborted at construction time - typically because the caller passed a pre-aborted parent signal. Under that signal Node kills the child it spawned, so
+    // the exit settles `exited` when the child spawned, and `#onSpawnError` settles it when the spawn itself failed and no exit will follow.
     onAbort(this.signal, () => this.#teardown());
 
     // Optional startup watchdog, armed at spawn on the options' clock - the system clock when the consumer wired none - and converting a lapsed window into our own
@@ -510,8 +541,9 @@ export class FfmpegProcess implements AsyncDisposable {
   }
 
   // Stdin error listener. FFmpeg's stdin typically closes cleanly once we are done piping data; the only error we expect in normal operation is `EPIPE`, which happens
-  // when we try to write after ffmpeg has already exited. We swallow `EPIPE` silently and log anything else. The underlying stream is destroyed when the signal aborts
-  // (Node's `spawn({ signal, killSignal })` owns the kill path), so post-abort stdin events simply do not fire - no manual `.off()` needed.
+  // when we try to write after ffmpeg has already exited. We swallow `EPIPE` silently and log anything else. The stream stays writable after an abort until the killed
+  // child exits, so a write in that window can still reach this listener and its `EPIPE` is swallowed like any other; the stream is destroyed at the exit and the
+  // listener goes with it, so no manual `.off()` is needed.
   #onStdinError(error: Error): void {
 
     if(error.message.includes("EPIPE")) {
@@ -585,22 +617,17 @@ export class FfmpegProcess implements AsyncDisposable {
   // Reason-based teardown logging. The policy is driven by `this.signal.reason`, mapping each reason variant to a log level and message shape:
   //
   //   - A refused GPU decode             -> DEBUG naming the refusal: a `"failed"` reason on a process whose stderr reported the hardware decoder's refusal and whose
-  //                                         args asked for its decoded frames on the GPU (`-hwaccel_output_format`). Checked ahead of `logFailedTeardown()`, so no
-  //                                         subclass substitutes a verdict of its own: the refusal ended the process, and its options already decode every later
-  //                                         pipeline in software.
-  //   - `HbpuAbortError("failed", ...)`  -> delegated to `logFailedTeardown()` (ERROR with full stderr dump and exit context by default; subclasses override to
-  //                                         substitute a bespoke message for known benign error shapes).
-  //   - `HbpuAbortError("timeout")`      -> delegated to `logTimeoutTeardown()` (a static WARN by default; the recording subclass overrides it to debug for a benign
-  //                                         inter-segment timeout).
+  //                                         args asked for its decoded frames on the GPU (`-hwaccel_output_format`). Checked ahead of the ending callbacks, so none is
+  //                                         asked about it: the refusal ended the process, and its options already decode every later pipeline in software.
+  //   - `HbpuAbortError("failed", ...)`  -> the init's `onFailed`, then, unless it answers `"handled"`, ERROR with the full stderr dump and exit context.
+  //   - `HbpuAbortError("timeout")`      -> the init's `onTimeout`, then, unless it answers `"handled"`, a static WARN.
   //   - Any other HbpuAbortError         -> DEBUG with the reason name (self-inflicted or orderly teardown).
   //   - Platform TimeoutError/AbortError -> DEBUG with the reason name (no dump).
   //   - Anything else                    -> DEBUG with a generic message.
   //
-  // Lifting a teardown branch into a `protected` method lets subclasses substitute a level / message for a teardown shape they characterize differently, without
-  // re-implementing the whole teardown policy or trying to pre-empt the base's listener ordering. Each named-reason branch is independently overridable:
-  // `logFailedTeardown` (the recording subclass substitutes a friendly message for known benign HKSV error shapes, returning early to suppress the canonical ERROR
-  // dump; non-matching subclasses call `super.logFailedTeardown(reason)` and the dump fires) and `logTimeoutTeardown` (the recording subclass demotes the benign
-  // inter-segment timeout to debug, while the default stays WARN because a stall on a general - streaming - process genuinely is a problem).
+  // A callback lets a plugin report a failed or timed-out ending its own way without re-implementing this policy or trying to pre-empt the base's listener ordering:
+  // it answers `"handled"` once it has said what it wants said, or `"default"` to let the report here stand. A process kind with answers of its own hands its base
+  // callbacks that ask the plugin's first and its own after, so which callback is asked, and in what order, is stated once, in the rule `ffmpegEndingVerdict` holds.
   #logTeardown(): void {
 
     const reason: unknown = this.signal.reason;
@@ -621,14 +648,20 @@ export class FfmpegProcess implements AsyncDisposable {
             return;
           }
 
-          this.logFailedTeardown(reason);
+          if(this.#endingVerdict(reason) === "default") {
+
+            this.#logFailureReport(reason);
+          }
 
           return;
         }
 
         case "timeout": {
 
-          this.logTimeoutTeardown(reason);
+          if(this.#endingVerdict(reason) === "default") {
+
+            this.#logTimeoutReport();
+          }
 
           return;
         }
@@ -648,18 +681,27 @@ export class FfmpegProcess implements AsyncDisposable {
     this.log.debug("%s (%s).", this.#teardownPrefix, name);
   }
 
-  /**
-   * Log the "failed" teardown branch. Overridable by subclasses that want to substitute a bespoke message for known benign error shapes before falling through to the
-   * canonical ERROR dump. The base calls it for every `"failed"` teardown but a refused GPU decode, which it ends at debug first.
-   *
-   * The default implementation emits two ERROR lines (an "ended unexpectedly" summary and the command that produced it), then dumps every accumulated stderr line at
-   * ERROR level. Subclasses may inspect `this.stderrLog` and `reason.cause`, log a friendly message, and return early to suppress the dump; or call
-   * `super.logFailedTeardown(reason)` to emit the canonical dump after prepending their own context.
-   *
-   * @param reason - The `"failed"` reason that drove this teardown. Its `cause` field carries structured exit info (`{ exitCode, exitSignal }`) for natural non-zero
-   *                 exits, or the underlying `Error` for spawn failures.
-   */
-  protected logFailedTeardown(reason: HbpuAbortError): void {
+  // Ask the init's ending callbacks about a failed or timed-out ending, here inside the abort's dispatch, so the verdict is in before the report and before any abort
+  // listener a consumer added to this process's `signal` runs. A listener on the parent signal the consumer passed in has already run by then, since the parent
+  // dispatches to its own listeners first. The asking is guarded because a throw inside the dispatch would surface as Node's `uncaughtException` rather than reach the
+  // code that aborted us: a throwing callback is logged at error and read as `"default"`, so the ending still gets the base's report.
+  #endingVerdict(reason: HbpuAbortError): FfmpegEndingVerdict {
+
+    try {
+
+      return ffmpegEndingVerdict({ reason, stderrLog: this.stderrLog }, this.#endingCallbacks);
+    } catch(error: unknown) {
+
+      this.log.error("%s, and its ending callback threw: %s.", this.#teardownPrefix, formatErrorMessage(error));
+
+      return "default";
+    }
+  }
+
+  // The default report for a failed ending: an "ended unexpectedly" summary naming the cause, the command that produced it, then every stderr line read, all at error.
+  // The cause is the exit information for an exit other than with code 0, the underlying `Error` for a spawn failure, or whatever the code that aborted the process
+  // attached.
+  #logFailureReport(reason: HbpuAbortError): void {
 
     this.log.error("%s unexpectedly. Reason: %s.", this.#teardownPrefix, describeCause(reason.cause));
     this.log.error("FFmpeg (%s) command that errored out was: %s %s.", this.#ffmpegVersion, this.#ffmpegExec, this.args.join(" "));
@@ -670,27 +712,18 @@ export class FfmpegProcess implements AsyncDisposable {
     }
   }
 
-  /**
-   * Log the "timeout" teardown branch. Overridable by subclasses for which an inter-segment / watchdog timeout is benign by default - e.g. an HKSV recording, which
-   * ends exactly this way whenever its segment source quiets.
-   *
-   * The default implementation emits a single WARN: a stall that trips the watchdog on a general FFmpeg process (a live stream) genuinely is a problem. A subclass may
-   * override to demote the reap to debug and leave the severity verdict to the consumer that holds the input-feed and reachability context.
-   *
-   * @param _reason - The `"timeout"` abort reason that drove this teardown. Part of the override contract so a subclass can inspect it (parallel to
-   *                  `logFailedTeardown`), but neither the default body nor the recording override reads it - a watchdog timeout carries no actionable cause - so
-   *                  it is `_`-prefixed.
-   */
-  protected logTimeoutTeardown(_reason: HbpuAbortError): void {
+  // The default report for a timed-out ending: one warning, because a stall that trips a watchdog on a general FFmpeg process, a live stream among them, genuinely is a
+  // problem. A process kind whose timeout is routine answers `onTimeout` itself and leaves the severity to the consumer that holds the input-feed context.
+  #logTimeoutReport(): void {
 
     this.log.warn("%s: stalled past its watchdog window.", this.#teardownPrefix);
   }
 
   // Common prefix used by the BASE teardown log lines: the caller's camera / session name followed by the canonical teardown phrase. Single source of truth so the
-  // wording stays consistent across the failed / timeout / debug DEFAULT bodies and any future base teardown message. The subclass overrides (`FfmpegRecordingProcess`'s
-  // `logFailedTeardown` and `logTimeoutTeardown`) deliberately do NOT read this getter - they compose their own bespoke messages from `this.options.name()`, so a future
-  // change to this prefix cannot leave their wording stale. Keyed off `options.name()` rather than cached because the name function can return different values over the
-  // instance's lifetime (e.g., a mid-session camera rename in HBUP).
+  // wording stays consistent across the failed / timeout / debug DEFAULT bodies, the line for a throwing callback, and any future base teardown message. An ending
+  // callback cannot reach this private getter and composes its own line from the options it was built over, so a change to this prefix leaves a callback's wording as
+  // it is. Keyed off `options.name()` rather than cached because the name function can return different values over the instance's lifetime (e.g., a mid-session camera
+  // rename in HBUP).
   get #teardownPrefix(): string {
 
     return this.options.name() + ": FFmpeg process ended";

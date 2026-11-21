@@ -1,14 +1,16 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ffmpeg/record.test.ts: Unit tests for FfmpegRecordingProcess and FfmpegLivestreamProcess - composed Mp4SegmentAssembler, init / segment delegation, abort propagation
- * between the process and the assembler, known-HKSV-error friendly teardown message, livestream segmentLength wiring, and the livestream lifecycle run against the real
- * process and against TestLivestreamProcess, so the double is held to what the real process does.
+ * between the process and the assembler, known-HKSV-error friendly teardown message, a plugin's ending callbacks asked ahead of the recording's own, livestream
+ * segmentLength wiring, and the livestream lifecycle run against the real process and against TestLivestreamProcess, so the double is held to what the real process does.
  */
 import { AudioRecordingCodecType, AudioRecordingSamplerate, H264Level, H264Profile, MediaContainerType, VideoCodecType } from "./hap-enums.ts";
 import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit, LivestreamProcess } from "./record.ts";
+import type { FfmpegEnding, FfmpegEndingVerdict } from "./process.ts";
 import { FfmpegLivestreamProcess, FfmpegRecordingProcess, livestreamProcessFactory } from "./record.ts";
-import { TestLivestreamProcessFactory, capturingLog, expectAt, settle, waitUntil } from "../testing/index.ts";
-import { describe, test } from "node:test";
+import { TestLivestreamProcessFactory, capturingLog, expectAt, linesAt, settle, waitUntil } from "../testing/index.ts";
+import { assertEachSubject, lifetimeState, reasonName } from "./process-parity.helpers.ts";
+import { describe, mock, test } from "node:test";
 import type { CameraRecordingConfiguration } from "homebridge";
 import type { CapturingLog } from "../testing/index.ts";
 import type { Clock } from "../clock.ts";
@@ -179,8 +181,8 @@ function buildInitOnlyIdleScript(): string[] {
   return [ "-e", script ];
 }
 
-// Stand-in script that emits a known-HKSV-error line to stderr, then exits with a non-zero code. Used to exercise the FfmpegRecordingProcess.logFailedTeardown override
-// that substitutes the canonical stderr dump with a friendly user-facing line.
+// Stand-in script that emits a known-HKSV-error line to stderr, then exits with a non-zero code. It exercises the recording's own `onFailed` answer, which logs a
+// friendly user-facing line in place of the canonical stderr dump.
 function buildKnownHksvErrorScript(): string[] {
 
   return [ "-e",
@@ -351,7 +353,7 @@ describe("FfmpegRecordingProcess - abort propagation between assembler and proce
     assert.ok(logger.entries.some((entry) => (entry.level === "debug") && entry.message.includes("inter-segment watchdog window")),
       "the recording timeout teardown reports the reap at debug");
     assert.ok(!logger.entries.some((entry) => (entry.level === "warn") && entry.message.includes("stalled past its watchdog window")),
-      "the recording timeout teardown does NOT warn - the base default is overridden");
+      "the recording timeout teardown does NOT warn - the recording's own onTimeout answers it");
   });
 });
 
@@ -367,7 +369,7 @@ describe("FfmpegRecordingProcess - known HKSV error friendly message", () => {
       recordingConfig: makeRecordingConfig()
     });
 
-    await proc.exited.catch(() => { /* Non-zero exit will surface here; the subclass override handles the logging. */ });
+    await proc.exited.catch(() => { /* Non-zero exit will surface here; the recording's own onFailed answer handles the logging. */ });
 
     // Friendly message must appear at ERROR level, and the canonical per-stderr-line dump must NOT be emitted for the matched pattern.
     const errorEntries = logger.entries.filter((e) => e.level === "error");
@@ -379,6 +381,130 @@ describe("FfmpegRecordingProcess - known HKSV error friendly message", () => {
     const hasCanonicalDump = errorEntries.some((entry) => entry.message === "moov atom not found");
 
     assert.equal(hasCanonicalDump, false, "the canonical stderr dump must be suppressed when the known-error pattern matches");
+  });
+});
+
+describe("FfmpegRecordingProcess - a plugin's ending callbacks ahead of the recording's own", () => {
+
+  // The recording's own line for a failure its stderr shows to be a known HKSV error.
+  const knownErrorLine = "test-camera: FFmpeg ended unexpectedly due to issues processing the media stream. This error can be safely ignored - it will occur " +
+    "occasionally.";
+
+  // The recording's own debug line for its inter-segment watchdog's reap.
+  const reapLine = "test-camera: the recording's inter-segment watchdog window elapsed with no new segment.";
+
+  test("a plugin's onFailed answering handled over known-error stderr is asked first, and the recording's own line is never logged", async () => {
+
+    const logger = capturingLog();
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(logger), { args: buildKnownHksvErrorScript(), onFailed, recordingConfig: makeRecordingConfig() });
+
+    await proc.exited;
+
+    assert.equal(onFailed.mock.callCount(), 1, "the plugin's onFailed is asked");
+    assert.deepEqual(expectAt(onFailed.mock.calls, 0, "the asking").arguments[0].stderrLog, [ "ready", "moov atom not found" ], "with the stderr lines read");
+    assert.deepEqual(linesAt(logger.entries, "error"), [], "and its handled ends the asking ahead of the recording's own line");
+  });
+
+  test("a plugin's onFailed answering default passes known-error stderr on to the recording's own line", async () => {
+
+    const logger = capturingLog();
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "default");
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(logger), { args: buildKnownHksvErrorScript(), onFailed, recordingConfig: makeRecordingConfig() });
+
+    await proc.exited;
+
+    assert.equal(onFailed.mock.callCount(), 1, "the plugin's onFailed is asked");
+    assert.deepEqual(linesAt(logger.entries, "error"), [knownErrorLine], "and past its default the recording logs its line in place of the dump");
+  });
+
+  test("a failure whose stderr matches no known HKSV error keeps the base's dump", async () => {
+
+    const logger = capturingLog();
+    const args = [ "-e", "process.stderr.write(\"ready\\n\"); process.stderr.write(\"an invented unmatched failure\\n\"); setTimeout(() => process.exit(2), 30);" ];
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(logger), { args, recordingConfig: makeRecordingConfig() });
+
+    await proc.exited;
+
+    assert.deepEqual(linesAt(logger.entries, "error"), [ "test-camera: FFmpeg process ended unexpectedly. Reason: exit code 2.",
+      "FFmpeg (7.0) command that errored out was: " + process.execPath + " " + args.join(" ") + ".", "ready", "an invented unmatched failure" ],
+    "the recording's own answer is default for a failure it does not recognize, so the base's report runs");
+  });
+
+  test("a plugin's onTimeout answering default reaches the recording's debug line, and nothing warns", async () => {
+
+    const logger = capturingLog();
+    const onTimeout = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "default");
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(logger), { args: buildInitOnlyIdleScript(), onTimeout, recordingConfig: makeRecordingConfig() });
+
+    await proc.getInitSegment();
+    proc.abort(new HbpuAbortError("timeout"));
+    await proc.exited;
+
+    assert.equal(onTimeout.mock.callCount(), 1, "the plugin's onTimeout is asked");
+    assert.deepEqual(linesAt(logger.entries, "debug").filter((line) => line === reapLine), [reapLine], "and past its default the recording reports the reap at debug");
+    assert.deepEqual(linesAt(logger.entries, "warn"), [], "which handles it, so the base does not warn");
+  });
+
+  test("a plugin's onTimeout that throws logs the throw and then the base's warning, and the recording's debug line is never reached", async () => {
+
+    const logger = capturingLog();
+    const onTimeout = (): FfmpegEndingVerdict => {
+
+      throw new Error("An invented callback failure.");
+    };
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(logger), { args: buildInitOnlyIdleScript(), onTimeout, recordingConfig: makeRecordingConfig() });
+
+    await proc.getInitSegment();
+    proc.abort(new HbpuAbortError("timeout"));
+    await proc.exited;
+
+    assert.deepEqual(linesAt(logger.entries, "error"), ["test-camera: FFmpeg process ended, and its ending callback threw: An invented callback failure."],
+      "the throw is logged at error");
+    assert.deepEqual(linesAt(logger.entries, "warn"), ["test-camera: FFmpeg process ended: stalled past its watchdog window."], "then the base's own report runs");
+    assert.equal(linesAt(logger.entries, "debug").includes(reapLine), false, "and the recording's own answer is skipped with the plugin's");
+  });
+
+  test("a recording under a parent already aborted as timed out logs its debug line inside the constructor, with no warning and no throw", async () => {
+
+    const logger = capturingLog();
+    const parent = new AbortController();
+
+    parent.abort(new HbpuAbortError("timeout"));
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(logger), { args: buildInitOnlyIdleScript(), recordingConfig: makeRecordingConfig(),
+      signal: parent.signal });
+
+    assert.deepEqual(linesAt(logger.entries, "debug").filter((line) => line === reapLine), [reapLine],
+      "the recording's own answer reads only its constructor's parameters, so it runs inside the base constructor");
+    assert.deepEqual(linesAt(logger.entries, "warn"), [], "and handles the timeout");
+    assert.deepEqual(linesAt(logger.entries, "error"), [], "without throwing");
+
+    await proc.exited;
+  });
+
+  test("a plugin that replaces its init's onTimeout after construction is still asked the one it built the recording with", async () => {
+
+    const logger = capturingLog();
+    const built = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+    const replacement = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+    const init: FfmpegRecordingInit = { args: buildInitOnlyIdleScript(), onTimeout: built, recordingConfig: makeRecordingConfig() };
+
+    await using proc = new FfmpegRecordingProcess(makeOptions(logger), init);
+
+    init.onTimeout = replacement;
+
+    await proc.getInitSegment();
+    proc.abort(new HbpuAbortError("timeout"));
+    await proc.exited;
+
+    assert.deepEqual({ built: built.mock.callCount(), replacement: replacement.mock.callCount() }, { built: 1, replacement: 0 },
+      "the recording holds the callbacks its init carried at construction, as the base holds its own");
   });
 });
 
@@ -455,7 +581,7 @@ describe("FfmpegLivestreamProcess - init segment and media segments", () => {
     assert.ok(allParams.includes("500000"), "segmentLength in ms must be translated to microseconds (500 * 1000 = 500000) in -frag_duration");
   });
 
-  test("a livestream timeout teardown keeps the base warn - the override is on the recording leaf, not the shared fMP4 parent", async () => {
+  test("a livestream timeout teardown keeps the base warn - the quiet answer is the recording's own, not the shared fMP4 parent's", async () => {
 
     const logger = capturingLog();
 
@@ -470,9 +596,24 @@ describe("FfmpegLivestreamProcess - init segment and media segments", () => {
     await proc.exited;
 
     assert.ok(logger.entries.some((entry) => (entry.level === "warn") && entry.message.includes("stalled past its watchdog window")),
-      "the livestream sibling keeps the base warn - the override is on the recording leaf, not the shared fMP4 parent");
+      "the livestream sibling keeps the base warn - the quiet answer is the recording's own, not the shared fMP4 parent's");
     assert.ok(!logger.entries.some((entry) => entry.message.includes("inter-segment watchdog window")),
-      "the livestream sibling does NOT get the recording debug override");
+      "the livestream sibling does NOT get the recording's debug line");
+  });
+
+  test("a livestream whose onTimeout answers handled logs no warning", async () => {
+
+    const logger = capturingLog();
+    const onTimeout = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+    await using proc = new FfmpegLivestreamProcess(makeOptions(logger), { args: buildInitOnlyIdleScript(), livestream: { url: "rtsp://test/stream" }, onTimeout });
+
+    await proc.getInitSegment();
+    proc.abort(new HbpuAbortError("timeout"));
+    await proc.exited;
+
+    assert.equal(onTimeout.mock.callCount(), 1, "the livestream hands its base the plugin's onTimeout");
+    assert.deepEqual(linesAt(logger.entries, "warn"), [], "and its handled leaves the base's warning unlogged");
   });
 });
 
@@ -750,18 +891,6 @@ function streamItem(item: Mp4Segment): string {
   return item.kind + " " + boxSequence(item.bytes);
 }
 
-// The name of an abort reason. A row compares names, because each subject constructs its own reason objects for the same cause.
-function reasonName(reason: unknown): string {
-
-  return (reason instanceof HbpuAbortError) ? reason.name : "a reason other than an HbpuAbortError";
-}
-
-// The state of a lifetime: "live", or the name of the reason it ended for.
-function lifetimeState(signal: AbortSignal): string {
-
-  return signal.aborted ? reasonName(signal.reason) : "live";
-}
-
 // How an init wait settled: the box types it resolved with, or the name of the reason it rejected with. Awaiting the wait here is also what observes it.
 async function initSettlement(initWait: Promise<Buffer>): Promise<string> {
 
@@ -804,11 +933,10 @@ async function captureUnhandledRejections<T>(body: (captured: readonly unknown[]
   }
 }
 
-// Run one scenario against the double and against the real process, and assert each reported the expected reading. One assertion over the readings means a failure
-// shows which subject disagreed, and with what.
-async function assertEachSubject<T>(expected: T, scenario: (start: StartLivestream) => Promise<T>): Promise<void> {
+// Run one livestream scenario against the double and against the real process through the shared parity runner, over this suite's starters.
+async function assertEachLivestream<T>(expected: T, scenario: (start: StartLivestream) => Promise<T>): Promise<void> {
 
-  assert.deepEqual({ double: await scenario(startDoubleLivestream), real: await scenario(startRealLivestream) }, { double: expected, real: expected });
+  await assertEachSubject({ double: startDoubleLivestream, real: startRealLivestream }, expected, scenario);
 }
 
 describe("LivestreamProcess - the real process and TestLivestreamProcess agree on the lifecycle", () => {
@@ -818,7 +946,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("the signal passed in the init ends the process with its reason, and an init wait still pending rejects with that reason", async () => {
 
-    await assertEachSubject({ initWait: "rejected replaced", lifetime: "replaced" }, async (start) => {
+    await assertEachLivestream({ initWait: "rejected replaced", lifetime: "replaced" }, async (start) => {
 
       const controller = new AbortController();
 
@@ -834,7 +962,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("each init wait dropped unobserved raises one unhandled rejection when the lifetime ends before the init segment", async () => {
 
-    await assertEachSubject({ unhandled: [ "replaced", "replaced" ] }, async (start) => {
+    await assertEachLivestream({ unhandled: [ "replaced", "replaced" ] }, async (start) => {
 
       const controller = new AbortController();
 
@@ -857,7 +985,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("a segment produced before the lifetime ended is handed over before the read returns", async () => {
 
-    await assertEachSubject({ segments: ["moof+mdat"] }, async (start) => {
+    await assertEachLivestream({ segments: ["moof+mdat"] }, async (start) => {
 
       const controller = new AbortController();
 
@@ -871,7 +999,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("a read parked on an empty queue returns when the lifetime ends", async () => {
 
-    await assertEachSubject({ parkedBeforeTheEnd: true, segments: ["moof+mdat"] }, async (start) => {
+    await assertEachLivestream({ parkedBeforeTheEnd: true, segments: ["moof+mdat"] }, async (start) => {
 
       const controller = new AbortController();
 
@@ -897,7 +1025,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("the caller's own signal ends that read alone, and the process lives on", async () => {
 
-    await assertEachSubject({ lifetime: "live", segments: ["moof+mdat"] }, async (start) => {
+    await assertEachLivestream({ lifetime: "live", segments: ["moof+mdat"] }, async (start) => {
 
       const controller = new AbortController();
       const caller = new AbortController();
@@ -917,7 +1045,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("the source ending after init lets the read hand over the last segment and return, and the lifetime ends closed", async () => {
 
-    await assertEachSubject({ init: "ftyp+moov", lifetime: "closed", segments: [ "moof+mdat", "moof+mdat" ] }, async (start) => {
+    await assertEachLivestream({ init: "ftyp+moov", lifetime: "closed", segments: [ "moof+mdat", "moof+mdat" ] }, async (start) => {
 
       const controller = new AbortController();
 
@@ -935,7 +1063,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("the source ending before init rejects the init wait with the closed reason", async () => {
 
-    await assertEachSubject({ initWait: "rejected closed", lifetime: "closed" }, async (start) => {
+    await assertEachLivestream({ initWait: "rejected closed", lifetime: "closed" }, async (start) => {
 
       const controller = new AbortController();
 
@@ -951,7 +1079,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("an init segment that resolved before the lifetime ended stays resolved", async () => {
 
-    await assertEachSubject({ initWait: "ftyp+moov", lifetime: "replaced" }, async (start) => {
+    await assertEachLivestream({ initWait: "ftyp+moov", lifetime: "replaced" }, async (start) => {
 
       const controller = new AbortController();
 
@@ -965,7 +1093,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("stream() yields nothing when the lifetime ended before init", async () => {
 
-    await assertEachSubject({ items: [] }, async (start) => {
+    await assertEachLivestream({ items: [] }, async (start) => {
 
       const controller = new AbortController();
 
@@ -979,7 +1107,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("stream() yields the init item and then what was queued when the lifetime ended after init", async () => {
 
-    await assertEachSubject({ items: [ "init ftyp+moov", "media moof+mdat" ] }, async (start) => {
+    await assertEachLivestream({ items: [ "init ftyp+moov", "media moof+mdat" ] }, async (start) => {
 
       const controller = new AbortController();
 
@@ -993,7 +1121,7 @@ describe("LivestreamProcess - the real process and TestLivestreamProcess agree o
 
   test("dispose ends the process with the shutdown reason, settles, and is safe to repeat", async () => {
 
-    await assertEachSubject({ afterFirst: "shutdown", afterSecond: "shutdown" }, async (start) => {
+    await assertEachLivestream({ afterFirst: "shutdown", afterSecond: "shutdown" }, async (start) => {
 
       const proc = await start("initAndSegmentQueued", new AbortController().signal);
 

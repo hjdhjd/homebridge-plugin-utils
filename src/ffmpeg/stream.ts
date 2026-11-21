@@ -9,9 +9,10 @@
  * This module defines `FfmpegStreamingProcess`, the specialization of {@link FfmpegProcess} for HomeKit live video sessions. The subclass extends the base directly and
  * composes an internal UDP socket that watches the return port for inbound packets - the HomeKit client's RTCP receiver reports, which flow only once the client is
  * receiving FFmpeg's output. The watchdog arms on the first such packet; if that return traffic then stops for longer than the configured window the socket aborts the
- * process with `HbpuAbortError("timeout")` and the base class teardown handles the rest. There is no separate "delegate" surface, no error callbacks,
- * and no reach-through to the raw ChildProcess - every external interaction is through the inherited `signal`, `ready`, `exited`, `stdin`, `stderr`, `stderrLog`,
- * `abort()`, and `[Symbol.asyncDispose]`.
+ * process with `HbpuAbortError("timeout")` and the base class teardown handles the rest. There is no separate "delegate" surface and no reach-through to the raw
+ * ChildProcess - every external interaction is through the inherited `signal`, `ready`, `exited`, `stdin`, `stderr`, `stderrLog`, `abort()`, and
+ * `[Symbol.asyncDispose]`, and a plugin reports a failed or timed-out ending its own way through the `onFailed` and `onTimeout` callbacks its init inherits. The
+ * health socket's own error line is logged before the process ends as failed, so it stands whatever `onFailed` answers.
  *
  * `stdout` stays externally readable on this subclass because HBUP's two-way-audio talkback path forwards stdout bytes to the WebSocket that carries audio from the
  * camera back to the HomeKit client. Unlike the fMP4 subclasses, there is no internal consumer of the stdout stream that would race with an external reader.

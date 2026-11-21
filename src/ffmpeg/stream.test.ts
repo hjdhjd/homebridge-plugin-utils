@@ -1,10 +1,12 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/stream.test.ts: Unit tests for FfmpegStreamingProcess - signal-driven internal health socket, liveness watchdog, abort propagation, externally readable stdout.
+ * ffmpeg/stream.test.ts: Unit tests for FfmpegStreamingProcess - signal-driven internal health socket, liveness watchdog, abort propagation, externally readable stdout,
+ * and the ending callback a socket failure asks.
  */
-import { describe, test } from "node:test";
+import type { FfmpegEnding, FfmpegEndingVerdict } from "./process.ts";
+import { capturingLog, expectAt, linesAt, silentLog, waitUntil } from "../testing/index.ts";
+import { describe, mock, test } from "node:test";
 import { holdPort, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
-import { silentLog, waitUntil } from "../testing/index.ts";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
 import { FfmpegStreamingProcess } from "./stream.ts";
@@ -312,6 +314,28 @@ describe("FfmpegStreamingProcess - health socket error path", () => {
     const reason = proc.signal.reason as { cause?: unknown };
 
     assert.ok(reason.cause instanceof Error, "the underlying kernel error must be attached to the signal reason's `cause` field");
+  });
+
+  test("a bind failure asks onFailed once with the socket's error as its cause, and the socket's own line is the only error line once it handles it", async () => {
+
+    await using holder = await holdPort(0);
+
+    const logger = capturingLog();
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+    await using proc = new FfmpegStreamingProcess(makeOptions(logger), { args: stderrThenIdle(), healthTimeout: 5000, onFailed,
+      returnPort: { ipFamily: "ipv4", port: holder.port } });
+
+    await waitUntil(() => proc.aborted, { description: "the bind failure on the held return port to abort the streaming process" });
+
+    assert.equal(onFailed.mock.callCount(), 1, "onFailed is asked once");
+
+    const { reason } = expectAt(onFailed.mock.calls, 0, "the asking").arguments[0];
+
+    assert.equal(reason.name, "failed", "about a failed ending");
+    assert.ok(reason.cause instanceof Error, "whose cause is the socket's error");
+    assert.deepEqual(linesAt(logger.entries, "error"), ["Streaming process return-port socket error: " + reason.cause.message + "."],
+      "and the socket's line, logged before the process ended, stands while the handled report does not");
   });
 });
 

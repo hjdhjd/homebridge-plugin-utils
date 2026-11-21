@@ -29,14 +29,14 @@
  *
  * @module
  */
-import type { FfmpegEnding, FfmpegEndingVerdict } from "./process-ending.ts";
+import type { FfmpegEnding, FfmpegEndingOutcome, FfmpegEndingVerdict } from "./process-ending.ts";
 import { HbpuAbortError, Watchdog, composeSignals, formatErrorMessage, isHbpuAbortError, isHbpuAbortReason, isTimeoutReason, markHandled, onAbort } from "../util.ts";
 import type { HbpuAbortReason, HomebridgePluginLogging, Nullable } from "../util.ts";
 import type { Readable, Writable } from "node:stream";
+import { ffmpegEndingOutcome, ffmpegMarkRefusal } from "./process-ending.ts";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EOL } from "node:os";
 import type { FfmpegOptions } from "./options.ts";
-import { ffmpegEndingVerdict } from "./process-ending.ts";
 import { spawn } from "node:child_process";
 
 // Re-export the ending a callback is handed and the verdict it answers, so a plugin names them from the package root beside the init that carries the callbacks.
@@ -46,10 +46,6 @@ export type { FfmpegEnding, FfmpegEndingVerdict } from "./process-ending.ts";
 // Matches non-printable control characters that #onStderrData replaces with EOL so control sequences become line boundaries rather than vanishing. Compiled once at
 // module scope rather than per data event.
 const NON_PRINTABLE_CHARS = /\p{C}+/gu;
-
-// FFmpeg's own words when the host's hardware decoder could not be set up for the stream it was handed, the close of its "Failed setup for format <format>:" line.
-// The line reports a refusal whether or not the process then fails: with its frames asked in system memory, FFmpeg goes on to decode in software by itself.
-const HARDWARE_DECODER_REFUSAL = "hwaccel initialisation returned error";
 
 // Shape-level type guard for exit-info-like cause values. The class attaches exit information to `HbpuAbortError`'s `cause` field for `"closed"` and `"failed"`
 // reasons, but `cause` is typed `unknown` at the error boundary, so any consumer that wants to read exit info (including our own teardown logger) must narrow.
@@ -587,13 +583,9 @@ export class FfmpegProcess implements AsyncDisposable {
       this.#stderrBuffer = this.#stderrBuffer.slice(lineIndex + EOL.length);
       this.#stderrLog.push(line);
 
-      // The decoder's refusal marks our options the moment we read it, whether or not this process then fails, so every pipeline built over them from here decodes in
-      // software. The test of the line stops once this process has seen the refusal, keeping a long-running process's drain at one flag read per line.
-      if(!this.#sawHardwareDecoderRefusal && line.includes(HARDWARE_DECODER_REFUSAL)) {
-
-        this.#sawHardwareDecoderRefusal = true;
-        this.options.markHardwareDecoderRefusal();
-      }
+      // A line that reports the decoder's refusal marks our options the moment we read it, through the step in `process-ending.ts` a test double reads its lines
+      // through as well. The assignment reads no line once this process has seen the refusal, keeping a long-running process's drain at one flag read per line.
+      this.#sawHardwareDecoderRefusal ||= ffmpegMarkRefusal(line, this.options);
 
       if(this.#liveLog) {
 
@@ -616,9 +608,9 @@ export class FfmpegProcess implements AsyncDisposable {
 
   // Reason-based teardown logging. The policy is driven by `this.signal.reason`, mapping each reason variant to a log level and message shape:
   //
-  //   - A refused GPU decode             -> DEBUG naming the refusal: a `"failed"` reason on a process whose stderr reported the hardware decoder's refusal and whose
-  //                                         args asked for its decoded frames on the GPU (`-hwaccel_output_format`). Checked ahead of the ending callbacks, so none is
-  //                                         asked about it: the refusal ended the process, and its options already decode every later pipeline in software.
+  //   - A refused GPU decode             -> DEBUG naming the refusal, with no callback asked: a `"failed"` reason on a process whose own stderr reported the hardware
+  //                                         decoder's refusal and whose args asked for its decoded frames on the GPU. The refusal ended the process, and its options
+  //                                         already decode every later pipeline in software.
   //   - `HbpuAbortError("failed", ...)`  -> the init's `onFailed`, then, unless it answers `"handled"`, ERROR with the full stderr dump and exit context.
   //   - `HbpuAbortError("timeout")`      -> the init's `onTimeout`, then, unless it answers `"handled"`, a static WARN.
   //   - Any other HbpuAbortError         -> DEBUG with the reason name (self-inflicted or orderly teardown).
@@ -627,7 +619,8 @@ export class FfmpegProcess implements AsyncDisposable {
   //
   // A callback lets a plugin report a failed or timed-out ending its own way without re-implementing this policy or trying to pre-empt the base's listener ordering:
   // it answers `"handled"` once it has said what it wants said, or `"default"` to let the report here stand. A process kind with answers of its own hands its base
-  // callbacks that ask the plugin's first and its own after, so which callback is asked, and in what order, is stated once, in the rule `ffmpegEndingVerdict` holds.
+  // callbacks that ask the plugin's first and its own after, so whether an ending asks a callback at all, which one and in what order is stated once, in the rules
+  // `ffmpegEndingOutcome` and `ffmpegEndingVerdict` hold.
   #logTeardown(): void {
 
     const reason: unknown = this.signal.reason;
@@ -638,17 +631,16 @@ export class FfmpegProcess implements AsyncDisposable {
 
         case "failed": {
 
-          // A process that asked for its decoded frames on the GPU fails when the decoder refuses the stream, because the frames its chain then receives are not the GPU
-          // frames it was built for, so the refusal is what ended it. One that took its frames in system memory decodes on in software after a refusal, so the refusal
-          // cannot explain its failure, and it keeps the canonical verdict.
-          if(this.#sawHardwareDecoderRefusal && this.args.includes("-hwaccel_output_format")) {
+          const outcome = this.#endingOutcome(reason);
+
+          if(outcome === "refused") {
 
             this.log.debug("%s because the hardware video decoder could not open the stream (%s).", this.#teardownPrefix, describeCause(reason.cause));
 
             return;
           }
 
-          if(this.#endingVerdict(reason) === "default") {
+          if(outcome === "default") {
 
             this.#logFailureReport(reason);
           }
@@ -658,7 +650,7 @@ export class FfmpegProcess implements AsyncDisposable {
 
         case "timeout": {
 
-          if(this.#endingVerdict(reason) === "default") {
+          if(this.#endingOutcome(reason) === "default") {
 
             this.#logTimeoutReport();
           }
@@ -681,15 +673,16 @@ export class FfmpegProcess implements AsyncDisposable {
     this.log.debug("%s (%s).", this.#teardownPrefix, name);
   }
 
-  // Ask the init's ending callbacks about a failed or timed-out ending, here inside the abort's dispatch, so the verdict is in before the report and before any abort
-  // listener a consumer added to this process's `signal` runs. A listener on the parent signal the consumer passed in has already run by then, since the parent
-  // dispatches to its own listeners first. The asking is guarded because a throw inside the dispatch would surface as Node's `uncaughtException` rather than reach the
-  // code that aborted us: a throwing callback is logged at error and read as `"default"`, so the ending still gets the base's report.
-  #endingVerdict(reason: HbpuAbortError): FfmpegEndingVerdict {
+  // Decide a failed or timed-out ending, asking the init's ending callbacks unless this process's own refusal sighting makes it a refused GPU decode, here inside the
+  // abort's dispatch, so the outcome is in before the report and before any abort listener a consumer added to this process's `signal` runs. A listener on the parent
+  // signal the consumer passed in has already run by then, since the parent dispatches to its own listeners first. The asking is guarded because a throw inside the
+  // dispatch would surface as Node's `uncaughtException` rather than reach the code that aborted us: a throwing callback is logged at error and read as `"default"`,
+  // so the ending still gets the base's report.
+  #endingOutcome(reason: HbpuAbortError): FfmpegEndingOutcome {
 
     try {
 
-      return ffmpegEndingVerdict({ reason, stderrLog: this.stderrLog }, this.#endingCallbacks);
+      return ffmpegEndingOutcome({ reason, stderrLog: this.stderrLog }, { args: this.args, sawRefusal: this.#sawHardwareDecoderRefusal }, this.#endingCallbacks);
     } catch(error: unknown) {
 
       this.log.error("%s, and its ending callback threw: %s.", this.#teardownPrefix, formatErrorMessage(error));

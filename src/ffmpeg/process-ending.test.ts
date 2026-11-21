@@ -1,16 +1,17 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ffmpeg/process-ending.test.ts: Unit tests for ffmpegEndingVerdict - the callback a reason's name selects, the order the callback sets are asked in, the answer when
- * none handles the ending, and a throwing callback leaving the function.
+ * none handles the ending, and a throwing callback leaving the function - and for the hardware decoder's refusal: the line that marks the options, and the refused
+ * GPU decode that asks no callback.
  */
 import type { FfmpegEnding, FfmpegEndingVerdict } from "./process-ending.ts";
 import { describe, mock, test } from "node:test";
+import { expectAt, hardwareDecoderRefusalLine } from "../testing/index.ts";
+import { ffmpegEndingOutcome, ffmpegEndingVerdict, ffmpegMarkRefusal } from "./process-ending.ts";
 import { HbpuAbortError } from "../util.ts";
 import type { HbpuAbortReason } from "../util.ts";
 import type { Mock } from "node:test";
 import assert from "node:assert/strict";
-import { expectAt } from "../testing/index.ts";
-import { ffmpegEndingVerdict } from "./process-ending.ts";
 
 // An ending for a reason of the given name, carrying an invented stderr line.
 function endingFor(name: HbpuAbortReason): FfmpegEnding {
@@ -130,5 +131,96 @@ describe("ffmpegEndingVerdict - a throwing callback", () => {
     assert.throws(() => ffmpegEndingVerdict(endingFor("failed"), { onFailed: throwing }, { onFailed: later }), (thrown: unknown) => thrown === failure,
       "the callback's own throw reaches the caller unchanged");
     assert.equal(later.mock.callCount(), 0, "and the asking stops there");
+  });
+});
+
+// Arguments that ask for the decoded frames on the GPU, and arguments that leave them in system memory.
+const GPU_FRAMES_ARGS = [ "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld" ];
+const SYSTEM_MEMORY_ARGS = [ "-hwaccel", "videotoolbox" ];
+
+describe("ffmpegEndingOutcome - a refused GPU decode ahead of the callbacks", () => {
+
+  test("a failed ending that sighted the refusal with its frames asked on the GPU answers refused and asks no callback", () => {
+
+    const onFailed = answering("handled");
+    const onTimeout = answering("handled");
+
+    assert.equal(ffmpegEndingOutcome(endingFor("failed"), { args: GPU_FRAMES_ARGS, sawRefusal: true }, { onFailed, onTimeout }), "refused",
+      "the refusal is what ended the process");
+    assert.deepEqual({ onFailed: onFailed.mock.callCount(), onTimeout: onTimeout.mock.callCount() }, { onFailed: 0, onTimeout: 0 }, "and nothing is asked about it");
+  });
+
+  const askedCases: { args: string[]; name: string; sawRefusal: boolean }[] = [
+
+    { args: SYSTEM_MEMORY_ARGS, name: "a sighted refusal with its frames in system memory", sawRefusal: true },
+    { args: GPU_FRAMES_ARGS, name: "frames asked on the GPU with no refusal sighted", sawRefusal: false }
+  ];
+
+  for(const { args, name, sawRefusal } of askedCases) {
+
+    for(const verdict of [ "default", "handled" ] as const) {
+
+      test("a failed ending over " + name + " asks onFailed once and answers its " + verdict, () => {
+
+        const ending = endingFor("failed");
+        const onFailed = answering(verdict);
+        const onTimeout = answering("handled");
+
+        assert.equal(ffmpegEndingOutcome(ending, { args, sawRefusal }, { onFailed, onTimeout }), verdict, "the callback's verdict is the answer");
+        assert.deepEqual({ onFailed: onFailed.mock.callCount(), onTimeout: onTimeout.mock.callCount() }, { onFailed: 1, onTimeout: 0 }, "onFailed alone is asked");
+        assert.equal(expectAt(onFailed.mock.calls, 0, "the asking").arguments[0], ending, "and it is handed the ending itself");
+      });
+    }
+  }
+
+  test("a timeout asks onTimeout once whatever the stderr carried and the args asked for", () => {
+
+    const onFailed = answering("handled");
+    const onTimeout = answering("handled");
+
+    assert.equal(ffmpegEndingOutcome(endingFor("timeout"), { args: GPU_FRAMES_ARGS, sawRefusal: true }, { onFailed, onTimeout }), "handled",
+      "the refusal decides a failed ending alone");
+    assert.deepEqual({ onFailed: onFailed.mock.callCount(), onTimeout: onTimeout.mock.callCount() }, { onFailed: 0, onTimeout: 1 }, "onTimeout alone is asked");
+  });
+
+  test("an ending of any other reason asks nothing and answers default, whatever the refusal and the args", () => {
+
+    const onFailed = answering("handled");
+    const onTimeout = answering("handled");
+
+    assert.equal(ffmpegEndingOutcome(endingFor("shutdown"), { args: GPU_FRAMES_ARGS, sawRefusal: true }, { onFailed, onTimeout }), "default");
+    assert.equal(onFailed.mock.callCount() + onTimeout.mock.callCount(), 0, "no callback is selected");
+  });
+});
+
+describe("ffmpegMarkRefusal - the line that reports the hardware decoder's refusal", () => {
+
+  // An options stand-in whose mark counts its calls.
+  function countingOptions(): { markHardwareDecoderRefusal: Mock<() => void> } {
+
+    return { markHardwareDecoderRefusal: mock.fn((): void => undefined) };
+  }
+
+  test("a line carrying FFmpeg's whole refusal marks the options handed and answers that it did", () => {
+
+    const options = countingOptions();
+
+    assert.equal(ffmpegMarkRefusal(hardwareDecoderRefusalLine, options), true, "the line carries the refusal");
+    assert.equal(options.markHardwareDecoderRefusal.mock.callCount(), 1, "and the options are marked");
+  });
+
+  test("a line carrying only part of the refusal, or none of it, marks nothing and answers that it did not", () => {
+
+    const options = countingOptions();
+
+    const lines = [ "hwaccel initialisation", "returned error", "an invented diagnostic line" ];
+
+    assert.deepEqual(lines.map((line) => ffmpegMarkRefusal(line, options)), [ false, false, false ], "no line carries the refusal");
+    assert.equal(options.markHardwareDecoderRefusal.mock.callCount(), 0, "so nothing is marked");
+  });
+
+  test("a refusal line read with no options to mark still answers that it carried the refusal", () => {
+
+    assert.equal(ffmpegMarkRefusal(hardwareDecoderRefusalLine), true);
   });
 });

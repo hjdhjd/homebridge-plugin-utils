@@ -5,7 +5,7 @@
  */
 import type { CapturingLog, TestLogEntry } from "../testing/index.ts";
 import type { FfmpegEnding, FfmpegEndingVerdict, FfmpegProcessExitInfo } from "./process.ts";
-import { capturingLog, errnoError, expectAt, linesAt, logCount, settle } from "../testing/index.ts";
+import { capturingLog, errnoError, expectAt, hardwareDecoderRefusalLine, linesAt, logCount, settle } from "../testing/index.ts";
 import { describe, mock, test } from "node:test";
 import type { Clock } from "../clock.ts";
 import { FfmpegOptions } from "./options.ts";
@@ -76,9 +76,6 @@ function silentExit(): string[] {
 
   return [ "-e", "process.exit(0);" ];
 }
-
-// FFmpeg's refusal line, its text as a VideoToolbox decode of a stream beyond the size its decoder opens printed it, behind the decoder's context prefix.
-const refusalLine = "[h264 @ 0x7f8e4c00a200] Failed setup for format videotoolbox_vld: hwaccel initialisation returned error.";
 
 describe("FfmpegProcess - construction and readiness", () => {
 
@@ -712,7 +709,7 @@ describe("FfmpegProcess - teardown logging", () => {
     const logger = capturingLog();
     const options = makeOptions(logger);
 
-    await using proc = new FfmpegProcess(options, { args: stderrThenExit(0, 10, refusalLine) });
+    await using proc = new FfmpegProcess(options, { args: stderrThenExit(0, 10, hardwareDecoderRefusalLine) });
 
     await proc.exited;
 
@@ -727,7 +724,8 @@ describe("FfmpegProcess - teardown logging", () => {
     const options = makeOptions(logger);
 
     // Node takes everything after `--` as positional argv, so the child runs its script while the class sees the GPU-frames arg in its command line.
-    await using proc = new FfmpegProcess(options, { args: [ ...stderrThenExit(178, 10, refusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ] });
+    await using proc = new FfmpegProcess(options,
+      { args: [ ...stderrThenExit(178, 10, hardwareDecoderRefusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ] });
 
     await proc.exited;
 
@@ -743,13 +741,14 @@ describe("FfmpegProcess - teardown logging", () => {
     const options = makeOptions(logger);
 
     // The first child reads the refusal with its frames in system memory and exits cleanly, so the GPU-frames child after it is built over options already marked.
-    await using first = new FfmpegProcess(options, { args: stderrThenExit(0, 10, refusalLine) });
+    await using first = new FfmpegProcess(options, { args: stderrThenExit(0, 10, hardwareDecoderRefusalLine) });
 
     await first.exited;
 
     assert.equal(options.hardwareDecoderRefused, true, "the first child marks the options");
 
-    await using proc = new FfmpegProcess(options, { args: [ ...stderrThenExit(178, 10, refusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ] });
+    await using proc = new FfmpegProcess(options,
+      { args: [ ...stderrThenExit(178, 10, hardwareDecoderRefusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ] });
 
     await proc.exited;
 
@@ -765,14 +764,14 @@ describe("FfmpegProcess - teardown logging", () => {
     const logger = capturingLog();
     const options = makeOptions(logger);
 
-    await using proc = new FfmpegProcess(options, { args: stderrThenExit(178, 10, refusalLine) });
+    await using proc = new FfmpegProcess(options, { args: stderrThenExit(178, 10, hardwareDecoderRefusalLine) });
 
     await proc.exited;
 
     const errorLines = linesAt(logger.entries, "error");
 
     assert.ok(errorLines.includes("test: FFmpeg process ended unexpectedly. Reason: exit code 178."), "the failure logs its canonical summary at error");
-    assert.ok(errorLines.includes(refusalLine), "and dumps the stderr that carries the refusal");
+    assert.ok(errorLines.includes(hardwareDecoderRefusalLine), "and dumps the stderr that carries the refusal");
     assert.equal(logCount(logger.entries, "debug", "could not open the stream"), 0, "with no debug verdict in its place");
     assert.equal(options.hardwareDecoderRefused, true, "while the refusal still marks the options");
   });
@@ -933,8 +932,8 @@ describe("FfmpegProcess - ending callbacks", () => {
     const logger = capturingLog();
     const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
 
-    await using proc = new FfmpegProcess(makeOptions(logger), { args: [ ...stderrThenExit(178, 10, refusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ],
-      onFailed });
+    await using proc = new FfmpegProcess(makeOptions(logger),
+      { args: [ ...stderrThenExit(178, 10, hardwareDecoderRefusalLine), "--", "-hwaccel_output_format", "videotoolbox_vld" ], onFailed });
 
     await proc.exited;
 

@@ -22,6 +22,7 @@ import { HbpuAbortError, composeSignals } from "../util.ts";
 import type { FfmpegOptions } from "./options.ts";
 import type { Mp4Segment } from "./mp4-assembler.ts";
 import { Writable } from "node:stream";
+import { ffmpegMarkRefusal } from "./process-ending.ts";
 
 /**
  * Construction-time configuration for a {@link TestRecordingProcess}. Every field has a deterministic default so a bare `new TestRecordingProcess()` is usable; supply
@@ -31,7 +32,8 @@ import { Writable } from "node:stream";
  * @property initSegment      - The buffer `getInitSegment()` resolves with. Defaults to an empty buffer.
  * @property isTimedOut       - The value the `isTimedOut` getter reports. Defaults to `false`.
  * @property segments         - The media-segment buffers `segments()` yields, in order. Defaults to an empty array.
- * @property stderrLog        - The lines the `stderrLog` getter reports. Defaults to an empty array.
+ * @property stderrLog        - The lines the `stderrLog` getter reports, which the factory that answers the process reads for the hardware decoder's refusal.
+ *                              Defaults to an empty array.
  *
  * @category Testing
  */
@@ -239,6 +241,10 @@ export class TestRecordingProcess implements RecordingProcess {
  * {@link TestRecordingProcess}, mirroring the create-call-recording discipline a consumer's streaming-delegate factory double uses. By default it returns a fresh,
  * default-configured process per call; supply a process to the constructor to return a single pre-configured instance from every `create`.
  *
+ * Each `create` reads the configured stderr lines of the process it answers for the hardware decoder's refusal, through the step the real process reads its
+ * child's lines by, and marks the options that call was handed when a line carries it, as the real process marks the options it was built over on the line that
+ * reports it. The lines are read up to the first that carries the refusal, so the options are marked once per call.
+ *
  * @see RecordingProcessFactory
  * @see TestRecordingProcess
  *
@@ -265,9 +271,10 @@ export class TestRecordingProcessFactory implements RecordingProcessFactory {
   }
 
   /**
-   * Record the create call and return a {@link TestRecordingProcess} - the constructor-supplied instance when one was given, otherwise a fresh default-configured one.
+   * Record the create call and return a {@link TestRecordingProcess} - the constructor-supplied instance when one was given, otherwise a fresh default-configured one -
+   * marking `options` when the process's configured stderr lines carry the hardware decoder's refusal.
    *
-   * @param options - The {@link FfmpegOptions} the consumer passed.
+   * @param options - The {@link FfmpegOptions} the consumer passed, which a configured stderr line reporting the hardware decoder's refusal marks.
    * @param init    - The {@link FfmpegRecordingInit} the consumer passed.
    *
    * @returns The recording-process double.
@@ -275,6 +282,15 @@ export class TestRecordingProcessFactory implements RecordingProcessFactory {
   public create(options: FfmpegOptions, init: FfmpegRecordingInit): RecordingProcess {
 
     const process = this.#process ?? new TestRecordingProcess();
+
+    // The lines are read through the step the real process's drain reads by, stopping at the first that carries the refusal, as the drain stops at its sighting.
+    for(const line of process.stderrLog) {
+
+      if(ffmpegMarkRefusal(line, options)) {
+
+        break;
+      }
+    }
 
     this.createCalls.push({ init, options, process });
 

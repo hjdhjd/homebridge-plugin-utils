@@ -45,11 +45,13 @@ import { yieldMacrotask } from "../clock.ts";
 /* The shipped doubles, aggregated from their physical homes, and the guard machinery and type-level assertion helpers that live in this directory alongside the
  * helpers below. Each module is re-exported wholesale rather than symbol-by-symbol, because the module on the other side already curates what it publishes and a
  * second enumeration here would be a list to keep in sync for nothing. The assertion helpers go out through `export type *`, which publishes their types and
- * creates no runtime edge at all, because that module declares nothing else.
+ * creates no runtime edge at all, because that module declares nothing else. The hardware decoder's refusal line goes out by name, because the module that holds
+ * it beside the text it is built on is production code whose other exports are not test support.
  */
 export * from "../clock-double.ts";
 export * from "../ffmpeg/fmp4-builders.ts";
 export * from "../ffmpeg/livestream-process-double.ts";
+export { hardwareDecoderRefusalLine } from "../ffmpeg/process-ending.ts";
 export * from "../ffmpeg/recording-process-double.ts";
 export * from "../http-listener-double.ts";
 export * from "../logclient/socket-double.ts";

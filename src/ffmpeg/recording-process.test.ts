@@ -2,18 +2,21 @@
  *
  * ffmpeg/recording-process.test.ts: Unit tests for the RecordingProcess dependency-inversion boundary - the compile-time conformance of the production class and factory,
  * plus the shipped FFmpeg-free TestRecordingProcess / TestRecordingProcessFactory doubles (init / segment yielding, abort with a real reason, the pre-init init reject,
- * dual-signal segment termination, the recording stdin sink, and the factory's create-call recording).
+ * dual-signal segment termination, the recording stdin sink, the factory's create-call recording, and the options it marks when a process's lines carry the
+ * hardware decoder's refusal).
  */
 import type { FfmpegRecordingInit, FfmpegRecordingProcess, RecordingProcess, RecordingProcessFactory } from "./record.ts";
 import { TestRecordingProcess, TestRecordingProcessFactory } from "./recording-process-double.ts";
-import { describe, test } from "node:test";
+import { describe, mock, test } from "node:test";
 import type { FfmpegOptions } from "./options.ts";
 import { HbpuAbortError } from "../util.ts";
 import assert from "node:assert/strict";
+import { hardwareDecoderRefusalLine } from "./process-ending.ts";
 import { recordingProcessFactory } from "./record.ts";
 
-// Sentinel FfmpegOptions / FfmpegRecordingInit stand-ins. The doubles never read these - they only record them for assertions - so a confined cast over a plain object
-// is honest: the test asserts the factory threaded THESE EXACT references through to its create-call log, not that they have any real FFmpeg behavior.
+// Sentinel FfmpegOptions / FfmpegRecordingInit stand-ins. The factory reads the options only to mark a hardware decoder's refusal its process's configured stderr
+// lines carry, which no row over them configures, and otherwise only records them for assertions, so a confined cast over a plain object is honest: the test asserts
+// the factory threaded THESE EXACT references through to its create-call log, not that they have any real FFmpeg behavior.
 const sentinelOptions = { hbupTestSentinel: "ffmpeg-options" } as unknown as FfmpegOptions;
 const sentinelInit = { hbupTestSentinel: "recording-init" } as unknown as FfmpegRecordingInit;
 
@@ -259,5 +262,23 @@ describe("TestRecordingProcessFactory - create-call recording", () => {
     assert.equal(first, process, "the first create() must return the supplied process");
     assert.equal(second, process, "the second create() must return the same supplied process");
     assert.equal(factory.createCalls.length, 2, "both create calls must be recorded");
+  });
+});
+
+describe("TestRecordingProcessFactory - the hardware decoder's refusal", () => {
+
+  test("create marks the options it is handed once when the process's configured stderr lines carry the refusal, and marks nothing when they carry none", () => {
+
+    // Each options stand-in counts its marks, cast at the one boundary the factory reads it through.
+    const refusedMark = mock.fn((): void => undefined);
+    const cleanMark = mock.fn((): void => undefined);
+    const refused = new TestRecordingProcessFactory(
+      new TestRecordingProcess({ stderrLog: [ "An invented stderr line.", hardwareDecoderRefusalLine, hardwareDecoderRefusalLine ] }));
+    const clean = new TestRecordingProcessFactory(new TestRecordingProcess({ stderrLog: ["An invented stderr line."] }));
+
+    refused.create({ markHardwareDecoderRefusal: refusedMark } as unknown as FfmpegOptions, sentinelInit);
+    clean.create({ markHardwareDecoderRefusal: cleanMark } as unknown as FfmpegOptions, sentinelInit);
+
+    assert.deepEqual({ clean: cleanMark.mock.callCount(), refused: refusedMark.mock.callCount() }, { clean: 0, refused: 1 });
   });
 });

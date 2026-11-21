@@ -1,13 +1,13 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/process-parity.helpers.ts: Shared test helpers for the FFmpeg suites that hold a shipped double to its subject - the parity runner and its readings, and the
- * uncaught-exception hold.
+ * ffmpeg/process-parity.helpers.ts: Shared test helpers for the FFmpeg suites that hold a shipped double to its subject - the parity runner and its readings, the
+ * ending spies, and the uncaught-exception hold.
  */
 
 /**
  * The helpers the FFmpeg suites share when they hold a shipped double to the subject it stands in for: the runner that takes one scenario through the double and
- * through the real subject and asserts the double reads as the subject does, the readings a parity row compares, and the hold on Node's uncaught-exception channel a
- * row takes to see what an ending callback threw.
+ * through the real subject and asserts the double reads as the subject does, the readings a parity row compares, the spy callbacks a row hands each subject, and
+ * the hold on Node's uncaught-exception channel a row takes to see what an ending callback threw.
  *
  * Each suite keeps its own starters, the functions that bring a subject to a row's starting point, and hands them to {@link assertEachSubject}, so the runner and the
  * readings are stated once while what each subject starts from stays beside the rows that start from it.
@@ -17,8 +17,30 @@
  *
  * @module
  */
+import type { FfmpegEnding, FfmpegEndingVerdict } from "./process-ending.ts";
 import { HbpuAbortError } from "../util.ts";
+import type { Mock } from "node:test";
 import assert from "node:assert/strict";
+import { mock } from "node:test";
+
+/**
+ * A parity row's spy callbacks, each answering `"handled"` and recording every asking.
+ */
+export interface EndingSpies {
+
+  readonly onFailed: Mock<(ending: FfmpegEnding) => FfmpegEndingVerdict>;
+  readonly onTimeout: Mock<(ending: FfmpegEnding) => FfmpegEndingVerdict>;
+}
+
+/**
+ * Fresh spy callbacks. A row takes one pair per subject, since a scenario runs once on each.
+ *
+ * @returns An `onFailed` and an `onTimeout` that each answer `"handled"` and record every asking.
+ */
+export function endingSpies(): EndingSpies {
+
+  return { onFailed: mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled"), onTimeout: mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled") };
+}
 
 /**
  * Run one scenario against a shipped double and against the real subject it stands in for, and assert each reported the expected reading. One assertion over the
@@ -80,10 +102,38 @@ export async function settlement(promise: Promise<unknown>): Promise<string> {
   }
 }
 
+/* Hold one of Node's process-wide failure channels for the length of `body` and hand it back afterwards, giving the body what the channel carried. The test runner
+ * keeps its own listener on each channel and fails the running test on anything it sees, so a row that asserts what reached a channel, or that nothing did, has to
+ * own it while it looks.
+ */
+async function captureChannel<T>(channel: "uncaughtException" | "unhandledRejection", body: (captured: readonly unknown[]) => Promise<T>): Promise<T> {
+
+  const captured: unknown[] = [];
+  const runnerListeners = process.listeners(channel);
+  const onCarried = (carried: unknown): void => {
+
+    captured.push(carried);
+  };
+
+  process.removeAllListeners(channel);
+  process.on(channel, onCarried);
+
+  try {
+
+    return await body(captured);
+  } finally {
+
+    process.off(channel, onCarried);
+
+    for(const listener of runnerListeners) {
+
+      process.on(channel, listener);
+    }
+  }
+}
+
 /**
- * Hold Node's uncaught-exception channel for the length of `body` and hand it back afterwards, giving the body the errors the channel carried. The test runner keeps its
- * own listener on that channel and fails the running test on anything it sees, so a row that asserts what reached the channel, or that nothing did, has to own it while
- * it looks.
+ * Hold Node's uncaught-exception channel for the length of `body`, giving the body the errors the channel carried.
  *
  * @typeParam T - What the body answers.
  *
@@ -93,26 +143,19 @@ export async function settlement(promise: Promise<unknown>): Promise<string> {
  */
 export async function captureUncaughtExceptions<T>(body: (captured: readonly unknown[]) => Promise<T>): Promise<T> {
 
-  const captured: unknown[] = [];
-  const runnerListeners = process.listeners("uncaughtException");
-  const onUncaught = (error: unknown): void => {
+  return captureChannel("uncaughtException", body);
+}
 
-    captured.push(error);
-  };
+/**
+ * Hold Node's unhandled-rejection channel for the length of `body`, giving the body the reasons the channel carried.
+ *
+ * @typeParam T - What the body answers.
+ *
+ * @param body - The row's work, handed the reasons the channel has carried so far.
+ *
+ * @returns What the body answers.
+ */
+export async function captureUnhandledRejections<T>(body: (captured: readonly unknown[]) => Promise<T>): Promise<T> {
 
-  process.removeAllListeners("uncaughtException");
-  process.on("uncaughtException", onUncaught);
-
-  try {
-
-    return await body(captured);
-  } finally {
-
-    process.off("uncaughtException", onUncaught);
-
-    for(const listener of runnerListeners) {
-
-      process.on("uncaughtException", listener);
-    }
-  }
+  return captureChannel("unhandledRejection", body);
 }

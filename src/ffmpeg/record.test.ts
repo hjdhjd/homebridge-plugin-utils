@@ -8,8 +8,8 @@ import { AudioRecordingCodecType, AudioRecordingSamplerate, H264Level, H264Profi
 import type { FMp4RecordingOptions, FfmpegLivestreamInit, FfmpegRecordingInit, LivestreamProcess } from "./record.ts";
 import type { FfmpegEnding, FfmpegEndingVerdict } from "./process.ts";
 import { FfmpegLivestreamProcess, FfmpegRecordingProcess, livestreamProcessFactory } from "./record.ts";
-import { TestLivestreamProcessFactory, capturingLog, expectAt, linesAt, settle, waitUntil } from "../testing/index.ts";
-import { assertEachSubject, lifetimeState, reasonName } from "./process-parity.helpers.ts";
+import { TestLivestreamProcessFactory, capturingLog, expectAt, hardwareDecoderRefusalLine, linesAt, settle, waitUntil } from "../testing/index.ts";
+import { assertEachSubject, captureUnhandledRejections, lifetimeState, reasonName } from "./process-parity.helpers.ts";
 import { describe, mock, test } from "node:test";
 import type { CameraRecordingConfiguration } from "homebridge";
 import type { CapturingLog } from "../testing/index.ts";
@@ -432,6 +432,29 @@ describe("FfmpegRecordingProcess - a plugin's ending callbacks ahead of the reco
     assert.deepEqual(linesAt(logger.entries, "error"), [ "test-camera: FFmpeg process ended unexpectedly. Reason: exit code 2.",
       "FFmpeg (7.0) command that errored out was: " + process.execPath + " " + args.join(" ") + ".", "ready", "an invented unmatched failure" ],
     "the recording's own answer is default for a failure it does not recognize, so the base's report runs");
+  });
+
+  test("a refused GPU decode asks neither the plugin's onFailed nor the recording's own answer, and logs one debug line naming the refusal", async () => {
+
+    const logger = capturingLog();
+    const markHardwareDecoderRefusal = mock.fn((): void => undefined);
+    const onFailed = mock.fn((_ending: FfmpegEnding): FfmpegEndingVerdict => "handled");
+
+    // The child reports the refusal beside a known HKSV error, so the recording's own answer, were it asked, would log its line at error. Node takes everything
+    // after `--` as positional argv, so the child runs its script while the recording sees the GPU-frames argument in its command line.
+    const args = [ "-e", "process.stderr.write(" + JSON.stringify(hardwareDecoderRefusalLine + "\nmoov atom not found\n") + "); setTimeout(() => process.exit(2), 30);",
+      "--", "-hwaccel_output_format", "videotoolbox_vld" ];
+
+    await using proc = new FfmpegRecordingProcess(Object.assign(makeOptions(logger), { markHardwareDecoderRefusal }),
+      { args, onFailed, recordingConfig: makeRecordingConfig() });
+
+    await proc.exited;
+
+    assert.equal(markHardwareDecoderRefusal.mock.callCount(), 1, "the recording reads the refusal and marks its options");
+    assert.equal(onFailed.mock.callCount(), 0, "the plugin's onFailed is not asked");
+    assert.deepEqual(linesAt(logger.entries, "error"), [], "nor the recording's own answer, whose line would stand at error, and no report runs");
+    assert.deepEqual(linesAt(logger.entries, "debug").filter((line) => line.includes("hardware video decoder")),
+      ["test-camera: FFmpeg process ended because the hardware video decoder could not open the stream (exit code 2)."], "one debug line names the refusal");
   });
 
   test("a plugin's onTimeout answering default reaches the recording's debug line, and nothing warns", async () => {
@@ -900,36 +923,6 @@ async function initSettlement(initWait: Promise<Buffer>): Promise<string> {
   } catch(error: unknown) {
 
     return "rejected " + reasonName(error);
-  }
-}
-
-/* Hold Node's unhandled-rejection channel for the length of `body` and hand it back afterwards, giving the body the reasons the channel carried. The test runner keeps
- * its own listener on that channel and fails the running test on anything it sees, so a row that counts the rejections a dropped promise raises has to own the channel
- * while it counts.
- */
-async function captureUnhandledRejections<T>(body: (captured: readonly unknown[]) => Promise<T>): Promise<T> {
-
-  const captured: unknown[] = [];
-  const runnerListeners = process.listeners("unhandledRejection");
-  const onUnhandled = (reason: unknown): void => {
-
-    captured.push(reason);
-  };
-
-  process.removeAllListeners("unhandledRejection");
-  process.on("unhandledRejection", onUnhandled);
-
-  try {
-
-    return await body(captured);
-  } finally {
-
-    process.off("unhandledRejection", onUnhandled);
-
-    for(const listener of runnerListeners) {
-
-      process.on("unhandledRejection", listener);
-    }
   }
 }
 

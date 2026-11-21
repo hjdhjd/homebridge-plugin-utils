@@ -53,6 +53,7 @@ export * from "../ffmpeg/fmp4-builders.ts";
 export * from "../ffmpeg/livestream-process-double.ts";
 export { hardwareDecoderRefusalLine } from "../ffmpeg/process-ending.ts";
 export * from "../ffmpeg/recording-process-double.ts";
+export * from "../ffmpeg/streaming-process-double.ts";
 export * from "../http-listener-double.ts";
 export * from "../logclient/socket-double.ts";
 export * from "../mdns/browser-double.ts";

@@ -1,16 +1,22 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
  * ffmpeg/stream.test.ts: Unit tests for FfmpegStreamingProcess - signal-driven internal health socket, liveness watchdog, abort propagation, externally readable stdout,
- * and the ending callback a socket failure asks.
+ * and the ending callback a socket failure asks - and the parity rows that run each lifecycle scenario a streaming consumer meets, the ending callbacks and the
+ * hardware decoder's refusal among them, on the real process and on TestStreamingProcess alike.
  */
-import type { FfmpegEnding, FfmpegEndingVerdict } from "./process.ts";
-import { capturingLog, expectAt, linesAt, silentLog, waitUntil } from "../testing/index.ts";
+import { BackpressureClosedStreamError, BackpressureWriter } from "../backpressure.ts";
+import type { FfmpegEnding, FfmpegEndingVerdict, FfmpegProcessExitInfo } from "./process.ts";
+import type { FfmpegStreamingInit, StreamingProcess } from "./stream.ts";
+import { FfmpegStreamingProcess, streamingProcessFactory } from "./stream.ts";
+import { HbpuAbortError, onAbort } from "../util.ts";
+import { TestStreamingProcessFactory, assertNoUnhandledRejections, capturingLog, expectAt, hardwareDecoderRefusalLine, linesAt, settle, silentLog, waitUntil }
+  from "../testing/index.ts";
+import { assertEachSubject, endingSpies, lifetimeState, reasonName, settlement } from "./process-parity.helpers.ts";
 import { describe, mock, test } from "node:test";
 import { holdPort, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
 import type { Clock } from "../clock.ts";
+import type { EndingSpies } from "./process-parity.helpers.ts";
 import { FfmpegOptions } from "./options.ts";
-import { FfmpegStreamingProcess } from "./stream.ts";
-import { HbpuAbortError } from "../util.ts";
 import type { HomebridgePluginLogging } from "../util.ts";
 import { TestClock } from "../clock-double.ts";
 import assert from "node:assert/strict";
@@ -18,12 +24,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
 import { once } from "node:events";
 
-function makeOptions(logger: HomebridgePluginLogging = silentLog(), clock?: Clock): FfmpegOptions {
+function makeOptions(logger: HomebridgePluginLogging = silentLog(), clock?: Clock, ffmpegExec = process.execPath): FfmpegOptions {
 
   return new FfmpegOptions({
 
     clock,
-    codecSupport: makeCodecs({ ffmpegExec: process.execPath, ffmpegVersion: "test" }),
+    codecSupport: makeCodecs({ ffmpegExec, ffmpegVersion: "test" }),
     debug: false,
     hardwareDecoding: false,
     hardwareTranscoding: false,
@@ -114,7 +120,7 @@ describe("FfmpegStreamingProcess - health socket watchdog", () => {
 
     // The `assert.ok` narrows the `FfmpegStreamingReturnPort | undefined` union for TypeScript - we configured returnPort at construction, so this assertion never
     // fires in practice. The getter's docblock (stream.ts) documents the timing contract: the kernel-assigned port becomes observable when the socket's
-    // `"listening"` event fires, which in practice precedes `proc.ready` since FFmpeg startup outlasts the UDP bind by orders of magnitude.
+    // `"listening"` event fires, which happens inside the constructor, because the health socket's bind to its loopback literal completes inside the call.
     assert.ok(proc.returnPort, "fixture pre-condition: returnPort must be set because we configured it");
 
     // Send four packets spaced under the watchdog window. If the watchdog does not re-arm on each packet, the process would abort mid-sequence and the last send
@@ -138,8 +144,8 @@ describe("FfmpegStreamingProcess - health socket watchdog", () => {
 
     await proc.ready;
 
-    // The kernel-assigned port is observable once the socket's `"listening"` event has fired, which in practice precedes `proc.ready` because FFmpeg startup outlasts
-    // the UDP bind by orders of magnitude - the same contract the re-arm test above relies on, so we read `proc.returnPort.port` directly rather than waiting on
+    // The kernel-assigned port is observable once the socket's `"listening"` event has fired, which happens inside the constructor because the health socket's bind
+    // completes inside the call - the same contract the re-arm test above relies on, so we read `proc.returnPort.port` directly rather than waiting on
     // `"listening"`. The `assert.ok` narrows the `FfmpegStreamingReturnPort | undefined` union for TypeScript.
     assert.ok(proc.returnPort, "fixture pre-condition: returnPort must be set because we configured it");
 
@@ -288,8 +294,8 @@ describe("FfmpegStreamingProcess - health socket error path", () => {
   test("a kernel-level bind failure on the return port aborts the process with \"failed\" + cause", async () => {
 
     // Regression guard for the socket `"error"` path in `#startHealthMonitor`. We provoke a real EADDRINUSE by holding the return port with a second socket before the
-    // streaming process tries to bind. The kernel surfaces the error on the next event-loop turn; the handler translates it into `HbpuAbortError("failed", { cause })`
-    // and aborts the process.
+    // streaming process tries to bind. The bind to the loopback literal fails inside the constructor, so the kernel's error has reached the handler by the time
+    // construction returns; the handler translates it into `HbpuAbortError("failed", { cause })` and aborts the process.
     //
     // `holdPort(0)` atomically grabs an ephemeral port (no reserve-then-rebind race); the holder retains the port for the duration of the test so the streaming
     // process's own bind collides on the same port. `await using` releases the holder at scope exit via its `Symbol.asyncDispose`, so the cleanup shape stays
@@ -303,7 +309,7 @@ describe("FfmpegStreamingProcess - health socket error path", () => {
       returnPort: { ipFamily: "ipv4", port: holder.port }
     });
 
-    // Wait for the bind failure to surface. EADDRINUSE reports on the next event-loop turn after bind.
+    // The bind failure has already surfaced inside the constructor; the short delay is only a margin before we assert.
     await delay(50);
 
     assert.equal(proc.aborted, true, "a bind failure on the return port must abort the streaming process");
@@ -355,7 +361,7 @@ describe("FfmpegStreamingProcess - IPv6 return port", () => {
     await proc.ready;
     assert.ok(proc.returnPort, "fixture pre-condition: returnPort must be set because we configured it");
 
-    // Give the UDP bind a turn to complete before sending.
+    // The UDP bind completed inside the constructor; the short delay is only a margin before the first send.
     await delay(10);
 
     await sendDatagram(proc.returnPort.port, HEALTH_PAYLOAD, "ipv6");
@@ -367,5 +373,538 @@ describe("FfmpegStreamingProcess - IPv6 return port", () => {
 
     assert.equal(proc.aborted, false, "IPv6 packets arriving within the window must re-arm the watchdog and keep the process alive");
     assert.equal(proc.isTimedOut, false);
+  });
+});
+
+/* The point a parity row starts from. `silent` is a child that runs and writes nothing, `ready` one that has written its first stderr line and idles, `exitsZero` and
+ * `exitsNonzero` a child that exits on its own, writing nothing, with status 0 or 3, `stderrThenExitsNonzero` one that writes invented stderr lines and then exits
+ * with status 3, `stdoutThenExits` one that writes to stdout and then exits with status 0, and `spawnFails` a process whose binary does not exist. The refusal
+ * stages write the hardware decoder's refusal and exit a moment later, so the line is read before the exit: `refusalOnGpuThenExitsNonzero` asks for its decoded
+ * frames on the GPU and exits nonzero, `refusalThenExitsNonzero` takes its frames in system memory and exits nonzero, and `refusalThenExitsZero` exits cleanly.
+ */
+type StreamingStage = "exitsNonzero" | "exitsZero" | "ready" | "refusalOnGpuThenExitsNonzero" | "refusalThenExitsNonzero" | "refusalThenExitsZero" | "silent" |
+  "spawnFails" | "stderrThenExitsNonzero" | "stdoutThenExits";
+
+// The ending callbacks a parity row hands a subject in its init.
+type EndingCallbacks = Pick<FfmpegStreamingInit, "onFailed" | "onTimeout">;
+
+// Bring a subject to a stage, its lifetime composed with `signal`, its init carrying `callbacks`, and built over `options` when a row hands its own.
+type StartStreaming = (stage: StreamingStage, signal: AbortSignal, callbacks: EndingCallbacks, options?: FfmpegOptions) => Promise<StreamingProcess>;
+
+// What the stdoutThenExits child writes to stdout.
+const STDOUT_BYTES = "talkback-bytes";
+
+// What the stderrThenExitsNonzero child writes to stderr, a line at a time, before it exits.
+const STDERR_LINES = [ "An invented stderr line ahead of a failed exit.", "A second invented stderr line." ];
+
+// A binary path nothing lives at, for the spawn that fails.
+const MISSING_FFMPEG = "/nonexistent-hbpu-streaming-parity/ffmpeg";
+
+// The exit a child killed by its process's abort reports.
+const KILLED: FfmpegProcessExitInfo = { exitCode: null, exitSignal: "SIGKILL" };
+
+// A child that writes the hardware decoder's refusal and exits with `exitCode` a moment later, the delay letting the process read the line before the exit ends it.
+function refusalThenExit(exitCode: number): string[] {
+
+  return [ "-e", "process.stderr.write(" + JSON.stringify(hardwareDecoderRefusalLine + "\n") + "); setTimeout(() => process.exit(" + exitCode.toString() + "), 10);" ];
+}
+
+// The stand-in script that brings the real process to a stage. The spawn that fails runs nothing, so it takes no script.
+function streamingStageScript(stage: StreamingStage): string[] {
+
+  switch(stage) {
+
+    case "exitsNonzero":
+
+      return [ "-e", "process.exit(3);" ];
+
+    case "exitsZero":
+
+      return [ "-e", "process.exit(0);" ];
+
+    case "ready":
+
+      return stderrThenIdle();
+
+    case "refusalOnGpuThenExitsNonzero":
+
+      // Node takes everything after `--` as positional argv, so the child runs its script while each subject sees the GPU-frames argument in its args.
+      return [ ...refusalThenExit(3), "--", "-hwaccel_output_format", "videotoolbox_vld" ];
+
+    case "refusalThenExitsNonzero":
+
+      return refusalThenExit(3);
+
+    case "refusalThenExitsZero":
+
+      return refusalThenExit(0);
+
+    case "silent":
+
+      return [ "-e", "setInterval(() => {}, 100000);" ];
+
+    case "spawnFails":
+
+      return [];
+
+    case "stderrThenExitsNonzero":
+
+      return [ "-e", "process.stderr.write(" + JSON.stringify(STDERR_LINES.join("\n") + "\n") + ", () => process.exit(3));" ];
+
+    case "stdoutThenExits":
+
+      return [ "-e", "process.stdout.write(" + JSON.stringify(STDOUT_BYTES) + ", () => process.exit(0));" ];
+  }
+}
+
+// The real subject: a process the production factory built, running the stage's script or pointed at a binary that does not exist, over the options the row handed
+// or its own. For the ready stage it waits for the first stderr line, so the row starts where the double's ready lever leaves it.
+async function startRealStreaming(stage: StreamingStage, signal: AbortSignal, callbacks: EndingCallbacks,
+  options = makeOptions(silentLog(), undefined, (stage === "spawnFails") ? MISSING_FFMPEG : process.execPath)): Promise<StreamingProcess> {
+
+  const proc = streamingProcessFactory.create(options, { ...callbacks, args: streamingStageScript(stage), signal });
+
+  assert.ok(proc instanceof FfmpegStreamingProcess, "the production factory must build an FfmpegStreamingProcess");
+
+  if(stage === "ready") {
+
+    await proc.ready;
+  }
+
+  return proc;
+}
+
+/* The double subject: a process TestStreamingProcessFactory built over the row's signal, callbacks and options, or its own options, driven to the stage the real child
+ * reaches on its own. A real child's own events arrive on a later turn than the row's start, so a stage's exit, output, stderr lines or spawn failure are pulled a
+ * turn after the start. A real child the row's abort kills exits a turn later, reporting the kill, so the exit lever is pulled then with the exit a killed child
+ * reports, unless the stage has already ended the child.
+ */
+async function startDoubleStreaming(stage: StreamingStage, signal: AbortSignal, callbacks: EndingCallbacks, options = makeOptions()): Promise<StreamingProcess> {
+
+  const factory = new TestStreamingProcessFactory();
+
+  factory.create(options, { ...callbacks, args: streamingStageScript(stage), signal });
+
+  const proc = expectAt(factory.createCalls, 0, "the process the factory built").process;
+  let ended = false;
+
+  // The child ends on its own a turn after the start, as a real child does.
+  const endsOnItsOwn = (lever: () => void): void => {
+
+    ended = true;
+    setImmediate(lever);
+  };
+
+  onAbort(signal, () => setImmediate(() => {
+
+    if(!ended) {
+
+      ended = true;
+      proc.exit(KILLED);
+    }
+  }));
+
+  switch(stage) {
+
+    case "exitsNonzero":
+
+      endsOnItsOwn(() => proc.exit({ exitCode: 3, exitSignal: null }));
+
+      break;
+
+    case "exitsZero":
+
+      endsOnItsOwn(() => proc.exit({ exitCode: 0, exitSignal: null }));
+
+      break;
+
+    case "ready":
+
+      proc.resolveReady();
+
+      break;
+
+    case "refusalOnGpuThenExitsNonzero":
+    case "refusalThenExitsNonzero":
+    case "refusalThenExitsZero":
+
+      // The real child's refusal line resolves its ready and is in its log, and has marked its options, by the time its exit ends it.
+      endsOnItsOwn(() => {
+
+        proc.resolveReady();
+        proc.stderrLog = [hardwareDecoderRefusalLine];
+        proc.exit({ exitCode: (stage === "refusalThenExitsZero") ? 0 : 3, exitSignal: null });
+      });
+
+      break;
+
+    case "silent":
+
+      break;
+
+    case "spawnFails":
+
+      endsOnItsOwn(() => proc.failSpawn(Object.assign(new Error("spawn " + MISSING_FFMPEG + " ENOENT"), { code: "ENOENT" })));
+
+      break;
+
+    case "stderrThenExitsNonzero":
+
+      // The real child's first stderr line resolves its ready, and every line it wrote is in its log by the time its exit ends it.
+      endsOnItsOwn(() => {
+
+        proc.resolveReady();
+        proc.stderrLog = STDERR_LINES;
+        proc.exit({ exitCode: 3, exitSignal: null });
+      });
+
+      break;
+
+    case "stdoutThenExits":
+
+      endsOnItsOwn(() => {
+
+        proc.writeStdout(Buffer.from(STDOUT_BYTES));
+        proc.exit({ exitCode: 0, exitSignal: null });
+      });
+
+      break;
+  }
+
+  return proc;
+}
+
+// What a row may hand withSubject beside its body: the ending callbacks its subject's init carries, the controller it aborted ahead of the start, and the options its
+// subject is built over, a fresh object for each subject, when the row reads what a subject marks.
+interface SubjectInit {
+
+  callbacks?: EndingCallbacks;
+  controller?: AbortController;
+  options?: FfmpegOptions;
+}
+
+/* Run a parity row's body over a subject brought to `stage`, and reap the subject once the body is done, whatever it did: the row's signal ends a child still
+ * running and its exit is awaited, so no real child outlives its row.
+ */
+async function withSubject<T>(start: StartStreaming, stage: StreamingStage, body: (proc: StreamingProcess, controller: AbortController) => Promise<T>,
+  { callbacks = {}, controller = new AbortController(), options }: SubjectInit = {}): Promise<T> {
+
+  const proc = await start(stage, controller.signal, callbacks, options);
+
+  try {
+
+    return await body(proc, controller);
+  } finally {
+
+    controller.abort(new HbpuAbortError("shutdown"));
+
+    // A spawn that failed rejects exited, and reaping only waits for it to settle.
+    await proc.exited.catch(() => undefined);
+  }
+}
+
+// Run one streaming scenario against the double and against the real process through the shared parity runner, over this suite's starters.
+async function assertEachStreaming<T>(expected: T, scenario: (start: StartStreaming) => Promise<T>): Promise<void> {
+
+  await assertEachSubject({ double: startDoubleStreaming, real: startRealStreaming }, expected, scenario);
+}
+
+// The cause a lifetime's reason carries: an error by its code, as the spawn's error is, or the value itself, as an exit's information is.
+function causeOf(signal: AbortSignal): unknown {
+
+  const cause: unknown = (signal.reason as { cause?: unknown }).cause;
+
+  return (cause instanceof Error) ? ("an error with code " + String((cause as NodeJS.ErrnoException).code)) : cause;
+}
+
+// What a row reads at the exit: how exited settled, the lifetime and the cause its reason carries, and whether stdin is still writable.
+interface ExitReading {
+
+  cause: unknown;
+  exited: string;
+  lifetime: string;
+  stdinWritable: boolean;
+}
+
+/* Read a subject at its exit, from inside a continuation of exited, where its lifetime has already ended. A subject that settles exited and ends its lifetime in
+ * separate turns reads "live" here.
+ */
+async function atExit(proc: StreamingProcess): Promise<ExitReading> {
+
+  const read = (exited: string): ExitReading => ({ cause: causeOf(proc.signal), exited, lifetime: lifetimeState(proc.signal), stdinWritable: proc.stdin.writable });
+
+  return proc.exited.then((info) => read("resolved " + String(info.exitCode) + " " + String(info.exitSignal)), (error: unknown) => read("rejected " + reasonName(error)));
+}
+
+// How a write settled: "written", or the name of the closed-stream error it rejected with.
+async function writeOutcome(write: Promise<void>): Promise<string> {
+
+  try {
+
+    await write;
+
+    return "written";
+  } catch(error: unknown) {
+
+    return (error instanceof BackpressureClosedStreamError) ? error.name : ("another error: " + String(error));
+  }
+}
+
+describe("StreamingProcess - the real process and TestStreamingProcess agree on the lifecycle", () => {
+
+  test("ready resolves once the child has written its first stderr line, and the lifetime stays live", async () => {
+
+    await assertEachStreaming({ lifetime: "live", ready: "resolved" }, async (start) => withSubject(start, "ready", async (proc) => {
+
+      const ready = await settlement(proc.ready);
+
+      return { lifetime: lifetimeState(proc.signal), ready };
+    }));
+  });
+
+  test("a spawn that fails rejects ready and exited with a failed reason carrying the spawn's error, the lifetime ended and stdin closed as exited settles", async () => {
+
+    await assertEachStreaming({ exit: { cause: "an error with code ENOENT", exited: "rejected failed", lifetime: "failed", stdinWritable: false },
+      ready: "rejected failed" }, async (start) => withSubject(start, "spawnFails", async (proc) => {
+
+      const exit = atExit(proc);
+
+      return { exit: await exit, ready: await settlement(proc.ready) };
+    }));
+  });
+
+  for(const [ stage, exitCode, lifetime ] of [ [ "exitsZero", 0, "closed" ], [ "exitsNonzero", 3, "failed" ] ] as const) {
+
+    test("a child exiting on its own with status " + String(exitCode) + " ends the lifetime " + lifetime + " as exited resolves and rejects ready", async () => {
+
+      await assertEachStreaming({ exit: { cause: { exitCode, exitSignal: null }, exited: "resolved " + String(exitCode) + " null", lifetime, stdinWritable: false },
+        ready: "rejected " + lifetime }, async (start) => withSubject(start, stage, async (proc) => {
+
+        const exit = atExit(proc);
+
+        return { exit: await exit, ready: await settlement(proc.ready) };
+      }));
+    });
+  }
+
+  test("an exit after the parent's abort keeps the abort's reason, stdin writable from the abort until exited settles", async () => {
+
+    await assertEachStreaming({ exit: { cause: undefined, exited: "resolved null SIGKILL", lifetime: "replaced", stdinWritable: false }, stdinAfterAbort: true },
+      async (start) => withSubject(start, "ready", async (proc, controller) => {
+
+        const exit = atExit(proc);
+
+        controller.abort(new HbpuAbortError("replaced"));
+
+        const stdinAfterAbort = proc.stdin.writable;
+
+        return { exit: await exit, stdinAfterAbort };
+      }));
+  });
+
+  test("stdout carries what the child wrote and ends with the child's output", async () => {
+
+    await assertEachStreaming({ lifetime: "closed", stdout: STDOUT_BYTES }, async (start) => withSubject(start, "stdoutThenExits", async (proc) => {
+
+      const stdout = Buffer.concat(await proc.stdout.toArray() as Buffer[]).toString();
+
+      await proc.exited;
+
+      return { lifetime: lifetimeState(proc.signal), stdout };
+    }));
+  });
+
+  test("a writer over stdin writes while the child runs and meets the closed stream once exited settles", async () => {
+
+    await assertEachStreaming({ afterExit: "BackpressureClosedStreamError", whileRunning: "written" }, async (start) => withSubject(start, "ready",
+      async (proc, controller) => {
+
+        await using writer = new BackpressureWriter(() => proc.stdin);
+
+        const whileRunning = await writeOutcome(writer.write(Buffer.from("frame")));
+
+        controller.abort(new HbpuAbortError("replaced"));
+        await proc.exited;
+
+        return { afterExit: await writeOutcome(writer.write(Buffer.from("late"))), whileRunning };
+      }));
+  });
+
+  test("an abort before ready rejects ready with the abort's reason", async () => {
+
+    await assertEachStreaming({ lifetime: "replaced", ready: "rejected replaced" }, async (start) => withSubject(start, "silent", async (proc, controller) => {
+
+      const ready = settlement(proc.ready);
+
+      controller.abort(new HbpuAbortError("replaced"));
+
+      return { lifetime: lifetimeState(proc.signal), ready: await ready };
+    }));
+  });
+
+  test("nothing is reported unhandled when neither ready nor exited is read, whether the parent's abort or a failed spawn ends the process", async () => {
+
+    await assertEachStreaming({ abort: "none", spawnFails: "none" }, async (start) => ({
+
+      abort: await withSubject(start, "silent", async (proc, controller) => assertNoUnhandledRejections(async () => {
+
+        controller.abort(new HbpuAbortError("replaced"));
+        await settle();
+
+        return lifetimeState(proc.signal) === "replaced" ? "none" : "the lifetime did not end";
+      })),
+      spawnFails: await withSubject(start, "spawnFails", async (proc) => assertNoUnhandledRejections(async () => {
+
+        await waitUntil(() => proc.signal.aborted, { description: "the spawn to fail" });
+        await settle();
+
+        return "none";
+      }))
+    }));
+  });
+});
+
+/* The askings a row's spies have taken: for each callback, the name of the reason each asking was about, in order. A row compares these, which say which callback a
+ * subject asked, how often, and about what ending.
+ */
+function askings(spies: EndingSpies): { onFailed: string[]; onTimeout: string[] } {
+
+  return { onFailed: spies.onFailed.mock.calls.map((call) => call.arguments[0].reason.name),
+    onTimeout: spies.onTimeout.mock.calls.map((call) => call.arguments[0].reason.name) };
+}
+
+describe("StreamingProcess - the real process and TestStreamingProcess ask the same ending callbacks", () => {
+
+  // An exit or a spawn failure is read inside a continuation of exited, where each subject has already asked. An abort is read right after it, inside which each
+  // subject asks, and again once exited settles, so a second asking at the exit that follows the abort shows.
+
+  test("a child that writes stderr lines and exits nonzero asks onFailed once with those lines", async () => {
+
+    await assertEachStreaming({ asked: { onFailed: ["failed"], onTimeout: [] }, lines: [STDERR_LINES] }, async (start) => {
+
+      const spies = endingSpies();
+
+      return withSubject(start, "stderrThenExitsNonzero", async (proc) => proc.exited.then(() => ({ asked: askings(spies),
+        lines: spies.onFailed.mock.calls.map((call) => [...call.arguments[0].stderrLog]) })), { callbacks: spies });
+    });
+  });
+
+  test("the parent's timeout abort asks onTimeout once, inside the abort and no more at the exit that follows", async () => {
+
+    const asked = { onFailed: [], onTimeout: ["timeout"] };
+
+    await assertEachStreaming({ afterAbort: asked, atExit: asked }, async (start) => {
+
+      const spies = endingSpies();
+
+      return withSubject(start, "ready", async (proc, controller) => {
+
+        controller.abort(new HbpuAbortError("timeout"));
+
+        const afterAbort = askings(spies);
+
+        await proc.exited;
+
+        return { afterAbort, atExit: askings(spies) };
+      }, { callbacks: spies });
+    });
+  });
+
+  test("a spawn that fails asks onFailed once", async () => {
+
+    await assertEachStreaming({ onFailed: ["failed"], onTimeout: [] }, async (start) => {
+
+      const spies = endingSpies();
+
+      return withSubject(start, "spawnFails", async (proc) => proc.exited.then(() => askings(spies), () => askings(spies)), { callbacks: spies });
+    });
+  });
+
+  test("a child exiting cleanly on its own asks neither callback", async () => {
+
+    await assertEachStreaming({ onFailed: [], onTimeout: [] }, async (start) => {
+
+      const spies = endingSpies();
+
+      return withSubject(start, "exitsZero", async (proc) => proc.exited.then(() => askings(spies)), { callbacks: spies });
+    });
+  });
+
+  test("the parent's shutdown abort asks neither callback, inside the abort or at the exit that follows", async () => {
+
+    const asked = { onFailed: [], onTimeout: [] };
+
+    await assertEachStreaming({ afterAbort: asked, atExit: asked }, async (start) => {
+
+      const spies = endingSpies();
+
+      return withSubject(start, "ready", async (proc, controller) => {
+
+        controller.abort(new HbpuAbortError("shutdown"));
+
+        const afterAbort = askings(spies);
+
+        await proc.exited;
+
+        return { afterAbort, atExit: askings(spies) };
+      }, { callbacks: spies });
+    });
+  });
+
+  test("a parent already aborted as failed asks onFailed once, with no lines, by the time the subject's start has returned, and no more at the exit", async () => {
+
+    const asked = { onFailed: ["failed"], onTimeout: [] };
+
+    await assertEachStreaming({ afterStart: asked, atExit: asked, lines: [[]] }, async (start) => {
+
+      const spies = endingSpies();
+      const controller = new AbortController();
+
+      controller.abort(new HbpuAbortError("failed"));
+
+      return withSubject(start, "silent", async (proc) => {
+
+        const afterStart = askings(spies);
+        const lines = spies.onFailed.mock.calls.map((call) => [...call.arguments[0].stderrLog]);
+
+        await proc.exited;
+
+        return { afterStart, atExit: askings(spies), lines };
+      }, { callbacks: spies, controller });
+    });
+  });
+});
+
+describe("StreamingProcess - the real process and TestStreamingProcess agree on the hardware decoder's refusal", () => {
+
+  // Each subject is built over a fresh options object of its own, so each reading of the mark is that subject's own, and every reading is taken inside a
+  // continuation of exited, where each subject has already marked its options and asked.
+
+  // A refusal row's reading: the askings, the lifetime and whether the subject's own options were marked.
+  async function refusalReading(start: StartStreaming, stage: StreamingStage): Promise<{ asked: ReturnType<typeof askings>; lifetime: string; marked: boolean }> {
+
+    const spies = endingSpies();
+    const options = makeOptions();
+
+    return withSubject(start, stage, async (proc) => proc.exited.then(() => ({ asked: askings(spies), lifetime: lifetimeState(proc.signal),
+      marked: options.hardwareDecoderRefused })), { callbacks: spies, options });
+  }
+
+  test("a failed child that reports the refusal with its frames asked on the GPU asks no callback and leaves its options marked", async () => {
+
+    await assertEachStreaming({ asked: { onFailed: [], onTimeout: [] }, lifetime: "failed", marked: true },
+      async (start) => refusalReading(start, "refusalOnGpuThenExitsNonzero"));
+  });
+
+  test("a failed child that reports the refusal with its frames in system memory asks onFailed once and leaves its options marked", async () => {
+
+    await assertEachStreaming({ asked: { onFailed: ["failed"], onTimeout: [] }, lifetime: "failed", marked: true },
+      async (start) => refusalReading(start, "refusalThenExitsNonzero"));
+  });
+
+  test("a child that reports the refusal and exits cleanly asks nothing and leaves its options marked", async () => {
+
+    await assertEachStreaming({ asked: { onFailed: [], onTimeout: [] }, lifetime: "closed", marked: true },
+      async (start) => refusalReading(start, "refusalThenExitsZero"));
   });
 });

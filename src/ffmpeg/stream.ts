@@ -20,13 +20,17 @@
  * The stream-health socket is intentionally simpler than {@link ffmpeg/rtp!RtpDemuxer | RtpDemuxer}: its sole job is to detect liveness on a known return port. It
  * does not classify RTP vs. RTCP or forward packets. Two-way-audio demuxing is `RtpDemuxer`'s responsibility and lives in its own class.
  *
+ * A consumer that wants its live view under test constructs the process through {@link StreamingProcessFactory} and reads it through {@link StreamingProcess}, the
+ * streaming dependency-inversion boundary, whose production factory is {@link streamingProcessFactory} and whose double ships on the testing entry point.
+ *
  * @module
  */
+import type { FfmpegProcessExitInfo, FfmpegProcessInit } from "./process.ts";
 import { HbpuAbortError, Watchdog, onAbort } from "../util.ts";
+import type { Readable, Writable } from "node:stream";
 import { createDgramSocket, loopbackAddress } from "../dgram-util.ts";
 import type { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
-import type { FfmpegProcessInit } from "./process.ts";
 import type { IpFamily } from "../dgram-util.ts";
 import { STREAM_HEALTH_TIMEOUT } from "./settings.ts";
 
@@ -36,8 +40,8 @@ import { STREAM_HEALTH_TIMEOUT } from "./settings.ts";
  * @property ipFamily   - The IP family: `"ipv4"` binds to `127.0.0.1`, `"ipv6"` binds to `::1`. Shares the {@link IpFamily} alias with `RtpDemuxerInit`,
  *                        `PortReservationInit`, and `PortReservation` so every UDP-aware init type in the FFmpeg subsystem reads from the same vocabulary.
  * @property port       - The UDP port to bind to. Pass `0` to request kernel-assigned ephemeral allocation: the bind succeeds atomically against whichever port
- *                        the kernel hands out, eliminating the reserve-then-rebind race that a separate reservation step would carry. The assigned port is then
- *                        observable via {@link FfmpegStreamingProcess.returnPort} once {@link FfmpegStreamingProcess.ready} resolves.
+ *                        the kernel hands out, eliminating the reserve-then-rebind race that a separate reservation step would carry. The bind completes inside
+ *                        the constructor, so the assigned port is observable via {@link FfmpegStreamingProcess.returnPort} from the moment construction returns.
  *
  * @category FFmpeg
  */
@@ -67,12 +71,85 @@ export interface FfmpegStreamingInit extends FfmpegProcessInit {
 }
 
 /**
+ * The minimal surface a streaming consumer reads off a streaming process. This is the product half of the streaming dependency-inversion boundary: a class that runs a
+ * live view depends on this narrow interface rather than the concrete {@link FfmpegStreamingProcess}, so a test can substitute a double without spawning FFmpeg. It is
+ * an interface rather than the class because the class's private fields make its type one that only a real subclass, which spawns a child, can satisfy. The interface
+ * is type-only, so importing it costs a consumer nothing at runtime.
+ *
+ * Every member is inherited from {@link FfmpegProcess}, so {@link FfmpegStreamingProcess} satisfies it by inheritance and carries only an `implements` annotation. This
+ * is the consumer's minimal surface rather than the class's full surface: a streaming consumer waits on `ready`, watches `exited` and the lifetime, writes into `stdin`
+ * and reads `stdout`, and ends the process through the signal it passed in its init.
+ *
+ * @see FfmpegStreamingProcess
+ * @see StreamingProcessFactory
+ *
+ * @category FFmpeg
+ */
+export interface StreamingProcess {
+
+  /**
+   * Resolves with the child's exit code and signal once the process terminates, and rejects with the lifetime's reason only when the child never started. The lifetime
+   * has ended by the time any continuation of a settled `exited` runs, so a consumer reads why the process ended from `signal.reason` there.
+   */
+  readonly exited: Promise<FfmpegProcessExitInfo>;
+
+  /**
+   * Resolves when the process has produced its first stderr output, and rejects with the lifetime's reason when the lifetime ends first.
+   */
+  readonly ready: Promise<void>;
+
+  /**
+   * The composed abort signal representing the process's lifetime. Aborts exactly once; the reason on `signal.reason` names the cause.
+   */
+  readonly signal: AbortSignal;
+
+  /**
+   * Writable standard input. It stays writable after the lifetime ends until `exited` settles, when it is destroyed, so a writer over it meets the closed stream then.
+   */
+  readonly stdin: Writable;
+
+  /**
+   * Readable standard output, which ends when the child's output does.
+   */
+  readonly stdout: Readable;
+}
+
+/**
+ * The creational half of the streaming dependency-inversion boundary: build a {@link StreamingProcess} from the shared options and an init. A consumer holds this
+ * factory typed as the abstraction and constructs through it, so a test can substitute a factory that returns a double, and a suite reads the command the consumer
+ * assembled from the init it passed. The production factory is {@link streamingProcessFactory}, whose `create` is exactly the {@link FfmpegStreamingProcess}
+ * constructor call, so routing construction through this boundary changes no behavior, and a consumer wires it as it wires
+ * {@link ffmpeg/record!RecordingProcessFactory | RecordingProcessFactory}.
+ *
+ * A plugin that reports a failed or timed-out ending its own way hands `onFailed` and `onTimeout` in the init, which reaches the process whole, so the factory builds
+ * every streaming process a plugin runs with no subclass of its own.
+ *
+ * @see streamingProcessFactory
+ * @see StreamingProcess
+ *
+ * @category FFmpeg
+ */
+export interface StreamingProcessFactory {
+
+  /**
+   * Construct a streaming process for the supplied options and init.
+   *
+   * @param options - Shared {@link FfmpegOptions} configuration (codec support, logger, debug flag, name).
+   * @param init    - Init options. See {@link FfmpegStreamingInit}.
+   *
+   * @returns A new {@link StreamingProcess}.
+   */
+  create(options: FfmpegOptions, init: FfmpegStreamingInit): StreamingProcess;
+}
+
+/**
  * FFmpeg process specialization for HomeKit livestreaming. Extends {@link FfmpegProcess} directly and composes an internal stream-health UDP socket when a return port
  * is configured.
  *
  * Lifecycle is entirely signal-driven: construction spawns the child and (optionally) binds the health socket; the socket watches for inbound packets and aborts the
  * process with `"timeout"` if the window lapses; the inherited teardown path closes the socket and clears the watchdog timer as part of its signal-abort listener
- * fan-out. The subclass adds no new public verbs beyond what {@link FfmpegProcess} provides.
+ * fan-out. The subclass adds no new public verbs beyond what {@link FfmpegProcess} provides. The class satisfies {@link StreamingProcess}, and a consumer that
+ * substitutes it under test constructs it through a {@link StreamingProcessFactory}.
  *
  * @example
  *
@@ -96,7 +173,7 @@ export interface FfmpegStreamingInit extends FfmpegProcessInit {
  *
  * @category FFmpeg
  */
-export class FfmpegStreamingProcess extends FfmpegProcess {
+export class FfmpegStreamingProcess extends FfmpegProcess implements StreamingProcess {
 
   // The return-port descriptor requested at construction (verbatim from `init.returnPort`). Undefined when no return port was configured. Read through the
   // {@link FfmpegStreamingProcess.returnPort} getter, which projects the kernel-assigned port over this descriptor once the bind settles.
@@ -131,9 +208,9 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
   /**
    * The UDP return-port descriptor the health socket is bound to, or `undefined` when no return port was configured. For a specific-port construction
    * (`init.returnPort.port` non-zero), this descriptor equals `init.returnPort` from the moment the constructor returns; for an ephemeral construction
-   * (`init.returnPort.port === 0`), the `port` field is `0` until the kernel completes the bind, then the kernel-assigned port. Consumers that need the assigned
-   * ephemeral port `await proc.ready` before reading it; in practice the health-socket bind completes well before the FFmpeg child reaches the `ready` signal, so a
-   * post-`ready` read always observes the kernel's pick.
+   * (`init.returnPort.port === 0`), the `port` field is `0` until the kernel completes the bind, which it does inside the constructor because the health socket
+   * comes from {@link createDgramSocket} and binds to a loopback literal, so the kernel-assigned port reads from the moment construction returns, with no wait on
+   * `ready`.
    *
    * Returns a fresh descriptor on every read; callers must treat the result as read-only. The `ipFamily` field is the verbatim value passed at construction; the
    * `port` field reads from the live socket-address projection once captured (specific and ephemeral binds converge on a single read path).
@@ -212,7 +289,8 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
     // re-implement the AbortSignal pre-aborted-listener workaround.
     onAbort(this.signal, () => socket.close());
 
-    // Bind. Binding may fail asynchronously with an `"error"` event, which the listener above catches.
+    // Bind. A bind to the loopback literal completes or fails inside this call, which is why every listener above is registered first; a failure arrives as the
+    // `"error"` event one of them catches.
     socket.bind(returnPort.port, loopbackAddress(returnPort.ipFamily));
 
     // This is an inactivity watchdog, and "inactivity" presupposes prior activity: it watches one thing - a *flowing* return stream that dried up - so it arms only
@@ -227,3 +305,16 @@ export class FfmpegStreamingProcess extends FfmpegProcess {
     // arrives before stderr does still starts the inactivity clock, so a stream that is already alive never waits on the spawn signal to be protected.
   }
 }
+
+/**
+ * The production {@link StreamingProcessFactory}: builds the concrete FFmpeg-backed streaming process. A consumer holds this typed as the abstraction; a test
+ * substitutes a fake factory. `create` is exactly the {@link FfmpegStreamingProcess} constructor call, so wiring construction through this boundary changes no behavior.
+ *
+ * @see StreamingProcessFactory
+ *
+ * @category FFmpeg
+ */
+export const streamingProcessFactory: StreamingProcessFactory = {
+
+  create: (options: FfmpegOptions, init: FfmpegStreamingInit): StreamingProcess => new FfmpegStreamingProcess(options, init)
+};

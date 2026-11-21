@@ -956,6 +956,12 @@ Re-exports [hapStatus](testing/homebridge-double.md#hapstatus-1)
 
 ***
 
+### hardwareDecoderRefusalLine
+
+Re-exports [hardwareDecoderRefusalLine](ffmpeg/process-ending.md#hardwaredecoderrefusalline)
+
+***
+
 ### hasGetHandler
 
 Re-exports [hasGetHandler](testing/homebridge-double.md#hasgethandler)
@@ -970,7 +976,7 @@ Re-exports [hasSetHandler](testing/homebridge-double.md#hassethandler)
 
 ### HDLR\_TYPE\_VIDE
 
-Re-exports [HDLR_TYPE_VIDE](ffmpeg/fmp4-builders.md#hdlr_type_vide)
+Re-exports [HDLR_TYPE_VIDE](ffmpeg/fmp4.md#hdlr_type_vide)
 
 ***
 
@@ -1034,6 +1040,12 @@ Re-exports [HomeKitRequestError](testing/homebridge-double.md#homekitrequesterro
 
 ***
 
+### InitSegmentTrack
+
+Re-exports [InitSegmentTrack](ffmpeg/fmp4-builders.md#initsegmenttrack)
+
+***
+
 ### loadHomebridge
 
 Re-exports [loadHomebridge](testing/homebridge-double.md#loadhomebridge)
@@ -1064,9 +1076,27 @@ Re-exports [makeContainer](ffmpeg/fmp4-builders.md#makecontainer)
 
 ***
 
+### makeFragment
+
+Re-exports [makeFragment](ffmpeg/fmp4-builders.md#makefragment)
+
+***
+
 ### makeHdlrBox
 
 Re-exports [makeHdlrBox](ffmpeg/fmp4-builders.md#makehdlrbox)
+
+***
+
+### makeInitSegment
+
+Re-exports [makeInitSegment](ffmpeg/fmp4-builders.md#makeinitsegment)
+
+***
+
+### makeMdhdBox
+
+Re-exports [makeMdhdBox](ffmpeg/fmp4-builders.md#makemdhdbox)
 
 ***
 
@@ -1103,6 +1133,18 @@ Re-exports [makeServiceRecords](mdns/message-builders.md#makeservicerecords)
 ### makeSrvRecord
 
 Re-exports [makeSrvRecord](mdns/message-builders.md#makesrvrecord)
+
+***
+
+### makeTfhdBox
+
+Re-exports [makeTfhdBox](ffmpeg/fmp4-builders.md#maketfhdbox)
+
+***
+
+### makeTkhdBox
+
+Re-exports [makeTkhdBox](ffmpeg/fmp4-builders.md#maketkhdbox)
 
 ***
 
@@ -1214,6 +1256,18 @@ Re-exports [TestClock](clock-double.md#testclock)
 
 ***
 
+### TestExecProcess
+
+Re-exports [TestExecProcess](ffmpeg/exec-process-double.md#testexecprocess)
+
+***
+
+### TestExecProcessFactory
+
+Re-exports [TestExecProcessFactory](ffmpeg/exec-process-double.md#testexecprocessfactory)
+
+***
+
 ### TestHomebridgeApi
 
 Re-exports [TestHomebridgeApi](testing/homebridge-double.md#testhomebridgeapi)
@@ -1322,6 +1376,12 @@ Re-exports [TestPlatformAccessoryConstructor](testing/homebridge-double.md#testp
 
 ***
 
+### TestProbeSocketFactory
+
+Re-exports [TestProbeSocketFactory](ffmpeg/rtp-probe-socket-double.md#testprobesocketfactory)
+
+***
+
 ### TestRecordingProcess
 
 Re-exports [TestRecordingProcess](ffmpeg/recording-process-double.md#testrecordingprocess)
@@ -1337,6 +1397,36 @@ Re-exports [TestRecordingProcessFactory](ffmpeg/recording-process-double.md#test
 ### TestRecordingProcessInit
 
 Re-exports [TestRecordingProcessInit](ffmpeg/recording-process-double.md#testrecordingprocessinit)
+
+***
+
+### TestRtpDemuxer
+
+Re-exports [TestRtpDemuxer](ffmpeg/rtp-demuxer-double.md#testrtpdemuxer)
+
+***
+
+### TestRtpDemuxerFactory
+
+Re-exports [TestRtpDemuxerFactory](ffmpeg/rtp-demuxer-double.md#testrtpdemuxerfactory)
+
+***
+
+### TestSocketBind
+
+Re-exports [TestSocketBind](ffmpeg/rtp-probe-socket-double.md#testsocketbind)
+
+***
+
+### TestStreamingProcess
+
+Re-exports [TestStreamingProcess](ffmpeg/streaming-process-double.md#teststreamingprocess)
+
+***
+
+### TestStreamingProcessFactory
+
+Re-exports [TestStreamingProcessFactory](ffmpeg/streaming-process-double.md#teststreamingprocessfactory)
 
 ***
 
@@ -1361,6 +1451,12 @@ Re-exports [triggerGet](testing/homebridge-double.md#triggerget)
 ### triggerSet
 
 Re-exports [triggerSet](testing/homebridge-double.md#triggerset)
+
+***
+
+### TrunSample
+
+Re-exports [TrunSample](ffmpeg/fmp4-builders.md#trunsample)
 
 ***
 

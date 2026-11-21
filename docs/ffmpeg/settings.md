@@ -8,6 +8,14 @@
 
 ## Variables
 
+### GPU\_FRAMES\_ARG
+
+```ts
+const GPU_FRAMES_ARG: "-hwaccel_output_format" = "-hwaccel_output_format";
+```
+
+***
+
 ### HKSV\_FRAGMENT\_LENGTH
 
 ```ts

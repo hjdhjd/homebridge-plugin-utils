@@ -34,7 +34,8 @@ them, and its lifetime ends the ways a real process's does.
 The lifetime is the parent signal the constructor receives composed with the double's own, and it ends once, by whichever comes first: the parent aborting,
 [TestLivestreamProcess.abort](#abort), [TestLivestreamProcess.end](#end) for the source closing, or `[Symbol.asyncDispose]`.
 
-Where it differs from the real process: it spawns nothing, so it has no exit, no stderr, and no startup readiness, and its dispose has no exit to await.
+Where it differs from the real process: it spawns nothing, so it has no exit, no stderr, and no startup readiness, and its dispose has no exit to await. It asks
+no ending callback: an `onFailed` or `onTimeout` in the init its factory recorded is never called, whatever reason ends its lifetime.
 
 #### Example
 

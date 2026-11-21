@@ -30,8 +30,9 @@ Fidelity to the real contract: `abort()` aborts a genuine [AbortSignal](https://
 composes its own signal with the passed per-call signal as the real assembler composes the two. Where it departs from the real process: `getInitSegment()` rejects
 with `signal.reason` after any abort, where the real init wait stays resolved when the init segment arrived before the abort; and `segments()` returns at the first
 item after either signal aborts, dropping the configured segments it has not yet yielded, where the real read hands over every segment already assembled before it
-returns. The `stdin` sink records every written chunk and stays writable across abort, so a consumer driving a `BackpressureWriter` over it can assert the segment
-feed regardless of abort ordering.
+returns; and its `stdin` sink, which records every written chunk, is never destroyed, because the double has no exit, where a real process's stdin stays writable
+after an abort and is destroyed at the child's exit. A consumer driving a `BackpressureWriter` over the sink can therefore assert the segment feed whenever the
+abort lands. It asks no ending callback: an `onFailed` or `onTimeout` in the init its factory recorded is never called, whatever reason ends the double.
 
 #### See
 
@@ -265,6 +266,10 @@ A [RecordingProcessFactory](record.md#recordingprocessfactory) fake that records
 [TestRecordingProcess](#testrecordingprocess), mirroring the create-call-recording discipline a consumer's streaming-delegate factory double uses. By default it returns a fresh,
 default-configured process per call; supply a process to the constructor to return a single pre-configured instance from every `create`.
 
+Each `create` reads the configured stderr lines of the process it answers for the hardware decoder's refusal, through the step the real process reads its
+child's lines by, and marks the options that call was handed when a line carries it, as the real process marks the options it was built over on the line that
+reports it. The lines are read up to the first that carries the refusal, so the options are marked once per call.
+
 #### See
 
  - RecordingProcessFactory
@@ -308,13 +313,14 @@ Construct a recording-process factory fake.
 create(options, init): RecordingProcess;
 ```
 
-Record the create call and return a [TestRecordingProcess](#testrecordingprocess) - the constructor-supplied instance when one was given, otherwise a fresh default-configured one.
+Record the create call and return a [TestRecordingProcess](#testrecordingprocess) - the constructor-supplied instance when one was given, otherwise a fresh default-configured one -
+marking `options` when the process's configured stderr lines carry the hardware decoder's refusal.
 
 ###### Parameters
 
 | Parameter | Type | Description |
 | ------ | ------ | ------ |
-| `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | The [FfmpegOptions](options.md#ffmpegoptions) the consumer passed. |
+| `options` | [`FfmpegOptions`](options.md#ffmpegoptions) | The [FfmpegOptions](options.md#ffmpegoptions) the consumer passed, which a configured stderr line reporting the hardware decoder's refusal marks. |
 | `init` | [`FfmpegRecordingInit`](record.md#ffmpegrecordinginit) | The [FfmpegRecordingInit](record.md#ffmpegrecordinginit) the consumer passed. |
 
 ###### Returns
@@ -342,4 +348,4 @@ only the fields a given test steers a branch with.
 | <a id="initsegment"></a> `initSegment?` | `Buffer`\<`ArrayBufferLike`\> | The buffer `getInitSegment()` resolves with. Defaults to an empty buffer. |
 | <a id="istimedout-1"></a> `isTimedOut?` | `boolean` | The value the `isTimedOut` getter reports. Defaults to `false`. |
 | <a id="segments-1"></a> `segments?` | `Buffer`\<`ArrayBufferLike`\>[] | The media-segment buffers `segments()` yields, in order. Defaults to an empty array. |
-| <a id="stderrlog-1"></a> `stderrLog?` | readonly `string`[] | The lines the `stderrLog` getter reports. Defaults to an empty array. |
+| <a id="stderrlog-1"></a> `stderrLog?` | readonly `string`[] | The lines the `stderrLog` getter reports, which the factory that answers the process reads for the hardware decoder's refusal. Defaults to an empty array. |

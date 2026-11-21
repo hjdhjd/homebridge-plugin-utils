@@ -16,6 +16,9 @@ This module exposes the following cooperating surfaces:
     kernel-tracked socket. A self-rearming inactivity [Watchdog](../util.md#watchdog) re-emits the last received RTCP packet to the RTP destination port at the
     [RTCP\_HEARTBEAT\_INTERVAL](settings.md#rtcp_heartbeat_interval) cadence whenever inbound RTCP traffic stalls, keeping inbound traffic arriving at FFmpeg's RTP input during legitimate quiet
     periods in two-way audio. A second optional inactivity [Watchdog](../util.md#watchdog) aborts the demuxer when no inbound traffic arrives within a caller-configurable window.
+  - [RtpDemuxerHandle](#rtpdemuxerhandle) and [RtpDemuxerFactory](#rtpdemuxerfactory) - the demuxer's dependency-inversion boundary. A consumer that wants its two-way audio under test
+    constructs the demuxer through the factory and reads it through the handle, whose production factory is [rtpDemuxerFactory](#rtpdemuxerfactory-1) and whose double ships on
+    the testing entry point.
   - [RtpPortAllocator](#rtpportallocator) - a plugin-singleton registry that issues [PortReservation](#portreservation) handles. The allocator itself holds no OS resources; each reservation
     is the scoped resource that owns one or two UDP ports.
   - [PortReservation](#portreservation) - an [AsyncDisposable](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose) handle. Disposal releases the reserved ports back to the allocator's internal pool. Callers use
@@ -54,6 +57,8 @@ handling of a quiet UDP/RTP input, not a timeout this code sets. The cadence is 
 An optional second [Watchdog](../util.md#watchdog) aborts the demuxer with `HbpuAbortError("timeout")` when no inbound traffic arrives within a caller-supplied window. Both
 watchdogs compose against the same lifetime signal, so disposal cleans them up uniformly.
 
+The class satisfies [RtpDemuxerHandle](#rtpdemuxerhandle), and a consumer that substitutes it under test constructs it through a [RtpDemuxerFactory](#rtpdemuxerfactory).
+
 #### Example
 
 ```ts
@@ -87,7 +92,7 @@ try {
 
 #### Implements
 
-- [`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose)
+- [`RtpDemuxerHandle`](#rtpdemuxerhandle)
 
 #### Constructors
 
@@ -100,8 +105,10 @@ new RtpDemuxer(init): RtpDemuxer;
 Construct and bind a new RTP demuxer.
 
 Socket binding happens synchronously as part of construction: by the time the constructor returns, the socket has been asked to bind on the configured port and
-the inactivity watchdog (if configured) is already armed. There is no separate `start()` step. The bind itself completes on a later turn; consumers that need to
-sequence work against bind completion `await demuxer.ready`.
+the inactivity watchdog (if configured) is already armed. There is no separate `start()` step. The bind itself completes or fails inside the constructor too: the
+socket comes from [createDgramSocket](../dgram-util.md#createdgramsocket), which completes a bind to an address literal inside the call, and a bind that names no address binds the family's
+any-address literal. So `ready` has settled, and an ephemeral `inputPort` reads the bound port, by the time construction returns, which is the contract
+[RtpDemuxerHandle](#rtpdemuxerhandle) states for every demuxer.
 
 ###### Parameters
 
@@ -112,6 +119,10 @@ sequence work against bind completion `await demuxer.ready`.
 ###### Returns
 
 [`RtpDemuxer`](#rtpdemuxer)
+
+###### Throws
+
+`RangeError` when `init.inputPort` is not a whole number from 0 to 65535.
 
 #### Properties
 
@@ -137,6 +148,12 @@ get aborted(): boolean;
 
 `boolean`
 
+`true` once the lifetime has ended. Derived from `signal`.
+
+###### Implementation of
+
+[`RtpDemuxerHandle`](#rtpdemuxerhandle).[`aborted`](#aborted-1)
+
 ##### inputPort
 
 ###### Get Signature
@@ -145,9 +162,9 @@ get aborted(): boolean;
 get inputPort(): number;
 ```
 
-The UDP port the demuxer is bound to. For a specific-port construction (`init.inputPort` non-zero), this equals `init.inputPort` from the moment the constructor
-returns; for an ephemeral construction (`init.inputPort === 0`), the value is `0` until the kernel completes the bind, then the kernel-assigned port. Consumers
-that need the assigned ephemeral port `await demuxer.ready` before reading this property.
+The UDP port the demuxer is bound to. For a specific-port construction (`init.inputPort` non-zero), this equals `init.inputPort`; for an ephemeral construction
+(`init.inputPort === 0`), the value is `0` until the kernel completes the bind, which it does inside the constructor, then the kernel-assigned port, so the
+assigned port reads from the moment construction returns, as [RtpDemuxerHandle](#rtpdemuxerhandle) promises.
 
 Reads from the cached projection of `socket.address().port` captured at the `"listening"` event so the value reflects what the kernel actually bound, not just what
 was requested. The two coincide for specific-port binds; they diverge for ephemeral binds where the requested value is `0` and the bound value is the kernel's pick.
@@ -155,6 +172,13 @@ was requested. The two coincide for specific-port binds; they diverge for epheme
 ###### Returns
 
 `number`
+
+The UDP port the demuxer is bound to. The bind has completed or failed by the time construction returns, so this reads the port the kernel bound from then on,
+an ephemeral construction's (`inputPort: 0`) among them, and the requested port when the bind failed or the lifetime ended before it.
+
+###### Implementation of
+
+[`RtpDemuxerHandle`](#rtpdemuxerhandle).[`inputPort`](#inputport-1)
 
 ##### isTimedOut
 
@@ -171,6 +195,12 @@ logic lives in [isTimeoutReason](../util.md#istimeoutreason) so this getter stay
 ###### Returns
 
 `boolean`
+
+`true` when the lifetime ended for a timeout: `HbpuAbortError("timeout")`, which the inactivity watchdog raises, or the platform `TimeoutError`.
+
+###### Implementation of
+
+[`RtpDemuxerHandle`](#rtpdemuxerhandle).[`isTimedOut`](#istimedout-1)
 
 #### Methods
 
@@ -191,7 +221,7 @@ A promise that resolves once the kernel has released the bound port.
 
 ###### Implementation of
 
-`AsyncDisposable.[asyncDispose]`
+[`RtpDemuxerHandle`](#rtpdemuxerhandle).[`[asyncDispose]`](#asyncdispose-2)
 
 ##### abort()
 
@@ -213,6 +243,10 @@ timeout is also safe for the same reason.
 ###### Returns
 
 `void`
+
+###### Implementation of
+
+[`RtpDemuxerHandle`](#rtpdemuxerhandle).[`abort`](#abort-1)
 
 ***
 
@@ -373,7 +407,111 @@ Construction-time options for [RtpPortAllocator.reserve](#reserve).
 | ------ | ------ | ------ |
 | <a id="count-1"></a> `count?` | `2` \| `1` | Optional. The number of consecutive UDP ports to reserve. `1` yields a single port, `2` yields the reserved port plus the next port so FFmpeg's "RTP port N implies RTCP port N+1" convention is satisfied. Defaults to `1`. |
 | <a id="ipfamily-1"></a> `ipFamily?` | [`IpFamily`](../dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |
-| <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional caller [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). Cancels in-flight bind-retry attempts. If the signal aborts while `reserve()` is still looking for consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`. |
+| <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional caller [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal). Cancels in-flight bind-retry attempts. If the signal aborts while `reserve()` is still looking for consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`. The signal is read again once each port is held, so an abort in the same turn as the call rejects the reservation too, and its port is released. |
+
+***
+
+### RtpDemuxerFactory
+
+The creational half of the demuxer's dependency-inversion boundary: build an [RtpDemuxerHandle](#rtpdemuxerhandle) from an init. A consumer holds this factory typed as the
+abstraction and constructs through it, so a test can substitute a factory that returns a double, and a suite reads the ports and the signal the consumer chose from
+the init it passed. The production factory is [rtpDemuxerFactory](#rtpdemuxerfactory-1), whose `create` is exactly the [RtpDemuxer](#rtpdemuxer) constructor call, so routing construction
+through this boundary changes no behavior.
+
+#### See
+
+ - rtpDemuxerFactory
+ - RtpDemuxerHandle
+
+#### Methods
+
+##### create()
+
+```ts
+create(init): RtpDemuxerHandle;
+```
+
+Construct and bind a demuxer for the supplied init.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `init` | [`RtpDemuxerInit`](#rtpdemuxerinit) | Init options. See [RtpDemuxerInit](#rtpdemuxerinit). |
+
+###### Returns
+
+[`RtpDemuxerHandle`](#rtpdemuxerhandle)
+
+A new [RtpDemuxerHandle](#rtpdemuxerhandle).
+
+***
+
+### RtpDemuxerHandle
+
+The surface a two-way audio consumer reads off an RTP demuxer. This is the product half of the demuxer's dependency-inversion boundary: a class that stands up a
+return-audio path depends on this narrow interface rather than the concrete [RtpDemuxer](#rtpdemuxer), so a test can substitute a double without binding a socket. It is an
+interface rather than the class because the class's private fields make its type one that only the real class, which binds a socket, can satisfy. The interface is
+type-only, so importing it costs a consumer nothing at runtime.
+
+[RtpDemuxer](#rtpdemuxer) satisfies it with its own public members and carries only an `implements` annotation. A consumer waits on `ready` and `mediaReady`, reads the
+bound port and why the lifetime ended, and ends the demuxer through `abort()`, the signal it passed in its init, or disposal.
+
+#### See
+
+ - RtpDemuxer
+ - RtpDemuxerFactory
+
+#### Extends
+
+- [`AsyncDisposable`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/asyncDispose)
+
+#### Properties
+
+| Property | Modifier | Type | Description |
+| ------ | ------ | ------ | ------ |
+| <a id="aborted-1"></a> `aborted` | `readonly` | `boolean` | `true` once the lifetime has ended. Derived from `signal`. |
+| <a id="inputport-1"></a> `inputPort` | `readonly` | `number` | The UDP port the demuxer is bound to. The bind has completed or failed by the time construction returns, so this reads the port the kernel bound from then on, an ephemeral construction's (`inputPort: 0`) among them, and the requested port when the bind failed or the lifetime ended before it. |
+| <a id="istimedout-1"></a> `isTimedOut` | `readonly` | `boolean` | `true` when the lifetime ended for a timeout: `HbpuAbortError("timeout")`, which the inactivity watchdog raises, or the platform `TimeoutError`. |
+| <a id="mediaready-1"></a> `mediaReady` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Resolves once the demuxer has forwarded its first RTP packet, and rejects with the lifetime's reason when the lifetime ends first. |
+| <a id="ready-1"></a> `ready` | `readonly` | [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\> | Carries the bind's outcome. The bind has completed or failed by the time construction returns, so this has resolved by then when the socket bound, and has rejected with the lifetime's reason when the bind failed or the lifetime ended before it. |
+| <a id="signal-2"></a> `signal` | `readonly` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | The abort signal representing the demuxer's lifetime. Aborts exactly once; the reason on `signal.reason` names the cause. |
+
+#### Methods
+
+##### \[asyncDispose\]()
+
+```ts
+[asyncDispose](): Promise<void>;
+```
+
+End the lifetime with `HbpuAbortError("shutdown")` unless it has already ended, and resolve once the demuxer has let go of its port. Safe to call more than once.
+
+###### Returns
+
+[`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise)\<`void`\>
+
+###### Overrides
+
+`AsyncDisposable.[asyncDispose]`
+
+##### abort()
+
+```ts
+abort(reason?): void;
+```
+
+End the lifetime with `reason`, or with `HbpuAbortError("shutdown")` when the reason is `undefined` or `null`. A call once the lifetime has ended changes nothing.
+
+###### Parameters
+
+| Parameter | Type | Description |
+| ------ | ------ | ------ |
+| `reason?` | `unknown` | Optional abort reason. |
+
+###### Returns
+
+`void`
 
 ***
 
@@ -387,12 +525,12 @@ Construction-time options for [RtpDemuxer](#rtpdemuxer).
 | ------ | ------ | ------ |
 | <a id="clock"></a> `clock?` | [`Clock`](../clock.md#clock) | Optional time source for both of the demuxer's watchdog windows, the RTCP-replay heartbeat and the inbound-packet inactivity timeout. Passed through to each watchdog unresolved, so the `systemClock` default is applied in the one place it belongs and a demuxer keeps one time source for both windows. |
 | <a id="inactivitytimeout"></a> `inactivityTimeout?` | `number` | Optional inactivity watchdog window, in milliseconds. The timer arms during construction (immediately after the bind call is issued) and re-arms on every received datagram. When the window lapses without traffic, the demuxer aborts with `HbpuAbortError("timeout")`. Omit to disable the watchdog entirely. |
-| <a id="inputport-1"></a> `inputPort` | `number` | Required. The UDP port to bind to. Typically a value previously reserved via [RtpPortAllocator.reserve](#reserve). Pass `0` to request kernel-assigned ephemeral allocation: the bind succeeds atomically against whichever port the kernel hands out, eliminating the reserve-then-rebind race that a separate reservation step would carry. The assigned port is then observable via [RtpDemuxer.inputPort](#inputport) once [RtpDemuxer.ready](#ready) resolves. |
+| <a id="inputport-2"></a> `inputPort` | `number` | Required. The UDP port to bind to. Typically a value previously reserved via [RtpPortAllocator.reserve](#reserve). Pass `0` to request kernel-assigned ephemeral allocation: the bind succeeds atomically against whichever port the kernel hands out, eliminating the reserve-then-rebind race that a separate reservation step would carry. The assigned port is then observable via [RtpDemuxer.inputPort](#inputport) once [RtpDemuxer.ready](#ready) resolves. |
 | <a id="ipfamily-2"></a> `ipFamily?` | [`IpFamily`](../dgram-util.md#ipfamily) | Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`. |
 | <a id="log"></a> `log?` | [`HomebridgePluginLogging`](../util.md#homebridgepluginlogging) | Optional logger. Used for debug tracing of socket lifecycle and heartbeat events, and for error-path diagnostics. The signal's reason on abort remains the authoritative notification channel; logging is a convenience for operators. |
 | <a id="rtcpport"></a> `rtcpPort` | `number` | Required. The destination UDP port (on the loopback interface) for classified RTCP packets. Typically FFmpeg's RTCP input port. |
 | <a id="rtpport"></a> `rtpPort` | `number` | Required. The destination UDP port (on the loopback interface) for classified RTP packets. Typically FFmpeg's RTP input port. The heartbeat replay also targets this port - FFmpeg ignores the RTCP shape on its RTP input, but the arriving traffic keeps that input fed during quiet periods. |
-| <a id="signal-2"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to compose with the demuxer's internal controller. When the parent aborts, the demuxer tears down. |
+| <a id="signal-3"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to compose with the demuxer's internal controller. When the parent aborts, the demuxer tears down. |
 
 ***
 
@@ -404,7 +542,7 @@ Construction-time options for [RtpPortAllocator](#rtpportallocator).
 
 | Property | Modifier | Type | Description |
 | ------ | ------ | ------ | ------ |
-| <a id="socketfactory"></a> `socketFactory?` | `readonly` | [`RtpProbeSocketFactory`](#rtpprobesocketfactory) | Optional. How each probe socket is made, so a host can substitute the sockets the allocator binds. Defaults to the package's own [createDgramSocket](../dgram-util.md#createdgramsocket), whose sockets bind exclusively. A substitute answers exclusive sockets too, because the pool reads a granted bind as proof that the port was free. |
+| <a id="socketfactory"></a> `socketFactory?` | `readonly` | [`RtpProbeSocketFactory`](#rtpprobesocketfactory) | Optional. How each probe socket is made, so a host can substitute the sockets the allocator binds, as a suite does with the `TestProbeSocketFactory` double the testing entry point ships. Defaults to the package's own [createDgramSocket](../dgram-util.md#createdgramsocket), whose sockets bind exclusively. A substitute answers exclusive sockets too, because the pool reads a granted bind as proof that the port was free. |
 
 ***
 
@@ -489,3 +627,18 @@ How [RtpPortAllocator](#rtpportallocator) obtains a probe socket. It is asked on
 [`RtpProbeSocket`](#rtpprobesocket)
 
 An unbound socket.
+
+***
+
+### rtpDemuxerFactory
+
+```ts
+const rtpDemuxerFactory: RtpDemuxerFactory;
+```
+
+The production [RtpDemuxerFactory](#rtpdemuxerfactory): builds the concrete socket-backed demuxer. A consumer holds this typed as the abstraction; a test substitutes a fake
+factory. `create` is exactly the [RtpDemuxer](#rtpdemuxer) constructor call, so wiring construction through this boundary changes no behavior.
+
+#### See
+
+RtpDemuxerFactory

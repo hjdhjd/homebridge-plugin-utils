@@ -21,9 +21,10 @@ Key features:
 - [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal)-driven teardown. Node's native `spawn({ signal, killSignal })` owns the kill path; no manual SIGKILL fallback timer.
 - `ready` promise resolves when FFmpeg produces its first stderr byte (the earliest reliable "we are actually running" signal).
 - `exited` promise resolves with the child's exit code and signal once it terminates. Rejects with `signal.reason` only when the child never started (e.g., `ENOENT`).
-- Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG. A failure whose decoded frames were
-  asked on the GPU and whose hardware decoder refused the stream logs at DEBUG instead, because every refusal marks the process's
-  [FfmpegOptions](options.md#ffmpegoptions) and later pipelines over them decode in software.
+- Reason-based teardown logging: `"failed"` dumps stderr at ERROR, `"timeout"` logs at WARN, other reasons log at DEBUG. The init's `onFailed` and `onTimeout`
+  callbacks are asked about a failed or timed-out ending first, and each reports the ending its own way or leaves that report to stand. A failure whose
+  decoded frames were asked on the GPU and whose hardware decoder refused the stream logs at DEBUG ahead of any callback, because every refusal marks the
+  process's [FfmpegOptions](options.md#ffmpegoptions) and later pipelines over them decode in software.
 - Synchronous teardown classification. The abort that tears the process down runs its listeners inline, so the moment a consumer's listener on `this.signal`
   fires, `hasError` and the teardown reason already hold their final values. Shutdown logic may rely on that ordering: it is a contract of this class, and
   changing it is a breaking change rather than an implementation detail.
@@ -246,6 +247,13 @@ Structured exit information surfaced through [FfmpegProcess.exited](#exited).
 
 Construction-time options for [FfmpegProcess](#ffmpegprocess).
 
+The ending callbacks let a plugin say how a failed or timed-out process is reported, in place of the default report, without subclassing. Each is asked at most
+once, synchronously inside the abort that ends the process: the reason is final by then, and the asking comes before any abort listener a consumer added to the
+process's own `signal`, or inside the constructor when the parent signal has already aborted. A listener on the parent signal the consumer passed in runs first,
+since the parent dispatches its abort to its own listeners before the process's signal dispatches to its. A callback that throws has its throw logged at error, and
+the default report runs in its place. A subclass that builds a callback for its base reads its own constructor's parameters and never the instance, which may not
+yet be built when the callback is asked.
+
 #### Extended by
 
 - [`FfmpegExecInit`](exec.md#ffmpegexecinit)
@@ -258,5 +266,19 @@ Construction-time options for [FfmpegProcess](#ffmpegprocess).
 | Property | Type | Description |
 | ------ | ------ | ------ |
 | <a id="args"></a> `args?` | `string`[] | Optional. FFmpeg command-line arguments. Defaults to an empty array. |
+| <a id="onfailed"></a> `onFailed?` | (`ending`) => [`FfmpegEndingVerdict`](process-ending.md#ffmpegendingverdict) | Optional. Asked when the process fails: an exit other than with code 0, a spawn failure, or a `"failed"` reason handed in through `abort()` or the parent signal. A failed process that asked for its decoded frames on the GPU and read its hardware decoder's refusal ends at debug ahead of this callback, which it does not ask. On `"handled"` the process logs nothing more for the failure; on `"default"` it logs its summary, its command line and every stderr line at error. |
+| <a id="ontimeout"></a> `onTimeout?` | (`ending`) => [`FfmpegEndingVerdict`](process-ending.md#ffmpegendingverdict) | Optional. Asked when the process ends with `HbpuAbortError("timeout")` alone, whether a watchdog or the code that aborted the process raised it, and never for a platform `TimeoutError`, which ends at debug. On `"handled"` the process logs nothing more for the timeout; on `"default"` it logs one warning. |
 | <a id="signal-1"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional. Parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to compose with the process's internal controller. When the parent aborts, the process tears down. |
 | <a id="startuptimeout"></a> `startupTimeout?` | `number` | Optional. If FFmpeg does not produce stderr output within this many milliseconds, the process is aborted with `HbpuAbortError("timeout")`. The window is armed on the options' clock, so a consumer's virtual clock drives it. |
+
+## Other
+
+### FfmpegEnding
+
+Re-exports [FfmpegEnding](process-ending.md#ffmpegending)
+
+***
+
+### FfmpegEndingVerdict
+
+Re-exports [FfmpegEndingVerdict](process-ending.md#ffmpegendingverdict)

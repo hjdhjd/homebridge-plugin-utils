@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.9.0 (2026-11-20)
+  * Breaking change: `isKeyframe` answers whether a fragment holds a keyframe anywhere in it, not only as its first sample, since a producer that cuts fragments by time leaves the keyframe wherever the cut falls. If your plugin needs a fragment a decoder can start from, call `startsWithKeyframe` instead when you rebuild against this release.
+  * Breaking change: an FFmpeg process takes `onFailed` and `onTimeout` callbacks in place of the protected `logFailedTeardown` and `logTimeoutTeardown` hooks. Answer `"handled"` once you've reported the ending your way, or `"default"` to keep the standard report, and drop any subclass you kept only for those hooks.
+  * New feature: `Mp4FrameFeed`, which feeds FFmpeg a live fMP4 stream one video frame at a time, paced by the video's own timing, so a livestream plays smoothly rather than in bursts. It adds no more than 200 ms of delay, and `onUnpaced` tells you when a fragment went through whole. `makeInitSegment` and `makeFragment` on the testing entry build the streams your tests feed it.
+  * New feature: `writePaced` on `BackpressureWriter`, which writes a list of pieces each at its own time rather than all at once. Issue each write without awaiting the one before it...a write that's running late catches up when the next one falls due.
+  * New feature: `streamingProcessFactory`, `execProcessFactory` and `rtpDemuxerFactory`, with `TestStreamingProcess`, `TestExecProcess`, `TestRtpDemuxer` and `TestProbeSocketFactory` on the testing entry, so your tests drive a livestream, a one-shot FFmpeg run or a two-way audio session without spawning FFmpeg or binding a socket.
+  * Improvement: `findKeyframe` tells you where a fragment's first keyframe sits, and `startsWithKeyframe` whether a decoder can start from the fragment, counting a keyframe behind samples of zero duration - the way some packagers deliver a stream's parameter sets - as starting it. Hand either one the track `findVideoTrack` reads from the initialization segment to check the video track rather than the fragment's first. Thanks to @ztolley for tracking this down and verifying it against a live camera.
+  * Improvement: a process whose hardware decoder refused its stream ends without an error report, and `hardwareDecoderRefusalLine` on the testing entry lets your tests hand a double that refusal.
+  * Housekeeping.
+
 ## 2.8.0 (2026-11-14)
   * Improvement: FFmpeg pipelines scale a transcoded stream to fit inside the requested width and height, keeping its aspect ratio, and `fitFilter` gives your own filter chains the same rule.
   * Improvement: a stream the hardware decoder can't open decodes in software from then on, still encoding on hardware, rather than failing every livestream and recording. Call `resetHardwareDecoderRefusal()` when your source's resolution or codec changes.

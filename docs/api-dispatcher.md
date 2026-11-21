@@ -24,10 +24,12 @@ being reachable yet.
 A request's own signal is answered for as long as its response has not started. An abort in that window settles the caller at once with the signal's reason, or
 with the transport's request-aborted error when that reason is null or undefined, whether the request is waiting in the pool's queue, waiting on a connection, or
 waiting out a retry backoff, and a request that aborted while it waited in the pool's queue costs no dial when the queue reaches it. Once the response has started,
-an abort is the transport's to handle. The transport's queue never looks at a signal, so the composition answers it where the transport offers a hook: the pool
-builds its connections from a client that drops a request whose signal has aborted, and a gate composed as the outermost layer releases the caller at the abort.
-A dial already running at an abort still runs on to the configured `connectTimeout`, its caller already released. A released request's entry leaves the pool's
-queue at the pool's next drain, so until then the pool's `queued` and `pending` figures count callers that have already been answered.
+an abort is the transport's to handle. The transport answers a signal itself for a caller of its own request methods, but not for a caller that dispatches
+directly, and not while a request waits out a retry backoff, so the composition answers every caller where the transport offers a hook: a gate composed as the
+outermost layer releases the caller at the abort, and the pool builds its connections from a client that drops a request whose signal has aborted, so a retry
+that comes due for a released request dials nothing. A dial already running at an abort is the transport's to abandon or to complete, its caller already
+released. A released request's entry can stay in the pool's queue until the pool's next drain, so the pool's `queued` and `pending` figures can count callers
+that have already been answered.
 
 Some requests stay outside that reach. `fetch` puts no signal on its dispatch, so a `fetch` waiting in the pool's queue still dials when the queue reaches it,
 though `fetch` releases its own caller at the abort. A signal that is an event emitter rather than an `AbortSignal` takes the transport's own path. A request the

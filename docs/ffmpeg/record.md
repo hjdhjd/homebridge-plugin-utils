@@ -40,7 +40,8 @@ The command-line hook values that differ per mode:
 
 The shared pipeline primitive ([Mp4SegmentAssembler](mp4-assembler.md#mp4segmentassembler)) also means this module avoids template-method coupling between
 the base and the concrete subclasses: no abstract hook methods, no mode-specific state on the base. The base is pure lifecycle
-composition; the subclasses are pure args builders plus (for recording) a known-error message substitution.
+composition; the subclasses are pure args builders, and the recording also hands its base the ending callbacks that state its known-error line and its quiet
+timeout.
 
 ## FFmpeg
 
@@ -640,10 +641,11 @@ An async generator yielding one `"init"` segment followed by `"media"` segments 
 ### FfmpegRecordingProcess
 
 FFmpeg process specialization for HomeKit Secure Video (HKSV) event recording. Builds its command line from the provided HKSV recording configuration and delegates
-segment production to [FfmpegFMp4Process](#abstract-ffmpegfmp4process). Overrides `FfmpegProcess.logFailedTeardown` to substitute a friendly user-facing message when the stderr log
-matches one of the tolerated HKSV error patterns, suppressing the canonical ERROR dump for those known benign cases. Also overrides
-`FfmpegProcess.logTimeoutTeardown` to demote the benign inter-segment watchdog reap to debug - a recording ends exactly this way when its segment source quiets,
-so the base's WARN would be alarming.
+segment production to [FfmpegFMp4Process](#abstract-ffmpegfmp4process). It answers its own failed and timed-out endings through the ending callbacks it hands its base: a failure whose
+stderr log matches one of the tolerated HKSV error patterns logs one friendly user-facing line in place of the canonical ERROR dump, and the inter-segment
+watchdog's reap logs at debug - a recording ends exactly this way when its segment source quiets, so the base's WARN would be alarming. A plugin's own `onFailed`
+and `onTimeout` are asked first, and a plugin's `"default"` passes to the recording's answer and from there to the base's report, while a plugin callback that
+throws skips the recording's answer, so its throw is logged and the base's report runs.
 
 #### Example
 
@@ -1012,6 +1014,8 @@ callers omit `args` and let the class build the command line from `livestream` +
 | <a id="args"></a> `args?` | `string`[] | Optional. FFmpeg command-line arguments. Defaults to an empty array. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`args`](process.md#args) |
 | <a id="audio"></a> `audio?` | [`FMp4AudioTarget`](#fmp4audiotarget) | Optional. The resolved audio-encode target. When provided, the audio stream is transcoded to it (with any filters it carries); when omitted, the already-encoded audio is copied through untouched. This is the livestream path's sole audio-filter source. | - |
 | <a id="livestream"></a> `livestream` | [`PartialWithId`](../util.md#partialwithid)\<[`FMp4LivestreamOptions`](#fmp4livestreamoptions), `"url"`\> | Livestream source configuration. `url` is required; other [FMp4BaseOptions](#fmp4baseoptions) fields are optional and default when omitted. | - |
+| <a id="onfailed"></a> `onFailed?` | (`ending`) => [`FfmpegEndingVerdict`](process-ending.md#ffmpegendingverdict) | Optional. Asked when the process fails: an exit other than with code 0, a spawn failure, or a `"failed"` reason handed in through `abort()` or the parent signal. A failed process that asked for its decoded frames on the GPU and read its hardware decoder's refusal ends at debug ahead of this callback, which it does not ask. On `"handled"` the process logs nothing more for the failure; on `"default"` it logs its summary, its command line and every stderr line at error. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`onFailed`](process.md#onfailed) |
+| <a id="ontimeout"></a> `onTimeout?` | (`ending`) => [`FfmpegEndingVerdict`](process-ending.md#ffmpegendingverdict) | Optional. Asked when the process ends with `HbpuAbortError("timeout")` alone, whether a watchdog or the code that aborted the process raised it, and never for a platform `TimeoutError`, which ends at debug. On `"handled"` the process logs nothing more for the timeout; on `"default"` it logs one warning. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`onTimeout`](process.md#ontimeout) |
 | <a id="segmentlength"></a> `segmentLength?` | `number` | Optional. fMP4 fragment duration in milliseconds, applied to `-frag_duration` at construction time. Defaults to 1000 ms (1 second). | - |
 | <a id="signal-3"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional. Parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to compose with the process's internal controller. When the parent aborts, the process tears down. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`signal`](process.md#signal-1) |
 | <a id="startuptimeout"></a> `startupTimeout?` | `number` | Optional. If FFmpeg does not produce stderr output within this many milliseconds, the process is aborted with `HbpuAbortError("timeout")`. The window is armed on the options' clock, so a consumer's virtual clock drives it. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`startupTimeout`](process.md#startuptimeout) |
@@ -1043,6 +1047,8 @@ let the class build the command line from the recording configuration.
 | Property | Type | Description | Inherited from |
 | ------ | ------ | ------ | ------ |
 | <a id="args-1"></a> `args?` | `string`[] | Optional. FFmpeg command-line arguments. Defaults to an empty array. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`args`](process.md#args) |
+| <a id="onfailed-1"></a> `onFailed?` | (`ending`) => [`FfmpegEndingVerdict`](process-ending.md#ffmpegendingverdict) | Optional. Asked when the process fails: an exit other than with code 0, a spawn failure, or a `"failed"` reason handed in through `abort()` or the parent signal. A failed process that asked for its decoded frames on the GPU and read its hardware decoder's refusal ends at debug ahead of this callback, which it does not ask. On `"handled"` the process logs nothing more for the failure; on `"default"` it logs its summary, its command line and every stderr line at error. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`onFailed`](process.md#onfailed) |
+| <a id="ontimeout-1"></a> `onTimeout?` | (`ending`) => [`FfmpegEndingVerdict`](process-ending.md#ffmpegendingverdict) | Optional. Asked when the process ends with `HbpuAbortError("timeout")` alone, whether a watchdog or the code that aborted the process raised it, and never for a platform `TimeoutError`, which ends at debug. On `"handled"` the process logs nothing more for the timeout; on `"default"` it logs one warning. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`onTimeout`](process.md#ontimeout) |
 | <a id="recording"></a> `recording?` | `Partial`\<[`FMp4RecordingOptions`](#fmp4recordingoptions)\> | Optional. fMP4 recording options. Every field defaults when omitted; the interface surface matches [FMp4RecordingOptions](#fmp4recordingoptions) but with all fields optional. | - |
 | <a id="recordingconfig"></a> `recordingConfig` | `CameraRecordingConfiguration` | The HomeKit recording configuration (resolution, codec profile, audio codec, sample rate, channels) produced by the HKSV delegate. | - |
 | <a id="signal-4"></a> `signal?` | [`AbortSignal`](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) | Optional. Parent [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to compose with the process's internal controller. When the parent aborts, the process tears down. | [`FfmpegProcessInit`](process.md#ffmpegprocessinit).[`signal`](process.md#signal-1) |

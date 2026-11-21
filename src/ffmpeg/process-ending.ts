@@ -16,6 +16,7 @@
 import type { HbpuAbortError, HbpuAbortReason } from "../util.ts";
 import type { FfmpegOptions } from "./options.ts";
 import type { FfmpegProcessInit } from "./process.ts";
+import { GPU_FRAMES_ARG } from "./settings.ts";
 
 /**
  * What an `onFailed` or `onTimeout` callback answers. `"handled"` means the callback reported the ending itself, or chose to report nothing, and the process logs
@@ -87,9 +88,6 @@ const HARDWARE_DECODER_REFUSAL = "hwaccel initialisation returned error";
  */
 export const hardwareDecoderRefusalLine = "[h264 @ 0x0123456789ab] Failed setup for format videotoolbox_vld: " + HARDWARE_DECODER_REFUSAL + ".";
 
-// The argument that asks FFmpeg to hand its decoded frames on in the hardware decoder's own memory, on the GPU, rather than in system memory.
-const GPU_FRAMES_ARG = "-hwaccel_output_format";
-
 /**
  * Ask the callbacks an ending selects, in order, and answer the first `"handled"` among them, or `"default"` when none handles it.
  *
@@ -110,9 +108,9 @@ const GPU_FRAMES_ARG = "-hwaccel_output_format";
  * @internal
  */
 // The rules in this module live here rather than beside the process class because a shipped test double has to read the refusal and ask a plugin's callbacks
-// exactly as the real process does, and a double reaches its subject by type alone. This module imports nothing at runtime, so the real process and a double can
-// each import the rules by value without the double loading the process's spawn machinery, and the two cannot disagree about which line marks the refusal, which
-// failure the refusal ends ahead of every callback, which callback an ending asks or when the asking stops.
+// exactly as the real process does, and a double reaches its subject by type alone. This module imports nothing at runtime but the shared FFmpeg constants, so the
+// real process and a double can each import the rules by value without the double loading the process's spawn machinery, and the two cannot disagree about which
+// line marks the refusal, which failure the refusal ends ahead of every callback, which callback an ending asks or when the asking stops.
 export function ffmpegEndingVerdict(ending: FfmpegEnding, ...callbacks: readonly Pick<FfmpegProcessInit, "onFailed" | "onTimeout">[]): FfmpegEndingVerdict {
 
   const selected = SELECTED_CALLBACK[ending.reason.name];

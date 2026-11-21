@@ -456,6 +456,22 @@ const VIDEO: FMp4Track = { id: 1, timescale: 90000 };
 // long as the others at an audio timescale.
 const AUDIO = { samples: [ { duration: 1920, size: 7 }, { duration: 1920, size: 9 } ], trackId: 2 } as const;
 
+// How long a reading that claims a one-step answer may take, in milliseconds. The answer itself takes well under a millisecond, and a walk of one sample at a time
+// over a run that declares the largest count its field holds takes seconds, so the limit tells the two apart with room on each side.
+const ONE_STEP_LIMIT = 100;
+
+// Take a reading and assert it answered inside the one-step limit, handing back what it answered. The clock is read around the call itself, because a reader runs
+// to its end without yielding, and the test runner's own timeout cannot fail a body that never yields.
+function inOneStep<T>(read: () => T): T {
+
+  const started = performance.now();
+  const answer = read();
+
+  assert.ok((performance.now() - started) < ONE_STEP_LIMIT, "the reading took longer than a one-step answer takes");
+
+  return answer;
+}
+
 // The frames of a video run, each sample carrying its duration and its size.
 function framesOf(durations: readonly number[], sizes: readonly number[]): TrunSample[] {
 
@@ -950,12 +966,14 @@ describe("findKeyframe", () => {
 
   test("answers a run that declares the largest count its field holds and lists no entry fields in one step", () => {
 
-    // A walk of one sample at a time would take billions of steps to answer these.
+    // A walk of one sample at a time would take billions of steps to answer these, which the one-step limit does not allow.
     const huge = makeTrunBox({ sampleCount: 0xFFFFFFFF, sampleFlagsValue: NON_SYNC, samples: [], useFirstSampleFlags: true });
+    const answeredByDefault = moofOf([ makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }), huge ]);
+    const answeredPastTheRun = moofOf([ makeTfhdBox({ defaultSampleFlags: NON_SYNC, trackId: VIDEO.id }), huge,
+      makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ]);
 
-    assert.equal(keyframeOf(moofOf([ makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }), huge ])), 1);
-    assert.equal(keyframeOf(moofOf([ makeTfhdBox({ defaultSampleFlags: NON_SYNC, trackId: VIDEO.id }), huge,
-      makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ])), 0xFFFFFFFF);
+    assert.equal(inOneStep(() => keyframeOf(answeredByDefault)), 1);
+    assert.equal(inOneStep(() => keyframeOf(answeredPastTheRun)), 0xFFFFFFFF);
   });
 
   test("adds nothing to the index for a run that declares no samples, and finds no keyframe in one past the first run", () => {
@@ -970,6 +988,19 @@ describe("findKeyframe", () => {
     assert.equal(keyframeOf(moofOf([ makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }), makeTrunBox({ samples: [] }) ])), null);
     assert.equal(keyframeOf(moofOf([ tfhd, makeTrunBox({ samples: flaggedOf([NON_SYNC]), usePerSampleFlags: true }),
       makeTrunBox({ samples: [], useFirstSampleFlags: true }) ])), null);
+  });
+
+  test("reads a track fragment only inside the moof, and a header only inside its track fragment", () => {
+
+    const keyframes = makeContainer("traf", [ tfhd, makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ]);
+
+    // A track fragment that follows the moof, and one in a buffer that holds no moof, are not the moof's.
+    assert.equal(keyframeOf(Buffer.concat([ makeContainer("moof", [makeBox("mfhd", Buffer.alloc(8))]), keyframes ])), null);
+    assert.equal(keyframeOf(Buffer.concat([ makeBox("ftyp"), keyframes ])), null);
+
+    // A header that follows the track fragment is not its header, so its default flags mark no keyframe in a run that states none.
+    assert.equal(keyframeOf(makeContainer("moof", [ makeContainer("traf", [makeTrunBox({ samples: [ {}, {} ] })]),
+      makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }) ])), null);
   });
 });
 
@@ -1128,12 +1159,13 @@ describe("startsWithKeyframe", () => {
 
   test("answers true in one step for a run ahead of the keyframe that declares the largest count its field holds and lists no entry fields", () => {
 
-    // Every sample of the first run takes the header's zero duration and non-sync flags, and a walk of one sample at a time would take billions of steps to answer.
+    // Every sample of the first run takes the header's zero duration and non-sync flags, and a walk of one sample at a time would take billions of steps to answer,
+    // which the one-step limit does not allow.
     const segment = makeContainer("moof", [makeContainer("traf", [ makeTfhdBox({ defaultSampleDuration: 0, defaultSampleFlags: NON_SYNC, trackId: VIDEO.id }),
       makeTrunBox({ sampleCount: 0xFFFFFFFF, samples: [] }), makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ])]);
 
-    assert.equal(findKeyframe(segment), 0xFFFFFFFF);
-    assert.equal(startsWithKeyframe(segment), true);
+    assert.equal(inOneStep(() => findKeyframe(segment)), 0xFFFFFFFF);
+    assert.equal(inOneStep(() => startsWithKeyframe(segment)), true);
   });
 });
 

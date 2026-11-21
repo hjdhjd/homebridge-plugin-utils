@@ -21,11 +21,9 @@
 import type { RtpProbeSocket, RtpProbeSocketFactory } from "./rtp.ts";
 import type { AddressInfo } from "node:net";
 import { EventEmitter } from "node:events";
+import { HIGHEST_UDP_PORT } from "./rtp-port.ts";
 import type { Nullable } from "../util.ts";
 import { yieldMacrotask } from "../clock.ts";
-
-// The highest port number UDP carries, so the highest a bind can complete on.
-const HIGHEST_PORT = 65535;
 
 /**
  * What one scripted bind answers: the port the socket is bound to, or `"refused"` for a bind the kernel rejects because the port is taken. A bind to a specific
@@ -54,7 +52,8 @@ export type TestSocketBind = number | "refused";
  */
 export function bindAnswerError({ answer, double, requestedPort }: { answer: number; double: string; requestedPort: number }): Nullable<Error> {
 
-  if(!Number.isInteger(answer) || (answer < 1) || (answer > HIGHEST_PORT)) {
+  // The highest port UDP carries is the highest a bind can complete on.
+  if(!Number.isInteger(answer) || (answer < 1) || (answer > HIGHEST_UDP_PORT)) {
 
     return new Error(double + ": the kernel binds a port from 1 to 65535, so a bind cannot complete on " + String(answer) + ".");
   }

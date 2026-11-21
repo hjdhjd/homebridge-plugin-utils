@@ -23,7 +23,7 @@
  * @module
  */
 import { AudioRecordingCodecType, H264Level, H264Profile } from "./hap-enums.ts";
-import { HOMEKIT_STREAMING_HEADROOM, RPI4_GPU_MINIMUM, RPI4_HW_TRANSCODE_MAX_PIXELS } from "./settings.ts";
+import { GPU_FRAMES_ARG, HOMEKIT_STREAMING_HEADROOM, RPI4_GPU_MINIMUM, RPI4_HW_TRANSCODE_MAX_PIXELS } from "./settings.ts";
 import type { Clock } from "../clock.ts";
 import type { FfmpegCodecs } from "./codecs.ts";
 import type { Logger } from "../util.ts";
@@ -1125,7 +1125,7 @@ export class FfmpegOptions {
     return [
 
       "-hwaccel", "videotoolbox",
-      ...(this.#decodedFramesOnGpu(state) ? [ "-hwaccel_output_format", "videotoolbox_vld" ] : [])
+      ...(this.#decodedFramesOnGpu(state) ? [ GPU_FRAMES_ARG, "videotoolbox_vld" ] : [])
     ];
   }
 
@@ -1148,7 +1148,7 @@ export class FfmpegOptions {
     return [
 
       "-hwaccel", "qsv",
-      ...(this.#decodedFramesOnGpu(state) ? [ "-hwaccel_output_format", "qsv" ] : []),
+      ...(this.#decodedFramesOnGpu(state) ? [ GPU_FRAMES_ARG, "qsv" ] : []),
       "-codec:v", QSV_DECODER_BY_CODEC[codec]
     ];
   }

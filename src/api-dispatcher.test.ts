@@ -1281,8 +1281,10 @@ describe("a composed API dispatcher answering a request's own signal", () => {
 
       assert.equal(await rejectionOf(pending, "the request to reject"), reason);
 
-      // The dial was already under way, so it completes, and the connection's first act is to abort the attempt rather than write it.
-      await waitUntil(() => (server.connections() === 1) && (server.closedConnections() === 1), { description: "the connection to open and close" });
+      // The dial was already under way. The transport may abandon it before it connects, or let it connect and close it at once, and either way the attempt is
+      // never written: every connection the server saw has closed, and none carried a request.
+      await settle();
+      await waitUntil(() => server.connections() === server.closedConnections(), { description: "every connection the server saw to close" });
 
       assert.equal(server.exchanges.length, 0);
       assert.equal(dials(), 1);

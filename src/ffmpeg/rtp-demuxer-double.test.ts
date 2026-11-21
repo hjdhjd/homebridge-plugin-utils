@@ -302,4 +302,21 @@ describe("TestRtpDemuxerFactory - the script of binds", () => {
 
     assert.deepEqual(factory.createCalls.map(({ demuxer }) => demuxer.inputPort), [ASSIGNED_PORT]);
   });
+
+  test("a construction asked for a port no UDP socket can hold throws the real demuxer's RangeError, records no call and leaves the script's next answer", () => {
+
+    const factory = new TestRtpDemuxerFactory([ASSIGNED_PORT]);
+
+    // The real demuxer refuses such a port before it binds, so the double's factory refuses it before it reads its script.
+    for(const inputPort of [ 65536, -1, 1.5, Number.NaN ]) {
+
+      assert.throws(() => factory.create(initFor(inputPort)), { message: "RtpDemuxer: inputPort must be a whole number from 0 to 65535.", name: "RangeError" });
+    }
+
+    assert.equal(factory.createCalls.length, 0);
+
+    factory.create(initFor(0));
+
+    assert.deepEqual(factory.createCalls.map(({ demuxer }) => demuxer.inputPort), [ASSIGNED_PORT]);
+  });
 });

@@ -14,7 +14,8 @@
  *
  * The double binds and settles as the real demuxer does: its bind completes or fails inside its constructor, from the answer a suite scripts, `ready` and
  * `mediaReady` are marked handled and reject with the lifetime's reason when the lifetime ends while they are pending, inside the constructor when the bind fails or
- * the parent signal has already aborted, and a promise that has resolved stays resolved. The levers refuse an event no real demuxer produces rather than modeling it.
+ * the parent signal has already aborted, and a promise that has resolved stays resolved. The levers refuse an event no real demuxer produces rather than modeling it,
+ * and a construction asked for an input port no UDP socket can hold throws the real demuxer's own `RangeError`, through the port rule the two share.
  *
  * Signatures come from the demuxer's own exported types, imported for their types alone, so a member here cannot drift from the contract it stands in for without the
  * compiler saying so, and loading the double loads none of the demuxer's socket machinery.
@@ -25,6 +26,7 @@ import { HbpuAbortError, composeSignals, isTimeoutReason, markHandled, onAbort }
 import type { RtpDemuxerFactory, RtpDemuxerHandle, RtpDemuxerInit } from "./rtp.ts";
 import { bindAnswerError, refusedBindError } from "./rtp-probe-socket-double.ts";
 import type { TestSocketBind } from "./rtp-probe-socket-double.ts";
+import { inputPortError } from "./rtp-port.ts";
 
 /* How far the stood-in demuxer has come since its bind, which decides whether its first packet may still arrive: "bound" until mediaReady resolves, and "flowing"
  * from then on. Whether the lifetime has ended, inside the constructor by a refused bind or a parent already aborted or at any time after, is read from the signal
@@ -118,10 +120,19 @@ export class TestRtpDemuxer implements RtpDemuxerHandle {
    *                         for a bind the kernel rejects. With no answer, a specific-port construction binds its own port. Unread under a parent signal already
    *                         aborted, since nothing binds then.
    *
-   * @throws An `Error` when a construction that binds is handed a port that is not a whole number from 1 to 65535, when a specific-port construction is handed
-   *         another port, and when an ephemeral construction is handed no answer, since only a suite can name the port a kernel would assign.
+   * @throws The real demuxer's `RangeError` when `init.inputPort` is not a whole number from 0 to 65535, ahead of everything else. An `Error` when a
+   *         construction that binds is handed a port that is not a whole number from 1 to 65535, when a specific-port construction is handed another port, and
+   *         when an ephemeral construction is handed no answer, since only a suite can name the port a kernel would assign.
    */
   public constructor(init: Pick<RtpDemuxerInit, "inputPort" | "signal">, bind?: TestSocketBind) {
+
+    // The real demuxer refuses a port no UDP socket can hold before it builds anything, and so does its double, through the rule the two share.
+    const refusal = inputPortError(init.inputPort);
+
+    if(refusal) {
+
+      throw refusal;
+    }
 
     this.#requestedPort = init.inputPort;
     this.signal = composeSignals(init.signal, this.#controller.signal);
@@ -330,9 +341,19 @@ export class TestRtpDemuxerFactory implements RtpDemuxerFactory {
    *
    * @returns The demuxer double.
    *
-   * @throws An `Error` when the double refuses the construction, as {@link TestRtpDemuxer} states, which reaches the consumer's own error handling.
+   * @throws The real demuxer's `RangeError` when `init.inputPort` is not a whole number from 0 to 65535, and an `Error` when the double refuses the construction, as
+   *         {@link TestRtpDemuxer} states. Each reaches the consumer's own error handling.
    */
   public create(init: RtpDemuxerInit): RtpDemuxerHandle {
+
+    // A port the real demuxer refuses never reaches a bind, so it is refused here, ahead of the script, and the script's next answer stays for the construction
+    // that does bind.
+    const refusal = inputPortError(init.inputPort);
+
+    if(refusal) {
+
+      throw refusal;
+    }
 
     // A construction under a signal already aborted binds nothing, so it leaves the script's next answer for the construction that does bind.
     const answer = (init.signal?.aborted === true) ? undefined : this.#script.shift();

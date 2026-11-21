@@ -7,7 +7,7 @@
  */
 import type { PortReservation, RtpDemuxerHandle, RtpProbeSocket } from "./rtp.ts";
 import { RtpDemuxer, RtpPortAllocator, rtpDemuxerFactory } from "./rtp.ts";
-import { TestProbeSocketFactory, TestRtpDemuxerFactory, expectAt, waitUntil } from "../testing/index.ts";
+import { TestProbeSocketFactory, TestRtpDemuxer, TestRtpDemuxerFactory, expectAt, waitUntil } from "../testing/index.ts";
 import { assertEachSubject, lifetimeState, settlement } from "./process-parity.helpers.ts";
 import { bindReceiver, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
 import { describe, test } from "node:test";
@@ -27,6 +27,47 @@ function makeRtpDatagram(payloadType = 96, suffix: Buffer = Buffer.alloc(10)): B
 }
 
 describe("RtpDemuxer - construction and bind", () => {
+
+  test("the real demuxer and its double throw the same RangeError for an inputPort no UDP socket can hold, from the constructor and from the factory alike", async () => {
+
+    // What a construction threw, as its error's name and message, so a subject that built a demuxer on the port reads differently from one that refused it.
+    const thrownBy = (construct: () => unknown): string => {
+
+      try {
+
+        construct();
+      } catch(error) {
+
+        return (error instanceof Error) ? (error.name + ": " + error.message) : "threw something other than an error";
+      }
+
+      return "threw nothing";
+    };
+
+    // How a consumer constructs each subject, by its constructor and by its factory, over an init asking for the port. A refused construction binds nothing, so
+    // there is nothing to release.
+    const initFor = (inputPort: number): { inputPort: number; rtcpPort: number; rtpPort: number } => ({ inputPort, rtcpPort: 50001, rtpPort: 50002 });
+    const subjects = {
+
+      double: [
+        (inputPort: number): unknown => new TestRtpDemuxer(initFor(inputPort)),
+        (inputPort: number): unknown => new TestRtpDemuxerFactory().create(initFor(inputPort))
+      ],
+      real: [
+        (inputPort: number): unknown => new RtpDemuxer(initFor(inputPort)),
+        (inputPort: number): unknown => rtpDemuxerFactory.create(initFor(inputPort))
+      ]
+    };
+    const ports = [ 65536, -1, 1.5, Number.NaN ];
+    const refusal = "RangeError: RtpDemuxer: inputPort must be a whole number from 0 to 65535.";
+
+    await assertEachSubject(subjects, ports.map(() => [ refusal, refusal ]), async (constructions) => {
+
+      const thrown = ports.map((inputPort) => constructions.map((construct) => thrownBy(() => construct(inputPort))));
+
+      return Promise.resolve(thrown);
+    });
+  });
 
   test("binds the socket on construction with kernel-assigned ephemeral port", async () => {
 

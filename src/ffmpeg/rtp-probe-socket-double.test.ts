@@ -223,7 +223,7 @@ describe("TestProbeSocketFactory - the allocator over the double and over the pa
   // An allocator's starter: over the double, its probes scripted to grant one random bind, or over the package's own sockets.
   type StartAllocator = () => RtpPortAllocator;
 
-  test("a single-port reservation whose signal aborts in the same turn as reserve() settles the same over the double as over the package's sockets", async () => {
+  test("a single-port reservation whose signal aborts in the same turn as reserve() rejects over the double as over the package's sockets", async () => {
 
     const starters: { double: StartAllocator; real: StartAllocator } = {
 
@@ -231,22 +231,15 @@ describe("TestProbeSocketFactory - the allocator over the double and over the pa
       real: (): RtpPortAllocator => new RtpPortAllocator()
     };
 
-    await assertEachSubject(starters, { reserve: "resolved" }, async (start) => {
+    await assertEachSubject(starters, { reserve: "rejected shutdown" }, async (start) => {
 
       const controller = new AbortController();
       const pending = start().reserve({ signal: controller.signal });
 
       controller.abort(new HbpuAbortError("shutdown"));
 
-      const reserve = await settlement(pending);
-
-      // A reservation that resolved holds its port in the allocator's pool, which its disposal releases.
-      if(reserve === "resolved") {
-
-        await (await pending)[Symbol.asyncDispose]();
-      }
-
-      return { reserve };
+      // The bind completes inside reserve() on each subject, so the abort lands with the port already held, and the reservation is refused all the same.
+      return { reserve: await settlement(pending) };
     });
   });
 });

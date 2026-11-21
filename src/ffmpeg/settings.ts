@@ -42,3 +42,7 @@ export const RPI4_GPU_MINIMUM = 128;
 // The cap applies only where the codec probe reports hostSystem === "raspbian", which it does for the Pi 4 generation alone, so a Pi 5, whose GPU constraints differ,
 // reports the generic host system and is never capped by this value. Distinct from RPI4_GPU_MINIMUM (GPU memory, in MB) - do not overload them.
 export const RPI4_HW_TRANSCODE_MAX_PIXELS = 1920 * 1080;
+
+// The argument that asks FFmpeg to hand its decoded frames on in the hardware decoder's own memory, on the GPU, rather than in system memory. The options that
+// write it and the ending rule that reads a process's arguments for it each name it here, so they cannot come to disagree about its spelling.
+export const GPU_FRAMES_ARG = "-hwaccel_output_format";

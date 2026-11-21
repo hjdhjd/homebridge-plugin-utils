@@ -22,10 +22,12 @@
  * A request's own signal is answered for as long as its response has not started. An abort in that window settles the caller at once with the signal's reason, or
  * with the transport's request-aborted error when that reason is null or undefined, whether the request is waiting in the pool's queue, waiting on a connection, or
  * waiting out a retry backoff, and a request that aborted while it waited in the pool's queue costs no dial when the queue reaches it. Once the response has started,
- * an abort is the transport's to handle. The transport's queue never looks at a signal, so the composition answers it where the transport offers a hook: the pool
- * builds its connections from a client that drops a request whose signal has aborted, and a gate composed as the outermost layer releases the caller at the abort.
- * A dial already running at an abort still runs on to the configured `connectTimeout`, its caller already released. A released request's entry leaves the pool's
- * queue at the pool's next drain, so until then the pool's `queued` and `pending` figures count callers that have already been answered.
+ * an abort is the transport's to handle. The transport answers a signal itself for a caller of its own request methods, but not for a caller that dispatches
+ * directly, and not while a request waits out a retry backoff, so the composition answers every caller where the transport offers a hook: a gate composed as the
+ * outermost layer releases the caller at the abort, and the pool builds its connections from a client that drops a request whose signal has aborted, so a retry
+ * that comes due for a released request dials nothing. A dial already running at an abort is the transport's to abandon or to complete, its caller already
+ * released. A released request's entry can stay in the pool's queue until the pool's next drain, so the pool's `queued` and `pending` figures can count callers
+ * that have already been answered.
  *
  * Some requests stay outside that reach. `fetch` puts no signal on its dispatch, so a `fetch` waiting in the pool's queue still dials when the queue reaches it,
  * though `fetch` releases its own caller at the abort. A signal that is an event emitter rather than an `AbortSignal` takes the transport's own path. A request the
@@ -361,8 +363,9 @@ function settleAborted(handler: Dispatcher.DispatchHandler, error: Error): void 
 }
 
 /* The client the pool builds its connections from. Its one difference from the transport's own is `dispatch`, which settles a request whose signal has already
- * aborted instead of taking it, so a request that aborted while it waited in the pool's queue is dropped when the queue reaches it and costs no dial. It exists only
- * because the transport's queue never looks at a signal, and it has no reason to exist once that queue honors one.
+ * aborted instead of taking it, so a request that aborted while it waited is dropped when its turn comes and costs no dial. It exists because a request the gate
+ * has released can still be held beneath the gate, by the retry interceptor through a backoff above all, and would be dispatched and dialed for when that wait
+ * ended. The transport makes no dial for a queued request it released itself, and this client covers the ones it did not.
  *
  * The true answer for a dropped request keeps the pool's queue moving: the pool reads it as "not busy" and hands this client the next request in line, which is
  * accurate, since the client took nothing. A client that is closed or destroyed is left to answer as the transport does, with its own closed or destroyed error.
@@ -581,9 +584,9 @@ class AbortGateHandler implements Required<Dispatcher.DispatchHandler> {
 }
 
 /* The gate: an interceptor that answers a request's own signal while the request's response has not started. An abort in that window releases the caller at once
- * with the signal's reason, and an attempt a connection has already taken is aborted as the transport itself would abort it. It exists only because the transport's
- * queue never looks at a signal, so a caller whose request waits there would otherwise be answered only when the queue reached it, and it has no reason to exist
- * once that queue honors one.
+ * with the signal's reason, and an attempt a connection has already taken is aborted as the transport itself would abort it. It exists because the transport
+ * answers a signal only for a caller of its own request methods: a caller that dispatches directly is never answered from its signal, and a request waiting out
+ * the retry interceptor's backoff is answered only when the backoff ends. The gate answers each of them by one rule.
  *
  * It is the outermost layer of this module's composition and of nothing beyond it. A layer a plugin composes above the returned dispatcher - its own retry
  * interceptor among them - sits above the gate, and sees a request the gate settled as an aborted one, which is what keeps a retry policy there from trying it again.

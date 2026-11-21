@@ -43,6 +43,7 @@ import type { IpFamily } from "../dgram-util.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
 import { RtpPacketParser } from "./rtp-parser.ts";
 import type { Socket } from "node:dgram";
+import { inputPortError } from "./rtp-port.ts";
 import { once } from "node:events";
 
 // Upper bound on retry cycles when a `reserve()` call has to fall back to a fresh random-port pair because a specific consecutive port collided. The number is
@@ -356,10 +357,21 @@ export class RtpDemuxer implements RtpDemuxerHandle {
    * {@link RtpDemuxerHandle} states for every demuxer.
    *
    * @param init - Required init options. See {@link RtpDemuxerInit}.
+   *
+   * @throws `RangeError` when `init.inputPort` is not a whole number from 0 to 65535.
    */
   public constructor(init: RtpDemuxerInit) {
 
     const { inactivityTimeout, inputPort, ipFamily = "ipv4", log, rtcpPort, rtpPort, signal: parentSignal } = init;
+
+    // A port no UDP socket can hold is refused before anything is built, so there is nothing to release and no socket is bound on a port the caller did not name.
+    // The rule is the one the demuxer's double reads, so the two refuse the same ports.
+    const refusal = inputPortError(inputPort);
+
+    if(refusal) {
+
+      throw refusal;
+    }
 
     this.#controller = new AbortController();
     this.signal = composeSignals(parentSignal, this.#controller.signal);
@@ -564,9 +576,8 @@ export const rtpDemuxerFactory: RtpDemuxerFactory = {
  *                      "RTP port N implies RTCP port N+1" convention is satisfied. Defaults to `1`.
  * @property ipFamily - Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`.
  * @property signal   - Optional caller {@link AbortSignal}. Cancels in-flight bind-retry attempts. If the signal aborts while `reserve()` is still looking for
- *                      consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`. Over sockets that bind
- *                      inside the call, as the package's own do, a single-port reservation completes before an abort in the same turn can land, so it resolves,
- *                      and the caller disposes it as it would any other.
+ *                      consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`. The signal is read
+ *                      again once each port is held, so an abort in the same turn as the call rejects the reservation too, and its port is released.
  *
  * @category FFmpeg
  */
@@ -751,6 +762,10 @@ export class RtpPortAllocator {
         continue;
       }
 
+      // A bind that completes inside the call leaves no wait for an abort to interrupt, so the signal is read again once each port is held. The stack releases
+      // what was acquired as the throw leaves this scope.
+      signal?.throwIfAborted();
+
       if(count === 1) {
 
         const reservation = this.#makeReservation(firstPort, 1, ipFamily);
@@ -767,6 +782,8 @@ export class RtpPortAllocator {
 
         continue;
       }
+
+      signal?.throwIfAborted();
 
       const reservation = this.#makeReservation(firstPort, 2, ipFamily);
 

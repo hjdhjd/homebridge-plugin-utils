@@ -16,8 +16,9 @@
  * - {@link makeContainer} - a convenience wrapper that concatenates nested box bytes into a parent container (e.g., `makeContainer("moov", [ trak1, trak2 ])`).
  * - {@link makeHdlrBox} / {@link makeTkhdBox} / {@link makeMdhdBox} / {@link makeTfhdBox} / {@link makeTrunBox} - fullbox builders that encode the specific header
  *   layouts the `fmp4.ts` readers read (`hasAudioTrack` and `findVideoTrack` walk the handler-type field, and `findVideoTrack` reads a track's ID and timescale;
- *   `isKeyframe` walks TRUN flags; `splitVideoFrames` reads a track fragment's header and its run's entries). Routing every test through one parser-aligned
- *   construction path means a future tweak to any reader's wire layout has exactly one builder to update.
+ *   `findKeyframe` and `isKeyframe` read each run's sample flags and the track fragment header's default flags; `splitVideoFrames` reads a track fragment's header
+ *   and its run's entries). Routing every test through one parser-aligned construction path means a future tweak to any reader's wire layout has exactly one builder
+ *   to update.
  * - {@link makeInitSegment} / {@link makeFragment} - composers that build a whole initialization segment from its tracks and a whole fragment from its samples,
  *   in the layout a stream's producer writes, so a suite feeding a reader or a feed a stream states its tracks and frames rather than assembling their boxes. A
  *   malformed segment or fragment, one no producer writes, is built from the fullbox builders directly.
@@ -169,9 +170,9 @@ export function makeMdhdBox({ timescale, version = 0 }: { timescale: number; ver
 }
 
 /**
- * Build a `tfhd` fullbox: a track fragment's header, naming its track and carrying any of the optional fields `splitVideoFrames` walks. Each optional field given
- * sets its flag and is written in the order the spec lays them out after the track_ID: the 64-bit base data offset, the sample description index, and the default
- * sample duration, size and flags. Default-base-is-moof is set unless asked otherwise, the layout FFmpeg's `default_base_moof` movflag writes.
+ * Build a `tfhd` fullbox: a track fragment's header, naming its track and carrying any of the optional fields `splitVideoFrames` and `findKeyframe` read. Each
+ * optional field given sets its flag and is written in the order the spec lays them out after the track_ID: the 64-bit base data offset, the sample description
+ * index, and the default sample duration, size and flags. Default-base-is-moof is set unless asked otherwise, the layout FFmpeg's `default_base_moof` movflag writes.
  *
  * @param options                        - Options that shape the emitted box.
  * @param options.baseDataOffset         - When given, set `TFHD_FLAG_BASE_DATA_OFFSET` and write this 64-bit base data offset.
@@ -253,10 +254,11 @@ export interface TrunSample {
 }
 
 /**
- * Build a `trun` fullbox. Without `samples` it describes a single sample, with the flags and sample-flags bits set to select one of the keyframe-detection paths
- * `isKeyframe` supports: `isKeyframe` reads the flags to decide whether to consult `first_sample_flags` (common path, when `frag_keyframe` movflag is set) or fall
- * back to the per-sample `sample_flags` field. With `samples` it describes a run of any length, one entry per sample, which is what `splitVideoFrames` reads. The
- * helper composes the optional fields in the exact order the spec mandates so the readers' offset arithmetic matches.
+ * Build a `trun` fullbox. Without `samples` it describes a single sample, with the flags and sample-flags bits set to select where the run states that sample's
+ * flags: `isKeyframe` reads a run's first sample from `first_sample_flags` when the run carries them (common path, when `frag_keyframe` movflag is set), from the
+ * per-sample `sample_flags` field otherwise, and from the track fragment header's default when the run states neither. With `samples` it describes a run of any
+ * length, one entry per sample, which is what `splitVideoFrames` and `findKeyframe` read. The helper composes the optional fields in the exact order the spec
+ * mandates so the readers' offset arithmetic matches.
  *
  * @param options                          - Options that shape the emitted box.
  * @param options.dataOffset               - The value written, signed, into the data_offset field. Defaults to `0`.
@@ -278,7 +280,7 @@ export interface TrunSample {
  * @param options.useFirstSampleFlags      - When `true`, set `TRUN_FLAG_FIRST_SAMPLE_FLAGS` and emit the first-sample-flags field after the optional data_offset.
  * @param options.usePerSampleFlags        - When `true`, set `TRUN_FLAG_SAMPLE_FLAGS`. Without `samples`, emit a single per-sample flags field after any duration/size
  *                                           slots, regardless of `useFirstSampleFlags`; when `useFirstSampleFlags` is also `true`, `isKeyframe` never reads these
- *                                           trailing bytes because it returns immediately after consulting `first_sample_flags`.
+ *                                           trailing bytes, because `first_sample_flags` stands in for the first sample's entry flags and the run holds no other.
  *
  * @returns A complete `trun` box.
  *
@@ -379,8 +381,8 @@ export function makeTrunBox({ dataOffset = 0, includeCompositionOffset = false, 
     return makeBox("trun", Buffer.concat(parts));
   }
 
-  // Per-sample entry. When useFirstSampleFlags is true, the predicate returns early before consulting per-sample fields, so we stop here unless per-sample was
-  // explicitly requested.
+  // Per-sample entry. When useFirstSampleFlags is true, first_sample_flags stands in for the single sample's entry flags, so the keyframe readers consult no
+  // per-sample field and we stop here unless per-sample was explicitly requested.
   if(usePerSampleFlags) {
 
     if(includeDuration) {
@@ -464,8 +466,9 @@ export function makeInitSegment(tracks: readonly InitSegmentTrack[]): Buffer {
  *                                      somewhere other than its samples.
  * @param options.header              - The first track's `tfhd` options, as {@link makeTfhdBox} takes them, without the track_ID. Defaults to default-base-is-moof
  *                                      alone.
- * @param options.run                 - Which fields the first track's `trun` carries, as {@link makeTrunBox} takes them. Defaults to each sample's duration and
- *                                      size in its entry and a first-sample-flags field marking a keyframe; a run given replaces that default whole.
+ * @param options.run                 - Which fields the first track's `trun` carries, and the value its first-sample flags hold, as {@link makeTrunBox} takes
+ *                                      them. Defaults to each sample's duration and size in its entry and a first-sample-flags field marking a keyframe; a run
+ *                                      given replaces that default whole, and the first-sample flags it carries mark a keyframe unless it picks a `sampleFlagsValue`.
  * @param options.samples             - The first track's samples, in order. Each is written to the `mdat` as its `size`, and to the run's entries as far as `run`
  *                                      says.
  * @param options.secondTrack         - A second track whose fragment and samples follow the first's.
@@ -490,8 +493,8 @@ export function makeFragment({ dataOffset, header = {}, run = { includeDuration:
   trackId }: {
   dataOffset?: number;
   header?: Omit<Parameters<typeof makeTfhdBox>[0], "trackId">;
-  run?: Pick<Parameters<typeof makeTrunBox>[0], "includeCompositionOffset" | "includeDataOffset" | "includeDuration" | "includeSize" | "useFirstSampleFlags" |
-    "usePerSampleFlags">;
+  run?: Pick<Parameters<typeof makeTrunBox>[0], "includeCompositionOffset" | "includeDataOffset" | "includeDuration" | "includeSize" | "sampleFlagsValue" |
+    "useFirstSampleFlags" | "usePerSampleFlags">;
   samples: readonly TrunSample[];
   secondTrack?: { samples: readonly TrunSample[]; trackId: number };
   trackId: number;

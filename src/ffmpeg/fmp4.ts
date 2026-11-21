@@ -7,8 +7,8 @@
  * ISO BMFF (fMP4) box parsing utilities for working with fragmented MP4 data.
  *
  * This module provides lightweight, Buffer-based utilities for inspecting ISO Base Media File Format (ISO BMFF) structures commonly found in fragmented MP4 (fMP4)
- * streams. It enables locating specific box types, splitting fragments into their moof/mdat components, detecting keyframe (sync sample) segments by parsing the TRUN
- * sample flags, identifying audio track presence in initialization segments, finding an initialization segment's video track, and cutting a fragment into pieces
+ * streams. It enables locating specific box types, splitting fragments into their moof/mdat components, finding a fragment's first keyframe (sync sample) from its
+ * samples' flags, identifying audio track presence in initialization segments, finding an initialization segment's video track, and cutting a fragment into pieces
  * that each end where one of that track's frames ends, with the frame's duration, for a paced write.
  *
  * These utilities operate on complete Buffers and are independent of FFmpeg processes or streaming pipelines.
@@ -250,80 +250,139 @@ export function findBox(buffer: Buffer, type: string, start = 0, end?: number): 
 }
 
 /**
- * Determines whether an fMP4 segment contains a keyframe (sync sample) by parsing the TRUN sample flags.
+ * Finds the first keyframe (sync sample) in an fMP4 fragment, as its index among the samples of the track fragment it reads.
  *
- * Traverses the box hierarchy `moof -> traf -> trun` and inspects the sample flags to determine if the first sample is a sync sample (keyframe/IDR frame). Checks
- * `first_sample_flags` first (the common case for fragments generated with `frag_keyframe`), then falls back to per-sample flags if available. Returns `false` if the
- * box structure cannot be parsed or if the flags indicate a non-sync sample.
+ * Reads the first `moof`'s track fragment whose `tfhd` names `track`, or the moof's first track fragment when no track is given, and walks every `trun` in it in
+ * order, counting samples across them, to the first sample whose flags clear the non-sync bit. A sample's flags are read where the fragment states them: the first
+ * sample of a run takes the run's first-sample flags, else its entry's flags, else the `tfhd`'s default sample flags, and every later sample takes its entry's flags,
+ * else that default. A sample whose flags are stated nowhere, as in a track fragment with no `tfhd`, is no keyframe. The default is read only for a sample whose
+ * flags its run does not state, and only from a `tfhd` that holds its track_ID and every field its flags announce; a default only the initialization segment
+ * states, in its `trex`, is not read.
  *
- * @param segment      - A buffer containing a complete fMP4 segment (typically a moof+mdat pair).
+ * The first run's first-sample flags, or its first entry's, are read even when it declares no samples, so the fragment's first sample answers from what it states
+ * alone. A run that declares no samples adds nothing to the index, and past the first run it holds no keyframe.
  *
- * @returns `true` if the segment's first sample is a sync sample (keyframe), `false` otherwise.
+ * @remarks **Hot path.** A plugin reads every fragment of a live stream through this, so the walk allocates nothing per sample and stops at the first keyframe. A
+ * run whose entries carry no flags is answered in one step, because every sample after its first takes the same default, so a run that declares billions of
+ * samples it does not list costs no more than one that declares two. A run whose entries do carry flags is read one entry at a time, never past its box.
+ *
+ * @param segment - A buffer containing a complete fMP4 fragment (typically a moof followed by its mdat). No `mdat` is read.
+ * @param track   - Optional. The track whose track fragment to read, typically the video track {@link findVideoTrack} read from the stream's initialization
+ *                  segment. Without it, the moof's first track fragment is read.
+ *
+ * @returns The zero-based index of the first keyframe among the track fragment's samples, or `null` when it holds none: when the segment has no `moof`, when no track
+ *          fragment names `track` (or, without one, the moof holds none), when every sample's flags mark it non-sync or are stated nowhere, or when the walk reaches
+ *          a run too short for its fixed header or a flags field that lies past its run's box before it finds a keyframe.
  *
  * @category FFmpeg
  */
-export function isKeyframe(segment: Buffer): boolean {
+export function findKeyframe(segment: Buffer, track?: FMp4Track): Nullable<number> {
 
   const moof = findBox(segment, "moof");
 
   if(!moof) {
 
-    return false;
+    return null;
   }
 
-  // Locate the traf box inside the moof. Child boxes start after the parent's header.
-  const traf = findBox(segment, "traf", moof.offset + BOX_HEADER_SIZE, moof.offset + moof.size);
+  // With a track, the track fragment that names it comes from the shared walk, with its header. Without one, the moof's first track fragment is read, and its header
+  // is looked up only if a sample's flags turn out to need the header's default, so a fragment whose runs state their flags costs no header lookup.
+  const named = track ? findTrackFragment(segment, moof, track) : null;
+  const traf = track ? named?.traf : findBox(segment, "traf", moof.offset + BOX_HEADER_SIZE, moof.offset + moof.size);
 
   if(!traf) {
 
-    return false;
+    return null;
   }
 
-  const trun = findBox(segment, "trun", traf.offset + BOX_HEADER_SIZE, traf.offset + traf.size);
+  const trafEnd = traf.offset + traf.size;
+  let defaultFlags: number | undefined;
+  let index = 0;
 
-  if(!trun) {
+  for(let first = true, trunStart = traf.offset + BOX_HEADER_SIZE; ; first = false) {
 
-    return false;
-  }
+    const trun = findBox(segment, "trun", trunStart, trafEnd);
+    const run = trun && readTrackRun(segment, trun);
 
-  // The run's fixed header says where its optional fields sit. A run too short to hold that header cannot be interpreted.
-  const run = readTrackRun(segment, trun);
+    // The walk ends with no keyframe past the last run, and at a run too short to say how many samples it holds, since no sample after it can be counted.
+    if(!trun || !run) {
 
-  if(!run) {
-
-    return false;
-  }
-
-  const trunEnd = trun.offset + trun.size;
-
-  // Check first_sample_flags if present. This is the most common path for fMP4 fragments generated with the frag_keyframe movflag, where each fragment starts at a
-  // keyframe and the first sample's flags are stored separately from the per-sample entries. Only the field read here is bounded against the box, so a run whose
-  // entries are missing or cut short still answers from its first-sample flags.
-  if(run.firstSampleFlags !== null) {
-
-    if((run.firstSampleFlags + 4) > trunEnd) {
-
-      return false;
+      return null;
     }
 
-    return (segment.readUInt32BE(run.firstSampleFlags) & SAMPLE_FLAG_NON_SYNC) === 0;
-  }
+    const trunEnd = trun.offset + trun.size;
+    const flagsAt = (run.flags & TRUN_FLAG_SAMPLE_FLAGS) ? entryFieldOffset(run.flags, TRUN_FLAG_SAMPLE_FLAGS) : null;
+    let sample = 0;
 
-  // Fall back to the first entry's per-sample flags, which follow its duration and size when the run carries them.
-  if(run.flags & TRUN_FLAG_SAMPLE_FLAGS) {
+    // The first sample's flags where the run states them, its first-sample flags ahead of its first entry's. The first run's are read whatever count it declares and
+    // bounded by their own field alone, so the fragment's first sample answers from what it states even when the run's count or entries do not hold together.
+    const firstEntryFlags = (flagsAt === null) ? null : (run.firstEntry + flagsAt);
+    const stated = (first || (run.sampleCount > 0)) ? (run.firstSampleFlags ?? firstEntryFlags) : null;
 
-    const position = run.firstEntry + entryFieldOffset(run.flags, TRUN_FLAG_SAMPLE_FLAGS);
+    if(stated !== null) {
 
-    if((position + 4) > trunEnd) {
+      if((stated + 4) > trunEnd) {
 
-      return false;
+        return null;
+      }
+
+      if(isSyncSample(segment.readUInt32BE(stated))) {
+
+        return index;
+      }
+
+      sample = 1;
     }
 
-    return (segment.readUInt32BE(position) & SAMPLE_FLAG_NON_SYNC) === 0;
-  }
+    if(flagsAt !== null) {
 
-  // No sample flags information available in the trun...we can't determine keyframe status.
-  return false;
+      // Each later sample states its flags in its entry, read one entry at a time, and an entry the box does not hold ends the walk.
+      for(let position = run.firstEntry + (sample * run.stride) + flagsAt; sample < run.sampleCount; position += run.stride, sample++) {
+
+        if((position + 4) > trunEnd) {
+
+          return null;
+        }
+
+        if(isSyncSample(segment.readUInt32BE(position))) {
+
+          return index + sample;
+        }
+      }
+    } else if(run.sampleCount > sample) {
+
+      // The run's entries state no flags, so every sample from here to its end takes the header's default, and the first of them answers for them all. The default is
+      // read once, by the first run that needs it, and a header that states none marks no keyframe.
+      defaultFlags ??= readTrackFragmentHeader(segment, named ? named.tfhd : findBox(segment, "tfhd", traf.offset + BOX_HEADER_SIZE, trafEnd))?.defaultFlags ??
+        SAMPLE_FLAG_NON_SYNC;
+
+      if(isSyncSample(defaultFlags)) {
+
+        return index + sample;
+      }
+    }
+
+    index += run.sampleCount;
+    trunStart = trunEnd;
+  }
+}
+
+/**
+ * Determines whether an fMP4 fragment holds a keyframe (sync sample) anywhere in the track fragment it reads: {@link findKeyframe}'s answer compared with `null`.
+ *
+ * A producer that cuts its fragments by time rather than at keyframes leaves a keyframe wherever the cut falls, often after the first sample, so every sample of
+ * every run counts, each read as {@link findKeyframe} reads it.
+ *
+ * @param segment - A buffer containing a complete fMP4 fragment (typically a moof followed by its mdat).
+ * @param track   - Optional. The track whose track fragment to read, as {@link findKeyframe} takes it. Without it, the moof's first track fragment is read.
+ *
+ * @returns `true` if the track fragment holds a sync sample (keyframe), `false` otherwise.
+ *
+ * @category FFmpeg
+ */
+export function isKeyframe(segment: Buffer, track?: FMp4Track): boolean {
+
+  return findKeyframe(segment, track) !== null;
 }
 
 /**
@@ -449,36 +508,52 @@ export function splitVideoFrames(fragment: Buffer, track: FMp4Track): Nullable<P
     return null;
   }
 
-  const moofEnd = moof.offset + moof.size;
-  const mdat = findBox(fragment, "mdat", moofEnd);
+  const mdat = findBox(fragment, "mdat", moof.offset + moof.size);
 
   if(!mdat) {
 
     return null;
   }
 
-  // Walk the moof's track fragments to the one whose header names the track. A track fragment with no header long enough to hold a track_ID names no track, so it
-  // is passed over.
+  const found = findTrackFragment(fragment, moof, track);
+
+  // No track fragment names the track, so the fragment holds none of its frames and there is nothing to cut at.
+  if(!found) {
+
+    return [];
+  }
+
+  // The track fragment that names the track is the one to cut, so a rule it breaks makes the fragment one this reader cannot cut, a header too short for a field its
+  // flags announce among them.
+  const header = readTrackFragmentHeader(fragment, found.tfhd);
+
+  return header && splitRun(fragment, { header, mdat, moof, timescale: track.timescale, traf: found.traf });
+}
+
+/* The track fragment that holds a track, found from an fMP4 fragment's `moof`: the first whose `tfhd` names `track`, with that `tfhd`. Null when no track fragment
+ * names the track, or when the walk meets a box it cannot read before one does, since a malformed size makes it unsafe to keep walking. A track fragment with no
+ * header, or one whose header is too short to hold a track_ID, names no track, so it is passed over. Every reader that looks for a track's fragment goes through
+ * this, so which track fragment holds a track is decided once.
+ */
+function findTrackFragment(buffer: Buffer, moof: FMp4Box, track: FMp4Track): Nullable<{ tfhd: FMp4Box; traf: FMp4Box }> {
+
+  const moofEnd = moof.offset + moof.size;
+
   for(let trafStart = moof.offset + BOX_HEADER_SIZE; ;) {
 
-    const traf = findBox(fragment, "traf", trafStart, moofEnd);
+    const traf = findBox(buffer, "traf", trafStart, moofEnd);
 
-    // No track fragment names the track, so the fragment holds none of its frames and there is nothing to cut at.
     if(!traf) {
 
-      return [];
+      return null;
     }
 
     const trafEnd = traf.offset + traf.size;
-    const tfhd = findBox(fragment, "tfhd", traf.offset + BOX_HEADER_SIZE, trafEnd);
+    const tfhd = findBox(buffer, "tfhd", traf.offset + BOX_HEADER_SIZE, trafEnd);
 
-    // The track fragment that names the track is the one to cut, so a rule it breaks makes the fragment one this reader cannot cut, a header too short for a field
-    // its flags announce among them.
-    if(tfhd && (readTrackId(fragment, tfhd) === track.id)) {
+    if(tfhd && (readTrackId(buffer, tfhd) === track.id)) {
 
-      const header = readTrackFragmentHeader(fragment, tfhd);
-
-      return header && splitRun(fragment, { header, mdat, moof, timescale: track.timescale, traf });
+      return { tfhd, traf };
     }
 
     trafStart = trafEnd;
@@ -560,8 +635,9 @@ function readFieldAfterTimes(buffer: Buffer, box: Nullable<FMp4Box>): Nullable<n
 }
 
 /* Read a TRUN's fixed header: its flags, its sample count, and the positions of its optional fields, its first entry and its entry stride. Null for a run too short
- * to hold that header. Nothing past the fixed header is bounded here, because the readers of a run need different things from it: `isKeyframe` reads one flags
- * field and answers even when the entries are cut short, while the frame reader needs every entry. Each reader checks what it reads against the box.
+ * to hold that header. Nothing past the fixed header is bounded here, because the readers of a run need different things from it: the keyframe reader reads one
+ * flags field at a time and answers from a sample ahead of entries that are cut short, while the frame reader needs every entry. Each reader checks what it reads
+ * against the box.
  */
 function readTrackRun(buffer: Buffer, trun: FMp4Box): Nullable<TrackRunLayout> {
 
@@ -617,11 +693,18 @@ function entryFieldOffset(flags: number, field: (typeof TRUN_ENTRY_FIELDS)[numbe
   return offset;
 }
 
-// The fields of a TFHD the frame reader reads once the header has named its track: its flags, and the defaults a TRUN entry falls back to. A default the header does
-// not carry is null.
+// A sample whose flags clear the non-sync bit is a sync sample, a keyframe.
+function isSyncSample(flags: number): boolean {
+
+  return (flags & SAMPLE_FLAG_NON_SYNC) === 0;
+}
+
+// The fields of a TFHD its readers read: its flags, and the defaults a TRUN's samples fall back to, the duration and size the frame reader reads and the flags the
+// keyframe reader reads. A default the header does not carry is null.
 interface TrackFragmentHeader {
 
   readonly defaultDuration: Nullable<number>;
+  readonly defaultFlags: Nullable<number>;
   readonly defaultSize: Nullable<number>;
   readonly flags: number;
 }
@@ -632,16 +715,22 @@ function readTrackId(buffer: Buffer, tfhd: FMp4Box): Nullable<number> {
   return (tfhd.size < TFHD_HEADER_SIZE) ? null : buffer.readUInt32BE(tfhd.offset + BOX_HEADER_SIZE + 4);
 }
 
-/* Read the rest of a TFHD whose track_ID has been read: its flags, then each optional field they set after the track_ID, in the order the spec lays them out - the
- * 64-bit base data offset, the sample description index, and the default duration, size and flags. Null for a header too short to hold any field its flags
- * announce.
+/* Read a TFHD: its flags, then each optional field they set after the track_ID, in the order the spec lays them out - the 64-bit base data offset, the sample
+ * description index, and the default duration, size and flags. Null for a missing header, one too short to hold its flags and track_ID, and one too short for any
+ * field its flags announce, so a default is read only from a header that holds it and every field before it.
  */
-function readTrackFragmentHeader(buffer: Buffer, tfhd: FMp4Box): Nullable<TrackFragmentHeader> {
+function readTrackFragmentHeader(buffer: Buffer, tfhd: Nullable<FMp4Box>): Nullable<TrackFragmentHeader> {
+
+  if(!tfhd || (tfhd.size < TFHD_HEADER_SIZE)) {
+
+    return null;
+  }
 
   const end = tfhd.offset + tfhd.size;
   let position = tfhd.offset + TFHD_HEADER_SIZE;
   const flags = buffer.readUInt32BE(tfhd.offset + BOX_HEADER_SIZE) & 0x00FFFFFF;
   let defaultDuration: Nullable<number> = null;
+  let defaultFlags: Nullable<number> = null;
   let defaultSize: Nullable<number> = null;
 
   for(const [ flag, width ] of TFHD_FIELDS) {
@@ -656,18 +745,39 @@ function readTrackFragmentHeader(buffer: Buffer, tfhd: FMp4Box): Nullable<TrackF
       return null;
     }
 
-    if(flag === TFHD_FLAG_DEFAULT_SAMPLE_DURATION) {
+    switch(flag) {
 
-      defaultDuration = buffer.readUInt32BE(position);
-    } else if(flag === TFHD_FLAG_DEFAULT_SAMPLE_SIZE) {
+      case TFHD_FLAG_DEFAULT_SAMPLE_DURATION: {
 
-      defaultSize = buffer.readUInt32BE(position);
+        defaultDuration = buffer.readUInt32BE(position);
+
+        break;
+      }
+
+      case TFHD_FLAG_DEFAULT_SAMPLE_FLAGS: {
+
+        defaultFlags = buffer.readUInt32BE(position);
+
+        break;
+      }
+
+      case TFHD_FLAG_DEFAULT_SAMPLE_SIZE: {
+
+        defaultSize = buffer.readUInt32BE(position);
+
+        break;
+      }
+
+      default: {
+
+        break;
+      }
     }
 
     position += width;
   }
 
-  return { defaultDuration, defaultSize, flags };
+  return { defaultDuration, defaultFlags, defaultSize, flags };
 }
 
 // What the frame reader has found by the time it reaches the video track fragment: that fragment and its header, the moof and the mdat around it, and the track's

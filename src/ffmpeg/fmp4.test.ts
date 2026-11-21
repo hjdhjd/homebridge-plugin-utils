@@ -1,18 +1,21 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/fmp4.test.ts: Unit tests for the stateless ISO BMFF (fMP4) predicates exported from fmp4.ts - findBox, isKeyframe, hasAudioTrack, and splitMoofMdat - and for
- * the frame reader beside them, findVideoTrack and splitVideoFrames.
+ * ffmpeg/fmp4.test.ts: Unit tests for the stateless ISO BMFF (fMP4) predicates exported from fmp4.ts - findBox, isKeyframe, hasAudioTrack, and splitMoofMdat - for
+ * the keyframe reader isKeyframe answers through, findKeyframe, and for the frame reader beside them, findVideoTrack and splitVideoFrames.
  *
  * These are the one-shot counterparts to the streaming `Mp4BoxParser` / `Mp4SegmentAssembler`: each predicate accepts a complete Buffer and returns a verdict. They are
  * consumed both internally (the parser reuses `BOX_HEADER_SIZE` and the assembler compares box type codes via the `BOX_TYPE_*` constants) and externally (HBUP calls
- * `isKeyframe(buffer)` directly at its timeshift boundary), so the behavioral surface here must stay stable across the parser/assembler refactor.
+ * `isKeyframe(buffer)` directly at its timeshift boundary), so the surface here stays stable: the library's own streaming parser and assembler read its constants,
+ * and a plugin acts on its verdicts at its own boundary.
  *
  * The frame reader's rows build every well-formed fragment and initialization segment from invented values through `makeFragment` and `makeInitSegment`, in the
  * layout the family's producers write: one moof holding a video track fragment and then an audio one, and one mdat holding the video samples and then the audio.
  * A row that breaks a rule that layout keeps builds its fragment or segment from the fullbox builders. One row reads FFmpeg's own output for its test pattern, gated
- * on the FFmpeg integration predicate.
+ * on the FFmpeg integration predicate. The keyframe reader's rows that lay out runs of their own build a moof alone from the fullbox builders, because the keyframe
+ * readers read no mdat.
  */
-import { BOX_HEADER_SIZE, HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, findBox, findVideoTrack, hasAudioTrack, isKeyframe, splitMoofMdat, splitVideoFrames } from "./fmp4.ts";
+import { BOX_HEADER_SIZE, HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, findBox, findKeyframe, findVideoTrack, hasAudioTrack, isKeyframe, splitMoofMdat,
+  splitVideoFrames } from "./fmp4.ts";
 import { BOX_TYPE_MOOF, Mp4BoxParser } from "./mp4-parser.ts";
 import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeFragment, makeHdlrBox, makeInitSegment, makeMdhdBox, makeTfhdBox, makeTkhdBox,
   makeTrunBox } from "./fmp4-builders.ts";
@@ -21,6 +24,7 @@ import { describe, test } from "node:test";
 import { expectAt, present, silentLog } from "../testing/index.ts";
 import type { FMp4Track } from "./fmp4.ts";
 import { FfmpegCodecs } from "./codecs.ts";
+import type { Nullable } from "../util.ts";
 import type { PacedChunk } from "../backpressure.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -368,6 +372,28 @@ describe("isKeyframe and hasAudioTrack answers the shared box walks keep", () =>
 
     assert.equal(trun.readUInt32BE(12), 5, "the run declares more samples than it holds");
     assert.equal(isKeyframe(makeContainer("moof", [makeContainer("traf", [trun])])), true);
+  });
+
+  test("isKeyframe is true for a run whose first-sample flags mark a sync sample over a first entry whose flags do not", () => {
+
+    const trun = makeTrunBox({ sampleFlagsValue: 0, samples: [{ flags: SAMPLE_FLAG_NON_SYNC }], useFirstSampleFlags: true, usePerSampleFlags: true });
+
+    assert.equal(isKeyframe(makeContainer("moof", [makeContainer("traf", [trun])])), true);
+  });
+
+  test("isKeyframe is false for a run whose first-sample flags mark no sync sample over a first entry whose flags do", () => {
+
+    const trun = makeTrunBox({ sampleFlagsValue: SAMPLE_FLAG_NON_SYNC, samples: [{ flags: 0 }], useFirstSampleFlags: true, usePerSampleFlags: true });
+
+    assert.equal(isKeyframe(makeContainer("moof", [makeContainer("traf", [trun])])), false);
+  });
+
+  test("isKeyframe is false for a run stating no flags under a track fragment header with no default flags", () => {
+
+    const fragment = makeFragment({ run: { includeDuration: true, includeSize: true }, samples: [ { duration: 3000, size: 30 }, { duration: 3000, size: 20 } ],
+      trackId: 1 });
+
+    assert.equal(isKeyframe(fragment), false);
   });
 });
 
@@ -799,6 +825,150 @@ describe("findVideoTrack", () => {
   test("answers null for a timescale of zero", () => {
 
     assert.equal(findVideoTrack(makeInitSegment([ AUDIO_TRACK, { handler: HDLR_TYPE_VIDE, id: 1, timescale: 0 } ])), null);
+  });
+});
+
+describe("findKeyframe", () => {
+
+  const NON_SYNC = SAMPLE_FLAG_NON_SYNC;
+  const entries = { includeDuration: true, includeSize: true } as const;
+  const flagged = { ...entries, usePerSampleFlags: true } as const;
+  const tfhd = makeTfhdBox({ trackId: VIDEO.id });
+
+  // Every row reads its answer through here, so each also proves that isKeyframe answers whether findKeyframe found a keyframe, for the same input and track.
+  function keyframeOf(segment: Buffer, track?: FMp4Track): Nullable<number> {
+
+    const index = findKeyframe(segment, track);
+
+    assert.equal(isKeyframe(segment, track), index !== null, "isKeyframe answers whether findKeyframe found a keyframe");
+
+    return index;
+  }
+
+  // A moof of one track fragment holding the boxes given, for a row that lays out runs of its own. The keyframe readers read no mdat, so none follows.
+  function moofOf(children: Buffer[]): Buffer {
+
+    return makeContainer("moof", [makeContainer("traf", children)]);
+  }
+
+  // Samples whose entries state the flags given, in order.
+  function flaggedOf(flags: readonly number[]): TrunSample[] {
+
+    return flags.map((value) => ({ duration: 3000, flags: value, size: 10 }));
+  }
+
+  test("answers zero for a fragment whose first sample states a keyframe", () => {
+
+    const fragment = makeFragment({ samples: framesOf([ 3000, 3000 ], [ 30, 20 ]), secondTrack: AUDIO, trackId: VIDEO.id });
+
+    assert.equal(keyframeOf(fragment), 0);
+    assert.equal(keyframeOf(fragment, VIDEO), 0);
+  });
+
+  test("answers a later sample's index from the flags its entry states, a run's first-sample flags standing in for its first entry's", () => {
+
+    assert.equal(keyframeOf(makeFragment({ run: flagged, samples: flaggedOf([ NON_SYNC, NON_SYNC, 0, NON_SYNC ]), trackId: VIDEO.id })), 2);
+
+    // The first entry's flags mark a keyframe, but the first sample takes the run's first-sample flags, which do not.
+    assert.equal(keyframeOf(makeFragment({ run: { ...flagged, sampleFlagsValue: NON_SYNC, useFirstSampleFlags: true }, samples: flaggedOf([ 0, NON_SYNC, 0 ]),
+      trackId: VIDEO.id })), 2);
+  });
+
+  test("answers a sample's index from the track fragment header's default when its run states no flags for it", () => {
+
+    const samples = framesOf([ 3000, 3000, 3000 ], [ 30, 20, 10 ]);
+    const behindFirst = { ...entries, sampleFlagsValue: NON_SYNC, useFirstSampleFlags: true } as const;
+
+    assert.equal(keyframeOf(makeFragment({ header: { defaultSampleFlags: 0 }, run: behindFirst, samples, trackId: VIDEO.id })), 1);
+    assert.equal(keyframeOf(makeFragment({ header: { defaultSampleFlags: 0 }, run: entries, samples, trackId: VIDEO.id })), 0);
+    assert.equal(keyframeOf(makeFragment({ header: { defaultSampleFlags: NON_SYNC }, run: entries, samples, trackId: VIDEO.id })), null);
+
+    // The default covers only a sample whose flags its run states nowhere: a run of one sample whose first-sample flags mark no keyframe, and entries that state
+    // their own flags, each leave it unread.
+    assert.equal(keyframeOf(makeFragment({ header: { defaultSampleFlags: 0 }, run: behindFirst, samples: samples.slice(0, 1), trackId: VIDEO.id })), null);
+    assert.equal(keyframeOf(makeFragment({ header: { defaultSampleFlags: 0 }, run: flagged, samples: flaggedOf([ NON_SYNC, NON_SYNC ]), trackId: VIDEO.id })), null);
+  });
+
+  test("counts samples across every run of the track fragment, in order", () => {
+
+    const leading = makeTrunBox({ samples: flaggedOf([ NON_SYNC, NON_SYNC ]), usePerSampleFlags: true });
+
+    assert.equal(keyframeOf(moofOf([ tfhd, leading, makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ])), 2);
+    assert.equal(keyframeOf(moofOf([ tfhd, leading, makeTrunBox({ samples: flaggedOf([ NON_SYNC, 0 ]), usePerSampleFlags: true }) ])), 3);
+    assert.equal(keyframeOf(moofOf([ makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }), leading, makeTrunBox({ samples: [ {}, {} ] }) ])), 2);
+  });
+
+  test("answers null when no sample is a keyframe, when the segment has no moof, and when its track fragment holds no run", () => {
+
+    assert.equal(keyframeOf(makeFragment({ run: flagged, samples: flaggedOf([ NON_SYNC, NON_SYNC, NON_SYNC ]), trackId: VIDEO.id })), null);
+    assert.equal(keyframeOf(Buffer.concat([ makeBox("ftyp"), makeBox("mdat") ])), null);
+    assert.equal(keyframeOf(moofOf([tfhd])), null);
+  });
+
+  test("with a track, reads the track fragment that names it, past a first track fragment of audio whose first sample is a sync sample", () => {
+
+    const segment = makeContainer("moof", [ makeContainer("traf", [ makeTfhdBox({ trackId: AUDIO.trackId }), makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ]),
+      makeContainer("traf", [ tfhd, makeTrunBox({ samples: flaggedOf([ NON_SYNC, NON_SYNC, 0 ]), usePerSampleFlags: true }) ]) ]);
+
+    assert.equal(keyframeOf(segment, VIDEO), 2);
+    assert.equal(keyframeOf(segment), 0, "without a track, the first track fragment is read");
+  });
+
+  test("with a track, answers null when no track fragment names it", () => {
+
+    assert.equal(keyframeOf(makeFragment({ samples: framesOf([ 3000, 3000 ], [ 30, 20 ]), secondTrack: AUDIO, trackId: VIDEO.id }), { id: 9, timescale: 90000 }), null);
+  });
+
+  test("answers a keyframe's index ahead of entries the run's box does not hold, and null once the walk reaches one", () => {
+
+    assert.equal(keyframeOf(moofOf([ tfhd, makeTrunBox({ sampleCount: 5, samples: flaggedOf([ NON_SYNC, NON_SYNC, 0 ]), usePerSampleFlags: true }) ])), 2);
+
+    // The box after the run opens with its size, which reads as a keyframe's flags, so a walk reading past the run's box would find one there.
+    assert.equal(keyframeOf(moofOf([ tfhd, makeTrunBox({ sampleCount: 4, samples: flaggedOf([ NON_SYNC, NON_SYNC, NON_SYNC ]), usePerSampleFlags: true }),
+      makeBox("free", Buffer.alloc(4)) ])), null);
+  });
+
+  test("answers zero for sync first-sample flags under a header announcing a default it does not hold, and reads no default from that header", () => {
+
+    // The header announces default sample flags and ends at its track_ID. The run after it opens with its size, which reads as a keyframe's flags, so a read of the
+    // default past the header's end would find one.
+    const short = makeBox("tfhd", Buffer.from([ 0x00, 0x02, 0x00, 0x20, 0x00, 0x00, 0x00, VIDEO.id ]));
+
+    assert.equal(keyframeOf(moofOf([ short, makeTrunBox({ samples: [ {}, {} ], useFirstSampleFlags: true }) ])), 0);
+    assert.equal(keyframeOf(moofOf([ short, makeTrunBox({ sampleFlagsValue: NON_SYNC, samples: [ {}, {}, {} ], useFirstSampleFlags: true }) ])), null);
+  });
+
+  test("answers null without throwing for a run stating no flags under a header that holds nothing past its box header and ends the buffer", () => {
+
+    // The header follows the run and holds neither flags nor a track_ID, and nothing follows it, so a read of its flags would run past the buffer.
+    const segment = moofOf([ makeTrunBox({ samples: [ {}, {} ] }), makeBox("tfhd") ]);
+
+    assert.equal(segment.length, present(findBox(segment, "moof"), "the moof").size, "the moof ends the buffer");
+    assert.equal(keyframeOf(segment), null);
+  });
+
+  test("answers a run that declares the largest count its field holds and lists no entry fields in one step", () => {
+
+    // A walk of one sample at a time would take billions of steps to answer these.
+    const huge = makeTrunBox({ sampleCount: 0xFFFFFFFF, sampleFlagsValue: NON_SYNC, samples: [], useFirstSampleFlags: true });
+
+    assert.equal(keyframeOf(moofOf([ makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }), huge ])), 1);
+    assert.equal(keyframeOf(moofOf([ makeTfhdBox({ defaultSampleFlags: NON_SYNC, trackId: VIDEO.id }), huge,
+      makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ])), 0xFFFFFFFF);
+  });
+
+  test("adds nothing to the index for a run that declares no samples, and finds no keyframe in one past the first run", () => {
+
+    const later = makeTrunBox({ samples: flaggedOf([ NON_SYNC, 0 ]), usePerSampleFlags: true });
+
+    assert.equal(keyframeOf(moofOf([ tfhd, makeTrunBox({ samples: [] }), later ])), 1);
+    assert.equal(keyframeOf(moofOf([ tfhd, makeTrunBox({ sampleFlagsValue: NON_SYNC, samples: [], useFirstSampleFlags: true }),
+      makeTrunBox({ samples: [{}], useFirstSampleFlags: true }) ])), 0);
+
+    // A default covers declared samples alone, and a later run of no samples holds none to be a keyframe, whatever its first-sample flags say.
+    assert.equal(keyframeOf(moofOf([ makeTfhdBox({ defaultSampleFlags: 0, trackId: VIDEO.id }), makeTrunBox({ samples: [] }) ])), null);
+    assert.equal(keyframeOf(moofOf([ tfhd, makeTrunBox({ samples: flaggedOf([NON_SYNC]), usePerSampleFlags: true }),
+      makeTrunBox({ samples: [], useFirstSampleFlags: true }) ])), null);
   });
 });
 

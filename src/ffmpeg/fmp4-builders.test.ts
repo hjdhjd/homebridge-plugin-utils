@@ -421,6 +421,17 @@ describe("makeFragment", () => {
     assert.equal(expectAt(bytesOfType(boxes, "mdat"), 0, "the mdat").length, BOX_HEADER_SIZE + 30);
   });
 
+  test("writes the first-sample flags a run picks, and a keyframe's when it picks none", () => {
+
+    const samples = [ { duration: 3000, size: 10 }, { duration: 3000, size: 20 } ];
+    const run = { includeDuration: true, includeSize: true, useFirstSampleFlags: true } as const;
+    const runOf = (fragment: Buffer): Buffer => expectAt(bytesOfType(boxesOf(fragment), "trun"), 0, "the run");
+
+    // Box offsets within the run: 16 (data_offset) -> 20 (first_sample_flags).
+    assert.equal(runOf(makeFragment({ run: { ...run, sampleFlagsValue: SAMPLE_FLAG_NON_SYNC }, samples, trackId: 1 })).readUInt32BE(20), SAMPLE_FLAG_NON_SYNC);
+    assert.equal(runOf(makeFragment({ run, samples, trackId: 1 })).readUInt32BE(20), 0);
+  });
+
   test("lays out samples the frame reader cuts at the sizes it was given", () => {
 
     const sizes = [ 10, 20, 30 ];

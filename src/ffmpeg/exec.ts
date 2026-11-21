@@ -18,12 +18,16 @@
  *
  * Both patterns converge on {@link FfmpegExec.result}, which bundles the collected stdout, exit code, exit signal, and accumulated stderr log.
  *
+ * A consumer that wants its one-shot runs under test constructs them through {@link ExecProcessFactory} and reads them through {@link ExecProcess}, the exec
+ * dependency-inversion boundary, whose production factory is {@link execProcessFactory} and whose double ships on the testing entry point.
+ *
  * @module
  */
 import type { FfmpegOptions } from "./options.ts";
 import { FfmpegProcess } from "./process.ts";
 import type { FfmpegProcessInit } from "./process.ts";
 import type { Nullable } from "../util.ts";
+import type { Writable } from "node:stream";
 import { buffer } from "node:stream/consumers";
 
 /**
@@ -47,8 +51,7 @@ export interface FfmpegExecInit extends FfmpegProcessInit {
  *
  * @property exitCode    - The process exit code, or `null` when the process was terminated by a signal.
  * @property exitSignal  - The signal name (e.g., `"SIGKILL"`) that terminated the process, or `null` when the process exited normally.
- * @property stderrLog   - A snapshot of the accumulated stderr lines at the moment `exited` resolved. Readonly because {@link FfmpegProcess.stderrLog} itself is
- *                         readonly and this bundle is a pass-through view rather than an independent copy.
+ * @property stderrLog   - The process's own readonly array of the stderr lines it accumulated, complete because the child has exited.
  * @property stdout      - The complete stdout bytes collected over the lifetime of the process.
  *
  * @category FFmpeg
@@ -62,6 +65,66 @@ export interface ExecResult {
 }
 
 /**
+ * The surface a one-shot consumer reads off an FFmpeg run, the contract each usage shape converges on. This is the product half of the exec dependency-inversion
+ * boundary: a class that runs FFmpeg once depends on this narrow interface rather than the concrete {@link FfmpegExec}, so a test can substitute a double without
+ * spawning FFmpeg. It is an interface rather than the class because the class's private fields make its type one that only a real subclass, which spawns a child, can
+ * satisfy. The interface is type-only, so importing it costs a consumer nothing at runtime.
+ *
+ * {@link FfmpegExec} satisfies it with its own and inherited members and carries only an `implements` annotation. A consumer feeds `stdin`, or hands a canned buffer
+ * in its init, reads the run through `result()`, and ends it through the signal it passed in its init.
+ *
+ * @see FfmpegExec
+ * @see ExecProcessFactory
+ *
+ * @category FFmpeg
+ */
+export interface ExecProcess {
+
+  /**
+   * Resolves with the run's exit code, exit signal, stdout bytes and stderr lines once the child has exited, whatever its exit code, and rejects with the lifetime's
+   * reason only when the child never started.
+   *
+   * @returns A promise resolving to the run's {@link ExecResult}.
+   */
+  result(): Promise<ExecResult>;
+
+  /**
+   * The composed abort signal representing the run's lifetime. Aborts exactly once; the reason on `signal.reason` names the cause.
+   */
+  readonly signal: AbortSignal;
+
+  /**
+   * Writable standard input. A canned `stdin` buffer in the init is written to it and the stream ended on the next microtask, unless the lifetime has ended by then;
+   * otherwise the consumer writes and ends it.
+   */
+  readonly stdin: Writable;
+}
+
+/**
+ * The creational half of the exec dependency-inversion boundary: build an {@link ExecProcess} from the shared options and an optional init. A consumer holds this
+ * factory typed as the abstraction and constructs through it, so a test can substitute a factory that returns a double, and a suite reads the command the consumer
+ * assembled from the init it passed. The production factory is {@link execProcessFactory}, whose `create` is exactly the {@link FfmpegExec} constructor call, so
+ * routing construction through this boundary changes no behavior.
+ *
+ * @see execProcessFactory
+ * @see ExecProcess
+ *
+ * @category FFmpeg
+ */
+export interface ExecProcessFactory {
+
+  /**
+   * Construct and spawn a one-shot FFmpeg run for the supplied options and init.
+   *
+   * @param options - Shared {@link FfmpegOptions} configuration (codec support, logger, debug flag, name).
+   * @param init    - Optional init options. See {@link FfmpegExecInit}.
+   *
+   * @returns A new {@link ExecProcess}.
+   */
+  create(options: FfmpegOptions, init?: FfmpegExecInit): ExecProcess;
+}
+
+/**
  * One-shot FFmpeg execution. Extends {@link FfmpegProcess} directly, inheriting its spawn-on-construction and signal-driven teardown semantics and adding the small
  * surface that the "feed bytes, read bytes, get exit status" pattern needs.
  *
@@ -69,6 +132,8 @@ export interface ExecResult {
  * {@link FfmpegExec.result} (the bundled result with exit context). The narrowing is a type-level contract; pure-JS callers that reach past the types still see the
  * underlying Readable, but a concurrent external reader would race with our internal collector - "do not do that" is the appropriate enforcement bar for a TypeScript
  * library.
+ *
+ * The class satisfies {@link ExecProcess}, and a consumer that substitutes it under test constructs it through an {@link ExecProcessFactory}.
  *
  * @example
  *
@@ -95,7 +160,7 @@ export interface ExecResult {
  *
  * @category FFmpeg
  */
-export class FfmpegExec extends FfmpegProcess {
+export class FfmpegExec extends FfmpegProcess implements ExecProcess {
 
   /**
    * stdout is consumed internally by the collector loop. The public type is narrowed to `never` so TypeScript callers cannot accidentally attach a second reader.
@@ -161,8 +226,8 @@ export class FfmpegExec extends FfmpegProcess {
   /**
    * Await the process to completion and return the bundled result.
    *
-   * Resolves once both the stdout collector and the base class's `exited` promise settle. Rejects with the same reason `exited` would reject with (today, only when
-   * the child never spawned - e.g., ENOENT). On any normal exit, including non-zero exit codes, this method resolves; callers distinguish outcomes by inspecting
+   * Resolves once the stdout collector and the base class's `exited` promise have settled. Rejects with the reason `exited` rejects with, which it does only when
+   * the child never spawned (e.g., ENOENT). On any normal exit, including non-zero exit codes, this method resolves; callers distinguish outcomes by inspecting
    * `exitCode` and `exitSignal` in the result, or the derived `hasError` getter on the instance.
    *
    * @returns A promise resolving to an {@link ExecResult} bundling stdout, exit code, exit signal, and the accumulated stderr log.
@@ -190,3 +255,16 @@ export class FfmpegExec extends FfmpegProcess {
     }
   }
 }
+
+/**
+ * The production {@link ExecProcessFactory}: builds the concrete FFmpeg-backed one-shot run. A consumer holds this typed as the abstraction; a test substitutes a fake
+ * factory. `create` is exactly the {@link FfmpegExec} constructor call, so wiring construction through this boundary changes no behavior.
+ *
+ * @see ExecProcessFactory
+ *
+ * @category FFmpeg
+ */
+export const execProcessFactory: ExecProcessFactory = {
+
+  create: (options: FfmpegOptions, init?: FfmpegExecInit): ExecProcess => new FfmpegExec(options, init)
+};

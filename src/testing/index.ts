@@ -49,6 +49,7 @@ import { yieldMacrotask } from "../clock.ts";
  * it beside the text it is built on is production code whose other exports are not test support.
  */
 export * from "../clock-double.ts";
+export * from "../ffmpeg/exec-process-double.ts";
 export * from "../ffmpeg/fmp4-builders.ts";
 export * from "../ffmpeg/livestream-process-double.ts";
 export { hardwareDecoderRefusalLine } from "../ffmpeg/process-ending.ts";

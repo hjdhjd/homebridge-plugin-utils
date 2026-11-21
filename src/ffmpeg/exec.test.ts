@@ -1,27 +1,30 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/exec.test.ts: Unit tests for FfmpegExec - canned stdin, stdout collection, bundled result, abort cancellation, and an ending callback.
+ * ffmpeg/exec.test.ts: Unit tests for FfmpegExec - canned stdin, stdout collection, bundled result, abort cancellation, and an ending callback - and the parity rows
+ * that run each ending a one-shot consumer meets, the ending callbacks and the hardware decoder's refusal among them, on the real run and on TestExecProcess alike.
  */
-import type { FfmpegEnding, FfmpegEndingVerdict } from "./process.ts";
-import { capturingLog, linesAt, silentLog } from "../testing/index.ts";
+import type { ExecProcess, ExecResult, FfmpegExecInit } from "./exec.ts";
+import type { FfmpegEnding, FfmpegEndingVerdict, FfmpegProcessExitInfo } from "./process.ts";
+import { FfmpegExec, execProcessFactory } from "./exec.ts";
+import { HbpuAbortError, onAbort } from "../util.ts";
+import { TestExecProcessFactory, capturingLog, expectAt, hardwareDecoderRefusalLine, linesAt, silentLog } from "../testing/index.ts";
+import { assertEachSubject, endingSpies, lifetimeState, settlement } from "./process-parity.helpers.ts";
 import { describe, mock, test } from "node:test";
-import type { ExecResult } from "./exec.ts";
-import { FfmpegExec } from "./exec.ts";
 import { FfmpegOptions } from "./options.ts";
-import { HbpuAbortError } from "../util.ts";
 import type { HomebridgePluginLogging } from "../util.ts";
 import type { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { makeCodecs } from "./codecs.helpers.ts";
 
-// Construct a real `FfmpegOptions`. `ffmpegExec` resolves to the running Node binary so every test spawns Node with an inline `-e` script; the script determines
-// per-test behavior. Hardware flags stay false because FfmpegExec doesn't read them and software-only configs exercise the spawn plumbing this suite covers.
-function makeOptions(logger: HomebridgePluginLogging = silentLog()): FfmpegOptions {
+// Construct a real `FfmpegOptions`. `ffmpegExec` defaults to the running Node binary so every test spawns Node with an inline `-e` script; the script determines
+// per-test behavior, and a row whose spawn must fail names a binary that does not exist. Hardware flags stay false because FfmpegExec doesn't read them and
+// software-only configs exercise the spawn plumbing this suite covers.
+function makeOptions(logger: HomebridgePluginLogging = silentLog(), ffmpegExec = process.execPath): FfmpegOptions {
 
   return new FfmpegOptions({
 
-    codecSupport: makeCodecs({ ffmpegExec: process.execPath, ffmpegVersion: "test" }),
+    codecSupport: makeCodecs({ ffmpegExec, ffmpegVersion: "test" }),
     debug: false,
     hardwareDecoding: false,
     hardwareTranscoding: false,
@@ -225,5 +228,295 @@ describe("FfmpegExec - stdoutBuffer abnormal-termination contract", () => {
     assert.equal(collected.length, 0,
       "stdoutBuffer must resolve with an empty buffer when the underlying stdout is destroyed with an error; " +
       "the catch branch in #collectStdout returns Buffer.alloc(0) on stream error");
+  });
+});
+
+/* The point a parity row starts from, each a child the real run spawns: `silent` a child that runs and writes nothing until it is killed, `spawnFails` a run whose
+ * binary does not exist, `stderrThenExitsNonzero` a child that writes stderr lines and then exits with status 3, and `stdoutThenExits` one that writes to stdout and
+ * then exits with status 0. The refusal stages write the hardware decoder's refusal and exit a moment later, so the line is read before the exit:
+ * `refusalOnGpuThenExitsNonzero` asks for its decoded frames on the GPU and exits nonzero, `refusalThenExitsNonzero` takes its frames in system memory and exits
+ * nonzero, and `refusalThenExitsZero` exits cleanly.
+ */
+type ExecStage = "refusalOnGpuThenExitsNonzero" | "refusalThenExitsNonzero" | "refusalThenExitsZero" | "silent" | "spawnFails" | "stderrThenExitsNonzero" |
+  "stdoutThenExits";
+
+// The ending callbacks a parity row hands a subject in its init.
+type EndingCallbacks = Pick<FfmpegExecInit, "onFailed" | "onTimeout">;
+
+// Bring a subject to a stage, its lifetime composed with `signal`, its init carrying `callbacks`, and built over `options` when a row hands its own.
+type StartExec = (stage: ExecStage, signal: AbortSignal, callbacks: EndingCallbacks, options?: FfmpegOptions) => Promise<ExecProcess>;
+
+// What the stdoutThenExits child writes to stdout.
+const STDOUT_BYTES = "invented-one-shot-output";
+
+// What the stderrThenExitsNonzero child writes to stderr, a line at a time, before it exits.
+const STDERR_LINES = [ "An invented stderr line ahead of a failed exit.", "A second invented stderr line." ];
+
+// A binary path nothing lives at, for the spawn that fails.
+const MISSING_FFMPEG = "/nonexistent-hbpu-exec-parity/ffmpeg";
+
+// The exit a child killed by its run's abort reports.
+const KILLED: FfmpegProcessExitInfo = { exitCode: null, exitSignal: "SIGKILL" };
+
+// A child that writes the hardware decoder's refusal and exits with `exitCode` a moment later, the delay letting the run read the line before the exit ends it.
+function refusalThenExit(exitCode: number): string[] {
+
+  return [ "-e", "process.stderr.write(" + JSON.stringify(hardwareDecoderRefusalLine + "\n") + "); setTimeout(() => process.exit(" + exitCode.toString() + "), 10);" ];
+}
+
+// The stand-in script that brings the real run to a stage. The spawn that fails runs nothing, so it takes no script.
+function execStageScript(stage: ExecStage): string[] {
+
+  switch(stage) {
+
+    case "refusalOnGpuThenExitsNonzero":
+
+      // Node takes everything after `--` as positional argv, so the child runs its script while each subject sees the GPU-frames argument in its args.
+      return [ ...refusalThenExit(3), "--", "-hwaccel_output_format", "videotoolbox_vld" ];
+
+    case "refusalThenExitsNonzero":
+
+      return refusalThenExit(3);
+
+    case "refusalThenExitsZero":
+
+      return refusalThenExit(0);
+
+    case "silent":
+
+      return [ "-e", "setInterval(() => {}, 100000);" ];
+
+    case "spawnFails":
+
+      return [];
+
+    case "stderrThenExitsNonzero":
+
+      return [ "-e", "process.stderr.write(" + JSON.stringify(STDERR_LINES.join("\n") + "\n") + ", () => process.exit(3));" ];
+
+    case "stdoutThenExits":
+
+      return [ "-e", "process.stdout.write(" + JSON.stringify(STDOUT_BYTES) + ", () => process.exit(0));" ];
+  }
+}
+
+// The real subject: a run the production factory built, running the stage's script or pointed at a binary that does not exist, over the options the row handed or
+// its own.
+async function startRealExec(stage: ExecStage, signal: AbortSignal, callbacks: EndingCallbacks,
+  options = makeOptions(silentLog(), (stage === "spawnFails") ? MISSING_FFMPEG : process.execPath)): Promise<ExecProcess> {
+
+  const proc = execProcessFactory.create(options, { ...callbacks, args: execStageScript(stage), signal });
+
+  assert.ok(proc instanceof FfmpegExec, "the production factory must build an FfmpegExec");
+
+  return proc;
+}
+
+/* The double subject: a run TestExecProcessFactory built over the row's signal, callbacks and options, or its own options, driven to the stage the real child
+ * reaches on its own. A real child's own events arrive on a later turn than the row's start, so a stage's output, stderr lines, exit or spawn failure are pulled a
+ * turn after the start. A real child the row's abort kills exits a turn later, reporting the kill, so the exit lever is pulled then with the exit a killed child
+ * reports, unless the stage has already ended the child.
+ */
+async function startDoubleExec(stage: ExecStage, signal: AbortSignal, callbacks: EndingCallbacks, options = makeOptions()): Promise<ExecProcess> {
+
+  const factory = new TestExecProcessFactory();
+
+  factory.create(options, { ...callbacks, args: execStageScript(stage), signal });
+
+  const proc = expectAt(factory.createCalls, 0, "the run the factory built").process;
+  let ended = false;
+
+  // The child ends on its own a turn after the start, as a real child does.
+  const endsOnItsOwn = (lever: () => void): void => {
+
+    ended = true;
+    setImmediate(lever);
+  };
+
+  onAbort(signal, () => setImmediate(() => {
+
+    if(!ended) {
+
+      ended = true;
+      proc.exit(KILLED);
+    }
+  }));
+
+  switch(stage) {
+
+    case "refusalOnGpuThenExitsNonzero":
+    case "refusalThenExitsNonzero":
+    case "refusalThenExitsZero":
+
+      // The real child's refusal line is in its log, and has marked its options, by the time its exit ends it.
+      endsOnItsOwn(() => {
+
+        proc.stderrLog = [hardwareDecoderRefusalLine];
+        proc.exit({ exitCode: (stage === "refusalThenExitsZero") ? 0 : 3, exitSignal: null });
+      });
+
+      break;
+
+    case "silent":
+
+      break;
+
+    case "spawnFails":
+
+      endsOnItsOwn(() => proc.failSpawn(Object.assign(new Error("spawn " + MISSING_FFMPEG + " ENOENT"), { code: "ENOENT" })));
+
+      break;
+
+    case "stderrThenExitsNonzero":
+
+      // Every line the real child wrote is in its log by the time its exit ends it.
+      endsOnItsOwn(() => {
+
+        proc.stderrLog = STDERR_LINES;
+        proc.exit({ exitCode: 3, exitSignal: null });
+      });
+
+      break;
+
+    case "stdoutThenExits":
+
+      endsOnItsOwn(() => {
+
+        proc.writeStdout(Buffer.from(STDOUT_BYTES));
+        proc.exit({ exitCode: 0, exitSignal: null });
+      });
+
+      break;
+  }
+
+  return proc;
+}
+
+/* Run a parity row's body over a subject brought to `stage`, and reap the subject once the body is done, whatever it did: the row's signal ends a child still
+ * running and its result is awaited, so no real child outlives its row. A row hands the ending callbacks its subject's init carries, and a row that reads what a
+ * subject marks hands the options it is built over, a fresh object for each subject.
+ */
+async function withRun<T>(start: StartExec, stage: ExecStage, body: (proc: ExecProcess, controller: AbortController) => Promise<T>,
+  { callbacks = {}, options }: { callbacks?: EndingCallbacks; options?: FfmpegOptions } = {}): Promise<T> {
+
+  const controller = new AbortController();
+  const proc = await start(stage, controller.signal, callbacks, options);
+
+  try {
+
+    return await body(proc, controller);
+  } finally {
+
+    controller.abort(new HbpuAbortError("shutdown"));
+
+    // A spawn that failed rejects result(), and reaping only waits for it to settle.
+    await proc.result().catch(() => undefined);
+  }
+}
+
+// Run one exec scenario against the double and against the real run through the shared parity runner, over this suite's starters.
+async function assertEachExec<T>(expected: T, scenario: (start: StartExec) => Promise<T>): Promise<void> {
+
+  await assertEachSubject({ double: startDoubleExec, real: startRealExec }, expected, scenario);
+}
+
+describe("ExecProcess - the real run and TestExecProcess agree on how a run ends", () => {
+
+  test("a clean exit resolves result() with the stdout the child wrote and ends the lifetime closed", async () => {
+
+    await assertEachExec({ exitCode: 0, exitSignal: null, lifetime: "closed", stdout: STDOUT_BYTES }, async (start) => withRun(start, "stdoutThenExits",
+      async (proc) => {
+
+        const { exitCode, exitSignal, stdout } = await proc.result();
+
+        return { exitCode, exitSignal, lifetime: lifetimeState(proc.signal), stdout: stdout.toString() };
+      }));
+  });
+
+  test("a nonzero exit resolves result() with its code, ends the lifetime failed and asks onFailed once with the stderr lines", async () => {
+
+    await assertEachExec({ exitCode: 3, lifetime: "failed", onFailed: [STDERR_LINES], onTimeout: 0 }, async (start) => {
+
+      const spies = endingSpies();
+
+      return withRun(start, "stderrThenExitsNonzero", async (proc) => {
+
+        const { exitCode } = await proc.result();
+
+        return { exitCode, lifetime: lifetimeState(proc.signal), onFailed: spies.onFailed.mock.calls.map((call) => [...call.arguments[0].stderrLog]),
+          onTimeout: spies.onTimeout.mock.callCount() };
+      }, { callbacks: spies });
+    });
+  });
+
+  test("a spawn that fails rejects result() as failed and asks onFailed once", async () => {
+
+    await assertEachExec({ onFailed: 1, onTimeout: 0, result: "rejected failed" }, async (start) => {
+
+      const spies = endingSpies();
+
+      return withRun(start, "spawnFails", async (proc) => {
+
+        const result = await settlement(proc.result());
+
+        return { onFailed: spies.onFailed.mock.callCount(), onTimeout: spies.onTimeout.mock.callCount(), result };
+      }, { callbacks: spies });
+    });
+  });
+
+  test("a silent child under the parent's timeout abort asks onTimeout once and resolves result() with the killed exit's code and signal", async () => {
+
+    await assertEachExec({ exit: KILLED, lifetime: "timeout", onFailed: 0, onTimeout: 1 }, async (start) => {
+
+      const spies = endingSpies();
+
+      return withRun(start, "silent", async (proc, controller) => {
+
+        controller.abort(new HbpuAbortError("timeout"));
+
+        // The reading leaves out the result's stderrLog and stdout, because what a killed child has written by the time of the kill is no part of the contract a
+        // row can hold.
+        const { exitCode, exitSignal } = await proc.result();
+
+        return { exit: { exitCode, exitSignal }, lifetime: lifetimeState(proc.signal), onFailed: spies.onFailed.mock.callCount(),
+          onTimeout: spies.onTimeout.mock.callCount() };
+      }, { callbacks: spies });
+    });
+  });
+});
+
+describe("ExecProcess - the real run and TestExecProcess agree on the hardware decoder's refusal", () => {
+
+  // Each subject is built over a fresh options object of its own, so each reading of the mark is that subject's own, and every reading is taken once result()
+  // resolves, by which time each subject has marked its options and asked.
+
+  // A refusal row's reading: how often each callback was asked, the lifetime and whether the subject's own options were marked.
+  async function refusalReading(start: StartExec, stage: ExecStage): Promise<{ lifetime: string; marked: boolean; onFailed: number; onTimeout: number }> {
+
+    const spies = endingSpies();
+    const options = makeOptions();
+
+    return withRun(start, stage, async (proc) => {
+
+      await proc.result();
+
+      return { lifetime: lifetimeState(proc.signal), marked: options.hardwareDecoderRefused, onFailed: spies.onFailed.mock.callCount(),
+        onTimeout: spies.onTimeout.mock.callCount() };
+    }, { callbacks: spies, options });
+  }
+
+  test("a failed child that reports the refusal with its frames asked on the GPU asks no callback and leaves its options marked", async () => {
+
+    await assertEachExec({ lifetime: "failed", marked: true, onFailed: 0, onTimeout: 0 }, async (start) => refusalReading(start, "refusalOnGpuThenExitsNonzero"));
+  });
+
+  test("a failed child that reports the refusal with its frames in system memory asks onFailed once and leaves its options marked", async () => {
+
+    await assertEachExec({ lifetime: "failed", marked: true, onFailed: 1, onTimeout: 0 }, async (start) => refusalReading(start, "refusalThenExitsNonzero"));
+  });
+
+  test("a child that reports the refusal and exits cleanly asks nothing and leaves its options marked", async () => {
+
+    await assertEachExec({ lifetime: "closed", marked: true, onFailed: 0, onTimeout: 0 }, async (start) => refusalReading(start, "refusalThenExitsZero"));
   });
 });

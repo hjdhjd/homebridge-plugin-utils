@@ -4,9 +4,11 @@
  * production code per the testing convention - every branch, every error path, every flag combination - because the suites that consume these builders (parser,
  * assembler, fmp4 predicate tests) silently lose their meaning if the builders themselves drift from the wire layouts they encode.
  */
-import { HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC } from "./fmp4.ts";
-import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeHdlrBox, makeTrunBox } from "./fmp4-builders.ts";
+import { BOX_HEADER_SIZE, HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, findBox, findVideoTrack, hasAudioTrack, splitVideoFrames } from "./fmp4.ts";
+import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeFragment, makeHdlrBox, makeInitSegment, makeMdhdBox, makeTfhdBox, makeTkhdBox,
+  makeTrunBox } from "./fmp4-builders.ts";
 import { describe, test } from "node:test";
+import { expectAt, present } from "../testing/index.ts";
 import assert from "node:assert/strict";
 
 describe("makeBox", () => {
@@ -204,5 +206,231 @@ describe("makeTrunBox", () => {
     // are set in the header (those slots being missing while the flags are present is a malformed-trun shape - tests that exercise that combination must do so
     // through this helper to keep the construction in one place).
     assert.equal(trun.length, 24, "first_sample_flags path must not emit per-sample slots regardless of includeDuration/includeSize");
+  });
+});
+
+describe("makeTrunBox runs of samples", () => {
+
+  test("writes one entry per sample holding the fields its flags announce, in the spec's order", () => {
+
+    const trun = makeTrunBox({ includeCompositionOffset: true, includeDuration: true, includeSize: true, samples: [
+      { compositionOffset: 6000, duration: 3000, flags: 0x02000000, size: 50 }, { compositionOffset: -3000, duration: 3003, flags: 0x01010000, size: 22 } ],
+    usePerSampleFlags: true });
+
+    // Box offsets: 8 (version/flags) -> 12 (sample_count) -> 16 (data_offset) -> 20 (the first entry), sixteen bytes to an entry.
+    assert.equal(trun.readUInt32BE(8) & 0x00FFFFFF, 0x000F01, "data_offset, duration, size, flags and composition offset flag bits");
+    assert.equal(trun.readUInt32BE(12), 2, "sample_count must be the number of samples");
+    assert.deepEqual([ trun.readUInt32BE(20), trun.readUInt32BE(24), trun.readUInt32BE(28), trun.readInt32BE(32) ], [ 3000, 50, 0x02000000, 6000 ]);
+    assert.deepEqual([ trun.readUInt32BE(36), trun.readUInt32BE(40), trun.readUInt32BE(44), trun.readInt32BE(48) ], [ 3003, 22, 0x01010000, -3000 ],
+      "a negative composition offset reads back signed");
+    assert.equal(trun.length, 8 + 12 + (2 * 16));
+  });
+
+  test("writes only the fields the run carries, a field a sample omits as zero, and nothing for a run that carries none", () => {
+
+    const sized = makeTrunBox({ includeSize: true, samples: [ { size: 9 }, { duration: 77 } ] });
+
+    assert.deepEqual([ sized.readUInt32BE(20), sized.readUInt32BE(24) ], [ 9, 0 ], "a size per entry, the duration left out");
+    assert.equal(sized.length, 8 + 12 + 8);
+
+    const bare = makeTrunBox({ samples: [ {}, {}, {} ] });
+
+    assert.equal(bare.readUInt32BE(12), 3, "each sample is declared");
+    assert.equal(bare.length, 8 + 12, "and no entry bytes at all");
+  });
+
+  test("declares the sample count it is given, which may exceed the entries it writes", () => {
+
+    const trun = makeTrunBox({ includeSize: true, sampleCount: 5, samples: [ { size: 1 }, { size: 2 } ] });
+
+    assert.equal(trun.readUInt32BE(12), 5);
+    assert.equal(trun.length, 8 + 12 + 8, "only the entries given are written");
+    assert.equal(makeTrunBox({ samples: [] }).readUInt32BE(12), 0, "an empty run declares no samples");
+  });
+
+  test("writes the data offset signed, and leaves out the field and its flag when asked", () => {
+
+    assert.equal(makeTrunBox({ dataOffset: -8, samples: [{}] }).readInt32BE(16), -8);
+    assert.equal(makeTrunBox({ dataOffset: 120 }).readInt32BE(16), 120, "the single-sample run takes the data offset too");
+
+    const bare = makeTrunBox({ includeDataOffset: false, sampleFlagsValue: 0x00010000, useFirstSampleFlags: true });
+
+    assert.equal(bare.readUInt32BE(8) & 0x00FFFFFF, 0x000004, "the data_offset flag is clear");
+    assert.equal(bare.readUInt32BE(16), 0x00010000, "first_sample_flags follows the sample count directly");
+  });
+
+  test("sets the composition offset flag bit alone without samples", () => {
+
+    const trun = makeTrunBox({ includeCompositionOffset: true });
+
+    assert.equal(trun.readUInt32BE(8) & 0x00FFFFFF, 0x000801);
+    assert.equal(trun.length, 8 + 12);
+  });
+});
+
+describe("makeTfhdBox", () => {
+
+  test("names the track and sets default-base-is-moof, with no optional field by default", () => {
+
+    const tfhd = makeTfhdBox({ trackId: 3 });
+
+    assert.equal(tfhd.subarray(4, 8).toString("ascii"), "tfhd");
+    assert.equal(tfhd.readUInt32BE(8), 0x020000, "version 0 and the default-base-is-moof flag alone");
+    assert.equal(tfhd.readUInt32BE(12), 3);
+    assert.equal(tfhd.length, 16);
+  });
+
+  test("writes each optional field it is given in the spec's order, setting its flag", () => {
+
+    const tfhd = makeTfhdBox({ baseDataOffset: 0x123456789, defaultSampleDuration: 3000, defaultSampleFlags: 0x01010000, defaultSampleSize: 77,
+      sampleDescriptionIndex: 1, trackId: 1 });
+
+    // Box offsets: 8 (version/flags) -> 12 (track_ID) -> 16 (base_data_offset, a 64-bit field) -> 24 (index) -> 28 (duration) -> 32 (size) -> 36 (flags).
+    assert.equal(tfhd.readUInt32BE(8) & 0x00FFFFFF, 0x02003B);
+    assert.equal(tfhd.readBigUInt64BE(16), 0x123456789n);
+    assert.deepEqual([ tfhd.readUInt32BE(24), tfhd.readUInt32BE(28), tfhd.readUInt32BE(32), tfhd.readUInt32BE(36) ], [ 1, 3000, 77, 0x01010000 ]);
+    assert.equal(tfhd.length, 40);
+
+    // A field left out moves the ones after it up: the default size follows the track_ID directly.
+    const sized = makeTfhdBox({ defaultSampleSize: 77, trackId: 1 });
+
+    assert.equal(sized.readUInt32BE(8) & 0x00FFFFFF, 0x020010);
+    assert.equal(sized.readUInt32BE(16), 77);
+  });
+
+  test("leaves default-base-is-moof clear when asked", () => {
+
+    assert.equal(makeTfhdBox({ defaultBaseIsMoof: false, trackId: 1 }).readUInt32BE(8), 0);
+  });
+});
+
+describe("makeTkhdBox and makeMdhdBox", () => {
+
+  test("write a version 0 tkhd with its track_ID at byte 20, and a version 1 tkhd with it at byte 28", () => {
+
+    const v0 = makeTkhdBox({ trackId: 5 });
+    const v1 = makeTkhdBox({ trackId: 6, version: 1 });
+
+    assert.equal(v0.subarray(4, 8).toString("ascii"), "tkhd");
+    assert.deepEqual([ v0.length, v0.readUInt8(8), v0.readUInt32BE(20) ], [ 92, 0, 5 ]);
+    assert.deepEqual([ v1.length, v1.readUInt8(8), v1.readUInt32BE(28) ], [ 104, 1, 6 ]);
+  });
+
+  test("write a version 0 mdhd with its timescale at byte 20, and a version 1 mdhd with it at byte 28", () => {
+
+    const v0 = makeMdhdBox({ timescale: 90000 });
+    const v1 = makeMdhdBox({ timescale: 15360, version: 1 });
+
+    assert.equal(v0.subarray(4, 8).toString("ascii"), "mdhd");
+    assert.deepEqual([ v0.length, v0.readUInt8(8), v0.readUInt32BE(20) ], [ 32, 0, 90000 ]);
+    assert.deepEqual([ v1.length, v1.readUInt8(8), v1.readUInt32BE(28) ], [ 44, 1, 15360 ]);
+  });
+});
+
+// The boxes the composers nest others in.
+const CONTAINERS = [ "mdia", "moof", "moov", "traf", "trak" ];
+
+// Every box in `buffer` in the order it is written, each with its path through the containers above it, so a row reads a composed layout whole.
+function boxesOf(buffer: Buffer, parent = ""): { bytes: Buffer; path: string }[] {
+
+  const boxes: { bytes: Buffer; path: string }[] = [];
+
+  for(let offset = 0; offset < buffer.length; offset += buffer.readUInt32BE(offset)) {
+
+    const bytes = buffer.subarray(offset, offset + buffer.readUInt32BE(offset));
+    const type = bytes.toString("ascii", 4, 8);
+
+    boxes.push({ bytes, path: parent + type });
+
+    if(CONTAINERS.includes(type)) {
+
+      boxes.push(...boxesOf(bytes.subarray(BOX_HEADER_SIZE), parent + type + "/"));
+    }
+  }
+
+  return boxes;
+}
+
+// The bytes of every box in `boxes` whose type is `type`, in order.
+function bytesOfType(boxes: readonly { bytes: Buffer; path: string }[], type: string): Buffer[] {
+
+  return boxes.filter(({ path }) => path.endsWith(type)).map(({ bytes }) => bytes);
+}
+
+describe("makeInitSegment", () => {
+
+  test("writes an ftyp, then a moov holding an mvhd and a trak for each track in order, each holding its tkhd and an mdia with its mdhd and hdlr", () => {
+
+    // Each box takes its own version, so a track whose tkhd and mdhd differ is written as given.
+    const boxes = boxesOf(makeInitSegment([ { handler: HDLR_TYPE_VIDE, id: 1, timescale: 90000, tkhdVersion: 1 },
+      { handler: HDLR_TYPE_SOUN, id: 2, mdhdVersion: 1, timescale: 48000 } ]));
+    const trak = [ "moov/trak", "moov/trak/tkhd", "moov/trak/mdia", "moov/trak/mdia/mdhd", "moov/trak/mdia/hdlr" ];
+
+    assert.deepEqual(boxes.map(({ path }) => path), [ "ftyp", "moov", "moov/mvhd", ...trak, ...trak ]);
+
+    // Each track's boxes are the ones the fullbox builders write for its ID, timescale, handler and version.
+    assert.deepEqual(bytesOfType(boxes, "tkhd"), [ makeTkhdBox({ trackId: 1, version: 1 }), makeTkhdBox({ trackId: 2 }) ]);
+    assert.deepEqual(bytesOfType(boxes, "mdhd"), [ makeMdhdBox({ timescale: 90000 }), makeMdhdBox({ timescale: 48000, version: 1 }) ]);
+    assert.deepEqual(bytesOfType(boxes, "hdlr"), [ makeHdlrBox(HDLR_TYPE_VIDE), makeHdlrBox(HDLR_TYPE_SOUN) ]);
+  });
+
+  test("writes tracks the readers read back", () => {
+
+    const init = makeInitSegment([ { handler: HDLR_TYPE_SOUN, id: 2, timescale: 48000 }, { handler: HDLR_TYPE_VIDE, id: 7, mdhdVersion: 1, timescale: 15360,
+      tkhdVersion: 1 } ]);
+
+    assert.deepEqual(findVideoTrack(init), { id: 7, timescale: 15360 });
+    assert.equal(hasAudioTrack(init), true);
+    assert.equal(hasAudioTrack(makeInitSegment([{ handler: HDLR_TYPE_VIDE, id: 1, timescale: 90000 }])), false);
+  });
+});
+
+describe("makeFragment", () => {
+
+  test("writes a moof holding an mfhd and each track's fragment, then an mdat holding each track's samples, each run pointing at its track's first sample", () => {
+
+    const video = [ { duration: 3000, size: 10 }, { duration: 3000, size: 20 } ];
+    const audio = [{ duration: 1920, size: 7 }];
+    const fragment = makeFragment({ samples: video, secondTrack: { samples: audio, trackId: 2 }, trackId: 1 });
+    const boxes = boxesOf(fragment);
+    const traf = [ "moof/traf", "moof/traf/tfhd", "moof/traf/tfdt", "moof/traf/trun" ];
+    const mdat = expectAt(bytesOfType(boxes, "mdat"), 0, "the mdat");
+    const payload = (fragment.length - mdat.length) + BOX_HEADER_SIZE;
+
+    assert.deepEqual(boxes.map(({ path }) => path), [ "moof", "moof/mfhd", ...traf, ...traf, "mdat" ]);
+    assert.deepEqual(bytesOfType(boxes, "tfhd"), [ makeTfhdBox({ trackId: 1 }), makeTfhdBox({ trackId: 2 }) ]);
+
+    // The first run carries each sample's duration and size and a keyframe's first-sample flags unless asked otherwise, and the second each sample's duration and
+    // size. Each data offset is measured from the moof, which opens the fragment.
+    assert.deepEqual(bytesOfType(boxes, "trun"), [
+      makeTrunBox({ dataOffset: payload, includeDuration: true, includeSize: true, samples: video, useFirstSampleFlags: true }),
+      makeTrunBox({ dataOffset: payload + 30, includeDuration: true, includeSize: true, samples: audio })
+    ]);
+    assert.equal(mdat.length, BOX_HEADER_SIZE + 37, "the mdat holds every sample's bytes");
+  });
+
+  test("writes the header options, run fields and data offset it is given into the first track's fragment, and a fragment of one track alone", () => {
+
+    const samples = [ { size: 10 }, { size: 20 } ];
+    const boxes = boxesOf(makeFragment({ dataOffset: -16, header: { defaultSampleDuration: 3000, sampleDescriptionIndex: 1 }, run: { includeSize: true }, samples,
+      trackId: 5 }));
+
+    assert.deepEqual(boxes.map(({ path }) => path), [ "moof", "moof/mfhd", "moof/traf", "moof/traf/tfhd", "moof/traf/tfdt", "moof/traf/trun", "mdat" ]);
+    assert.deepEqual(bytesOfType(boxes, "tfhd"), [makeTfhdBox({ defaultSampleDuration: 3000, sampleDescriptionIndex: 1, trackId: 5 })]);
+    assert.deepEqual(bytesOfType(boxes, "trun"), [makeTrunBox({ dataOffset: -16, includeSize: true, samples })]);
+    assert.equal(expectAt(bytesOfType(boxes, "mdat"), 0, "the mdat").length, BOX_HEADER_SIZE + 30);
+  });
+
+  test("lays out samples the frame reader cuts at the sizes it was given", () => {
+
+    const sizes = [ 10, 20, 30 ];
+    const fragment = makeFragment({ samples: sizes.map((size) => ({ duration: 900, size })), secondTrack: { samples: [{ duration: 1920, size: 7 }], trackId: 2 },
+      trackId: 1 });
+    const pieces = present(splitVideoFrames(fragment, { id: 1, timescale: 90000 }), "the fragment's pieces");
+    const start = present(findBox(fragment, "mdat"), "the fragment's mdat").offset + BOX_HEADER_SIZE;
+
+    // Each piece but the last ends where its frame ends, and the last carries the audio sample after the video.
+    assert.deepEqual(pieces.map(({ bytes }) => (bytes.byteOffset - fragment.byteOffset) + bytes.length), [ start + 10, start + 30, fragment.length ]);
+    assert.deepEqual(pieces.map(({ duration }) => duration), [ 10, 10, 10 ]);
   });
 });

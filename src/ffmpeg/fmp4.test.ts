@@ -1,15 +1,33 @@
 /* Copyright(C) 2017-2026, HJD (https://github.com/hjdhjd). All rights reserved.
  *
- * ffmpeg/fmp4.test.ts: Unit tests for the stateless ISO BMFF (fMP4) predicates exported from fmp4.ts - findBox, isKeyframe, hasAudioTrack, and splitMoofMdat.
+ * ffmpeg/fmp4.test.ts: Unit tests for the stateless ISO BMFF (fMP4) predicates exported from fmp4.ts - findBox, isKeyframe, hasAudioTrack, and splitMoofMdat - and for
+ * the frame reader beside them, findVideoTrack and splitVideoFrames.
  *
  * These are the one-shot counterparts to the streaming `Mp4BoxParser` / `Mp4SegmentAssembler`: each predicate accepts a complete Buffer and returns a verdict. They are
  * consumed both internally (the parser reuses `BOX_HEADER_SIZE` and the assembler compares box type codes via the `BOX_TYPE_*` constants) and externally (HBUP calls
  * `isKeyframe(buffer)` directly at its timeshift boundary), so the behavioral surface here must stay stable across the parser/assembler refactor.
+ *
+ * The frame reader's rows build every well-formed fragment and initialization segment from invented values through `makeFragment` and `makeInitSegment`, in the
+ * layout the family's producers write: one moof holding a video track fragment and then an audio one, and one mdat holding the video samples and then the audio.
+ * A row that breaks a rule that layout keeps builds its fragment or segment from the fullbox builders. One row reads FFmpeg's own output for its test pattern, gated
+ * on the FFmpeg integration predicate.
  */
-import { HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, findBox, hasAudioTrack, isKeyframe, splitMoofMdat } from "./fmp4.ts";
-import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeHdlrBox, makeTrunBox } from "./fmp4-builders.ts";
+import { BOX_HEADER_SIZE, HDLR_TYPE_SOUN, SAMPLE_FLAG_NON_SYNC, findBox, findVideoTrack, hasAudioTrack, isKeyframe, splitMoofMdat, splitVideoFrames } from "./fmp4.ts";
+import { BOX_TYPE_MOOF, Mp4BoxParser } from "./mp4-parser.ts";
+import { HDLR_TYPE_VIDE, makeBox, makeContainer, makeFragment, makeHdlrBox, makeInitSegment, makeMdhdBox, makeTfhdBox, makeTkhdBox,
+  makeTrunBox } from "./fmp4-builders.ts";
+import type { InitSegmentTrack, TrunSample } from "./fmp4-builders.ts";
 import { describe, test } from "node:test";
+import { expectAt, present, silentLog } from "../testing/index.ts";
+import type { FMp4Track } from "./fmp4.ts";
+import { FfmpegCodecs } from "./codecs.ts";
+import type { PacedChunk } from "../backpressure.ts";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { ffmpegIntegrationEnabled } from "./integration.helpers.ts";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 describe("findBox", () => {
 
@@ -314,6 +332,45 @@ describe("hasAudioTrack", () => {
   });
 });
 
+describe("isKeyframe and hasAudioTrack answers the shared box walks keep", () => {
+
+  // Each row states an answer that a walk checking more, or skipping less, than these predicates do would change.
+
+  test("hasAudioTrack is true for a track with no mdia followed by an audio track", () => {
+
+    const degenerate = makeContainer("trak", [makeBox("tkhd")]);
+    const audio = makeContainer("trak", [makeContainer("mdia", [makeHdlrBox(HDLR_TYPE_SOUN)])]);
+
+    assert.equal(hasAudioTrack(Buffer.concat([ makeBox("ftyp"), makeContainer("moov", [ degenerate, audio ]) ])), true);
+  });
+
+  test("hasAudioTrack is true for a short hdlr followed by an audio track", () => {
+
+    const short = makeContainer("trak", [makeContainer("mdia", [makeHdlrBox(HDLR_TYPE_SOUN, true)])]);
+    const audio = makeContainer("trak", [makeContainer("mdia", [makeHdlrBox(HDLR_TYPE_SOUN)])]);
+
+    assert.equal(hasAudioTrack(Buffer.concat([ makeBox("ftyp"), makeContainer("moov", [ short, audio ]) ])), true);
+  });
+
+  test("isKeyframe is true for a run with a sample count of zero and sync first-sample flags", () => {
+
+    const trun = makeTrunBox({ samples: [], useFirstSampleFlags: true });
+
+    assert.equal(trun.readUInt32BE(12), 0, "the run declares no samples");
+    assert.equal(isKeyframe(makeContainer("moof", [makeContainer("traf", [trun])])), true);
+  });
+
+  test("isKeyframe is true for a multi-sample run with sync first-sample flags and truncated entries", () => {
+
+    // The run declares more samples of duration and size than it holds entries for, so its entries run past the box.
+    const trun = makeTrunBox({ includeDuration: true, includeSize: true, sampleCount: 5, samples: [ { duration: 3000, size: 40 }, { duration: 3000, size: 12 } ],
+      useFirstSampleFlags: true });
+
+    assert.equal(trun.readUInt32BE(12), 5, "the run declares more samples than it holds");
+    assert.equal(isKeyframe(makeContainer("moof", [makeContainer("traf", [trun])])), true);
+  });
+});
+
 describe("splitMoofMdat", () => {
 
   test("splits a moof + mdat pair into its two components with zero-copy views over the source buffer", () => {
@@ -362,5 +419,435 @@ describe("splitMoofMdat", () => {
   test("returns null for an empty buffer", () => {
 
     assert.equal(splitMoofMdat(Buffer.alloc(0)), null);
+  });
+});
+
+// The video track the fragment rows cut at: invented values, a track ID and a 90 kHz timescale.
+const VIDEO: FMp4Track = { id: 1, timescale: 90000 };
+
+// The audio track the two-track fragments carry after their video, so the rows prove the last piece takes its samples along. Its samples are invented, each as
+// long as the others at an audio timescale.
+const AUDIO = { samples: [ { duration: 1920, size: 7 }, { duration: 1920, size: 9 } ], trackId: 2 } as const;
+
+// The frames of a video run, each sample carrying its duration and its size.
+function framesOf(durations: readonly number[], sizes: readonly number[]): TrunSample[] {
+
+  return sizes.map((size, index) => ({ duration: durations[index], size }));
+}
+
+// Where the mdat's payload starts in a fragment, which is where `makeFragment` writes the video's first sample.
+function payloadStartOf(fragment: Buffer): number {
+
+  return present(findBox(fragment, "mdat"), "the fragment's mdat").offset + BOX_HEADER_SIZE;
+}
+
+// Where each video frame ends in a fragment `makeFragment` built from samples of `sizes`: the video samples open the mdat's payload, in order.
+function frameEndsOf(fragment: Buffer, sizes: readonly number[]): number[] {
+
+  const start = payloadStartOf(fragment);
+
+  return sizes.map((_, index) => start + sizes.slice(0, index + 1).reduce((total, size) => total + size, 0));
+}
+
+// Where each piece ends, as an offset into the fragment it is a view of.
+function endsOf(pieces: readonly PacedChunk[], fragment: Buffer): number[] {
+
+  return pieces.map(({ bytes }) => (bytes.byteOffset - fragment.byteOffset) + bytes.length);
+}
+
+/* A fragment no producer writes, for a row that breaks a rule `makeFragment`'s layout keeps: one track fragment holding the boxes `children` answers for the data
+ * offset of the mdat's first payload byte, and an mdat holding `payload`. The data offset is a fixed-width field, so one sizing pass places it.
+ */
+function malformedOf(children: (dataOffset: number) => Buffer[], payload: Buffer): Buffer {
+
+  const moofOf = (dataOffset: number): Buffer => makeContainer("moof", [makeContainer("traf", children(dataOffset))]);
+
+  return Buffer.concat([ moofOf(moofOf(0).length + BOX_HEADER_SIZE), makeBox("mdat", payload) ]);
+}
+
+describe("splitVideoFrames", () => {
+
+  const cases = [ [ "a single frame", [3000] ], [ "frames of near-equal durations", [ 3000, 3003 ] ],
+    [ "frames of uneven durations", [ 3003, 2997, 3000, 6006, 1500 ] ] ] as const;
+
+  for(const [ frames, durations ] of cases) {
+
+    test("cuts a fragment of " + frames + " at each frame's end, each piece carrying its frame's duration", () => {
+
+      const sizes = durations.map((_, index) => 20 + (index * 13));
+      const fragment = makeFragment({ samples: framesOf(durations, sizes), secondTrack: AUDIO, trackId: VIDEO.id });
+      const pieces = present(splitVideoFrames(fragment, VIDEO), "the fragment's pieces");
+
+      // Every piece ends where its frame ends, except the last, which carries the rest of the fragment, the audio samples among it.
+      assert.deepEqual(endsOf(pieces, fragment), [ ...frameEndsOf(fragment, sizes).slice(0, -1), fragment.length ]);
+      assert.deepEqual(pieces.map(({ duration }) => duration), durations.map((ticks) => (ticks * 1000) / VIDEO.timescale));
+      assert.deepEqual(Buffer.concat(pieces.map(({ bytes }) => bytes)), fragment, "the pieces join back to the fragment exactly");
+    });
+  }
+
+  test("answers pieces that are views over the fragment, sharing its memory", () => {
+
+    const sizes = [ 24, 18, 30 ];
+    const fragment = makeFragment({ samples: framesOf([ 3000, 3000, 3000 ], sizes), secondTrack: AUDIO, trackId: VIDEO.id });
+    const pieces = present(splitVideoFrames(fragment, VIDEO), "the fragment's pieces");
+    const first = expectAt(pieces, 0, "the first piece");
+    const last = expectAt(frameEndsOf(fragment, sizes), 0, "the first frame's end") - 1;
+
+    // A write through the fragment shows through the piece only when the piece is a view of the fragment's own bytes.
+    fragment[last] = 0xEE;
+    assert.equal(first.bytes[first.bytes.length - 1], 0xEE);
+    assert.equal(first.bytes.buffer, fragment.buffer);
+  });
+
+  test("answers a fragment in which no track fragment names the track as an empty list", () => {
+
+    // A fragment of the audio track alone, as FFmpeg writes when the audio outlasts the video, and a fragment of the video and the audio read for a track
+    // neither names.
+    const audioOnly = makeFragment({ samples: AUDIO.samples, trackId: AUDIO.trackId });
+    const neither = makeFragment({ samples: framesOf([ 3000, 3000, 3000 ], [ 30, 20, 10 ]), secondTrack: AUDIO, trackId: VIDEO.id });
+
+    for(const [ fragment, track ] of [ [ audioOnly, VIDEO ], [ neither, { id: 9, timescale: 90000 } ] ] as const) {
+
+      assert.deepEqual(splitVideoFrames(fragment, track), [], "a fragment holding none of the track's frames has nothing to cut at, and is not one the reader failed");
+    }
+  });
+
+  test("takes each sample's size and duration from the track fragment header when its entry carries neither, with and without a sample description index", () => {
+
+    for(const sampleDescriptionIndex of [ undefined, 1 ]) {
+
+      const sizes = [ 33, 33, 33 ];
+      const fragment = makeFragment({ header: { defaultSampleDuration: 3750, defaultSampleFlags: 0x01010000, defaultSampleSize: 33, sampleDescriptionIndex },
+        run: { useFirstSampleFlags: true }, samples: sizes.map((size) => ({ size })), secondTrack: AUDIO, trackId: VIDEO.id });
+      const pieces = present(splitVideoFrames(fragment, VIDEO), "the fragment's pieces");
+
+      assert.deepEqual(endsOf(pieces, fragment), [ ...frameEndsOf(fragment, sizes).slice(0, -1), fragment.length ]);
+      assert.deepEqual(pieces.map(({ duration }) => duration), [ 3750, 3750, 3750 ].map((ticks) => (ticks * 1000) / VIDEO.timescale));
+    }
+  });
+
+  test("mixes entry sizes with a header default duration, and entry durations with a header default size", () => {
+
+    // Sizes in the entries and the duration from the header: the layout FFmpeg writes when every frame lasts as long as the others.
+    const sizes = [ 41, 17, 26 ];
+    const sized = makeFragment({ header: { defaultSampleDuration: 3000, sampleDescriptionIndex: 1 }, run: { includeSize: true, useFirstSampleFlags: true },
+      samples: sizes.map((size) => ({ size })), secondTrack: AUDIO, trackId: VIDEO.id });
+    const sizedPieces = present(splitVideoFrames(sized, VIDEO), "the pieces of the sized fragment");
+
+    assert.deepEqual(endsOf(sizedPieces, sized), [ ...frameEndsOf(sized, sizes).slice(0, -1), sized.length ]);
+    assert.deepEqual(sizedPieces.map(({ duration }) => duration), [ 3000, 3000, 3000 ].map((ticks) => (ticks * 1000) / VIDEO.timescale));
+
+    // Durations in the entries and the size from the header.
+    const timed = makeFragment({ header: { defaultSampleSize: 29 }, run: { includeDuration: true }, samples: framesOf([ 2000, 4000 ], [ 29, 29 ]),
+      secondTrack: AUDIO, trackId: VIDEO.id });
+    const timedPieces = present(splitVideoFrames(timed, VIDEO), "the pieces of the timed fragment");
+
+    assert.deepEqual(endsOf(timedPieces, timed), [ expectAt(frameEndsOf(timed, [ 29, 29 ]), 0, "the first frame's end"), timed.length ]);
+    assert.deepEqual(timedPieces.map(({ duration }) => duration), [ 2000, 4000 ].map((ticks) => (ticks * 1000) / VIDEO.timescale));
+  });
+
+  test("steps over per-sample flags and composition offsets, a negative offset among them", () => {
+
+    const sizes = [ 50, 22, 35 ];
+    const fragment = makeFragment({ run: { includeCompositionOffset: true, includeDuration: true, includeSize: true, usePerSampleFlags: true }, samples: [
+      { compositionOffset: 6000, duration: 3000, flags: 0x02000000, size: 50 }, { compositionOffset: -3000, duration: 3000, flags: 0x01010000, size: 22 },
+      { compositionOffset: 0, duration: 3000, flags: 0x01010000, size: 35 } ], secondTrack: AUDIO, trackId: VIDEO.id });
+    const pieces = present(splitVideoFrames(fragment, VIDEO), "the fragment's pieces");
+
+    assert.deepEqual(endsOf(pieces, fragment), [ ...frameEndsOf(fragment, sizes).slice(0, -1), fragment.length ]);
+    assert.deepEqual(pieces.map(({ duration }) => duration), [ 3000, 3000, 3000 ].map((ticks) => (ticks * 1000) / VIDEO.timescale));
+  });
+
+  test("cuts at whichever track it is handed, passing over the track fragments that name another", () => {
+
+    // The audio track fragment comes second, so reaching it means passing over the video one.
+    const sizes = [ 40, 40 ];
+    const fragment = makeFragment({ samples: framesOf([ 3000, 3000 ], sizes), secondTrack: AUDIO, trackId: VIDEO.id });
+    const audioStart = expectAt(frameEndsOf(fragment, sizes), sizes.length - 1, "the last video frame's end");
+    const pieces = present(splitVideoFrames(fragment, { id: AUDIO.trackId, timescale: 48000 }), "the audio pieces");
+
+    assert.deepEqual(endsOf(pieces, fragment), [ audioStart + 7, fragment.length ]);
+    assert.deepEqual(pieces.map(({ duration }) => duration), [ 40, 40 ]);
+  });
+
+  test("answers a piece of duration zero for a frame whose duration is zero", () => {
+
+    // A frame may last no time at all, and its piece says so, leaving the piece after it due at once.
+    const sizes = [ 30, 20, 10 ];
+    const durations = [ 3000, 0, 3000 ];
+    const fragment = makeFragment({ samples: framesOf(durations, sizes), secondTrack: AUDIO, trackId: VIDEO.id });
+    const pieces = present(splitVideoFrames(fragment, VIDEO), "the fragment's pieces");
+
+    assert.deepEqual(endsOf(pieces, fragment), [ ...frameEndsOf(fragment, sizes).slice(0, -1), fragment.length ]);
+    assert.deepEqual(pieces.map(({ duration }) => duration), durations.map((ticks) => (ticks * 1000) / VIDEO.timescale));
+  });
+
+  test("cuts a fragment with an mdat before its moof and one after it in the mdat that follows the moof", () => {
+
+    // The frames sit where `makeFragment` placed them, moved along by the mdat in front of the moof.
+    const sizes = [ 30, 20, 10 ];
+    const leading = makeBox("mdat", Buffer.alloc(12));
+    const inner = makeFragment({ samples: framesOf([ 3000, 3000, 3000 ], sizes), secondTrack: AUDIO, trackId: VIDEO.id });
+    const fragment = Buffer.concat([ leading, inner ]);
+    const pieces = present(splitVideoFrames(fragment, VIDEO), "the fragment's pieces");
+
+    assert.deepEqual(endsOf(pieces, fragment), [ ...frameEndsOf(inner, sizes).slice(0, -1).map((end) => leading.length + end), fragment.length ]);
+    assert.deepEqual(Buffer.concat(pieces.map(({ bytes }) => bytes)), fragment, "the pieces join back to the fragment exactly");
+  });
+
+  test("passes over a track fragment whose header is too short to hold a track_ID and cuts at the one after it that names the track", () => {
+
+    // The box after the short header is as long as the track's ID, so a read past the header would take that box's size field as a track_ID naming the track and
+    // look for a run where there is none.
+    const track: FMp4Track = { id: 16, timescale: 90000 };
+    const sizes = [ 30, 20 ];
+    const passedOver = makeContainer("traf", [ makeBox("tfhd", Buffer.from([ 0x00, 0x02, 0x00, 0x00 ])), makeBox("tfdt", Buffer.alloc(track.id - BOX_HEADER_SIZE)) ]);
+    const moofOf = (dataOffset: number): Buffer => makeContainer("moof", [ passedOver, makeContainer("traf", [ makeTfhdBox({ trackId: track.id }),
+      makeTrunBox({ dataOffset, includeDuration: true, includeSize: true, samples: framesOf([ 3000, 3000 ], sizes) }) ]) ]);
+    const fragment = Buffer.concat([ moofOf(moofOf(0).length + BOX_HEADER_SIZE), makeBox("mdat", Buffer.alloc(50)) ]);
+    const pieces = present(splitVideoFrames(fragment, track), "the fragment's pieces");
+
+    assert.deepEqual(endsOf(pieces, fragment), [ ...frameEndsOf(fragment, sizes).slice(0, -1), fragment.length ]);
+  });
+
+  describe("answers null", () => {
+
+    const sizes = [ 30, 20, 10 ];
+    const samples = framesOf([ 3000, 3000, 3000 ], sizes);
+    const entries = { includeDuration: true, includeSize: true, useFirstSampleFlags: true } as const;
+
+    test("when the fragment has no moof, or no mdat after its moof", () => {
+
+      const fragment = makeFragment({ samples, secondTrack: AUDIO, trackId: VIDEO.id });
+      const moof = present(findBox(fragment, "moof"), "the fragment's moof");
+      const mdat = present(findBox(fragment, "mdat"), "the fragment's mdat");
+
+      assert.equal(splitVideoFrames(fragment.subarray(mdat.offset), VIDEO), null);
+      assert.equal(splitVideoFrames(fragment.subarray(0, moof.size), VIDEO), null);
+      assert.equal(splitVideoFrames(Buffer.concat([ fragment.subarray(mdat.offset), fragment.subarray(0, moof.size) ]), VIDEO), null);
+    });
+
+    test("when the track fragment's header does not set default-base-is-moof, or carries a base data offset", () => {
+
+      assert.equal(splitVideoFrames(makeFragment({ header: { defaultBaseIsMoof: false }, samples, secondTrack: AUDIO, trackId: VIDEO.id }), VIDEO), null);
+      assert.equal(splitVideoFrames(makeFragment({ header: { baseDataOffset: 0 }, samples, secondTrack: AUDIO, trackId: VIDEO.id }), VIDEO), null);
+    });
+
+    test("when the track fragment's header is too short for a field its flags announce", () => {
+
+      // The header names the track and announces a default duration and a default size but holds only the duration. The run after it points at the mdat's payload,
+      // so a read past the header would take the run's own size field as the default size and find a frame that fits.
+      const tfhd = makeBox("tfhd", Buffer.concat([ Buffer.from([ 0x00, 0x02, 0x00, 0x18 ]), Buffer.from([ 0, 0, 0, VIDEO.id ]), Buffer.alloc(4) ]));
+
+      assert.equal(splitVideoFrames(malformedOf((dataOffset) => [ tfhd, makeTrunBox({ dataOffset, samples: [{}] }) ], Buffer.alloc(32)), VIDEO), null);
+    });
+
+    test("when the video track fragment holds no run, or more than one", () => {
+
+      const tfhd = makeTfhdBox({ trackId: VIDEO.id });
+
+      assert.equal(splitVideoFrames(malformedOf(() => [tfhd], Buffer.alloc(60)), VIDEO), null);
+      assert.equal(splitVideoFrames(malformedOf((dataOffset) => [ tfhd, makeTrunBox({ ...entries, dataOffset, samples }),
+        makeTrunBox({ includeSize: true, samples: [{ size: 1 }] }) ], Buffer.alloc(61)), VIDEO), null);
+    });
+
+    test("when the run carries no data offset", () => {
+
+      assert.equal(splitVideoFrames(makeFragment({ run: { ...entries, includeDataOffset: false }, samples, secondTrack: AUDIO, trackId: VIDEO.id }), VIDEO), null);
+    });
+
+    test("when the run declares no samples", () => {
+
+      assert.equal(splitVideoFrames(makeFragment({ header: { defaultSampleDuration: 3000, defaultSampleSize: 30 }, run: {}, samples: [], trackId: VIDEO.id }), VIDEO),
+        null);
+    });
+
+    test("when the run's entries run past its box", () => {
+
+      const tfhd = makeTfhdBox({ defaultSampleDuration: 3000, trackId: VIDEO.id });
+
+      assert.equal(splitVideoFrames(malformedOf((dataOffset) => [ tfhd, makeTrunBox({ ...entries, dataOffset, sampleCount: 4, samples }) ], Buffer.alloc(76)),
+        VIDEO), null);
+
+      // The run declares a fourth size it does not hold, the box after it begins with a size field of 8, and the payload holds room past the frames the run does
+      // hold, so reading past the run would find a frame that fits.
+      assert.equal(splitVideoFrames(malformedOf((dataOffset) => [ tfhd, makeTrunBox({ dataOffset, includeSize: true, sampleCount: 4, samples }), makeBox("free") ],
+        Buffer.alloc(76)), VIDEO), null);
+    });
+
+    test("when a sample's size or duration is neither in its entry nor a header default", () => {
+
+      const timedOnly = makeFragment({ header: { defaultSampleDuration: 3000 }, run: { includeDuration: true }, samples, secondTrack: AUDIO, trackId: VIDEO.id });
+
+      assert.equal(splitVideoFrames(timedOnly, VIDEO), null);
+
+      const sizedOnly = makeFragment({ header: { defaultSampleSize: 30 }, run: { includeSize: true }, samples, secondTrack: AUDIO, trackId: VIDEO.id });
+
+      assert.equal(splitVideoFrames(sizedOnly, VIDEO), null);
+    });
+
+    test("when a sample is empty", () => {
+
+      assert.equal(splitVideoFrames(makeFragment({ samples: framesOf([ 3000, 3000, 3000 ], [ 30, 0, 10 ]), secondTrack: AUDIO, trackId: VIDEO.id }), VIDEO), null);
+
+      // A run whose every size is a zero default declares as many frames as its count field holds, every one of them fitting in any payload.
+      assert.equal(splitVideoFrames(malformedOf((dataOffset) => [ makeTfhdBox({ defaultSampleDuration: 3000, defaultSampleSize: 0, trackId: VIDEO.id }),
+        makeTrunBox({ dataOffset, sampleCount: 0xFFFFFFFF, samples: [] }) ], Buffer.alloc(0)), VIDEO), null);
+    });
+
+    test("when a frame lies outside the payload of the mdat that follows the moof", () => {
+
+      // A data offset is a fixed-width field, so a fragment built with another one places every box and sample where this one does.
+      const start = payloadStartOf(makeFragment({ samples, secondTrack: AUDIO, trackId: VIDEO.id }));
+
+      // The first frame starting inside the mdat's header, or before the moof's start.
+      assert.equal(splitVideoFrames(makeFragment({ dataOffset: start - 1, samples, secondTrack: AUDIO, trackId: VIDEO.id }), VIDEO), null);
+      assert.equal(splitVideoFrames(makeFragment({ dataOffset: -16, samples, secondTrack: AUDIO, trackId: VIDEO.id }), VIDEO), null);
+
+      // The last frame ending past the mdat's end: in a fragment of the video alone, frames that start a byte late end a byte past the payload.
+      const alone = payloadStartOf(makeFragment({ samples, trackId: VIDEO.id }));
+
+      assert.equal(splitVideoFrames(makeFragment({ dataOffset: alone + 1, samples, trackId: VIDEO.id }), VIDEO), null);
+    });
+
+    test("when a frame runs past its mdat into a box that follows it", () => {
+
+      // In a fragment of the video alone, frames that start a byte late end a byte past the mdat, inside the box after it, so a frame bounded by the fragment's
+      // end rather than the mdat's would fit.
+      const alone = payloadStartOf(makeFragment({ samples, trackId: VIDEO.id }));
+      const fragment = Buffer.concat([ makeFragment({ dataOffset: alone + 1, samples, trackId: VIDEO.id }), makeBox("free", Buffer.alloc(4)) ]);
+
+      assert.equal(splitVideoFrames(fragment, VIDEO), null);
+    });
+  });
+});
+
+describe("findVideoTrack", () => {
+
+  // The audio track every segment here holds ahead of its video tracks, so the walk passes over a track of another handler first.
+  const AUDIO_TRACK: InitSegmentTrack = { handler: HDLR_TYPE_SOUN, id: 2, timescale: 48000 };
+
+  /* A segment holding the audio track and then a video track built from the `tkhd` and `mdhd` given, for a row that needs a box `makeInitSegment` does not write:
+   * one renamed, cut short or of a version above 1.
+   */
+  function initWithBoxes({ mdhd, tkhd }: { mdhd: Buffer; tkhd: Buffer }): Buffer {
+
+    const audio = makeContainer("trak", [ makeTkhdBox({ trackId: AUDIO_TRACK.id }),
+      makeContainer("mdia", [ makeMdhdBox({ timescale: AUDIO_TRACK.timescale }), makeHdlrBox(HDLR_TYPE_SOUN) ]) ]);
+    const video = makeContainer("trak", [ tkhd, makeContainer("mdia", [ mdhd, makeHdlrBox(HDLR_TYPE_VIDE) ]) ]);
+
+    return Buffer.concat([ makeBox("ftyp", Buffer.from("isomiso5")), makeContainer("moov", [ makeBox("mvhd", Buffer.alloc(100)), audio, video ]) ]);
+  }
+
+  // A box with its version byte rewritten, for a version no builder writes.
+  function versioned(box: Buffer, version: number): Buffer {
+
+    const copy = Buffer.from(box);
+
+    copy.writeUInt8(version, 8);
+
+    return copy;
+  }
+
+  test("reads the video track's ID and timescale from boxes at version 0", () => {
+
+    assert.deepEqual(findVideoTrack(makeInitSegment([ AUDIO_TRACK, { handler: HDLR_TYPE_VIDE, id: 1, timescale: 90000 } ])), { id: 1, timescale: 90000 });
+  });
+
+  test("reads the video track's ID and timescale from boxes at version 1, and from boxes at mixed versions", () => {
+
+    assert.deepEqual(findVideoTrack(makeInitSegment([ AUDIO_TRACK, { handler: HDLR_TYPE_VIDE, id: 7, mdhdVersion: 1, timescale: 15360, tkhdVersion: 1 } ])),
+      { id: 7, timescale: 15360 });
+    assert.deepEqual(findVideoTrack(makeInitSegment([ AUDIO_TRACK, { handler: HDLR_TYPE_VIDE, id: 3, timescale: 30000, tkhdVersion: 1 } ])), { id: 3, timescale: 30000 });
+  });
+
+  test("answers the first video track, and reads it from a header followed by fragments", () => {
+
+    const init = makeInitSegment([ AUDIO_TRACK, { handler: HDLR_TYPE_VIDE, id: 4, timescale: 90000 }, { handler: HDLR_TYPE_VIDE, id: 5, timescale: 1000 } ]);
+
+    assert.deepEqual(findVideoTrack(init), { id: 4, timescale: 90000 });
+    assert.deepEqual(findVideoTrack(Buffer.concat([ init, makeFragment({ samples: framesOf([ 1, 1 ], [ 10, 10 ]), trackId: 4 }) ])), { id: 4, timescale: 90000 });
+  });
+
+  test("answers null when the segment has no video track", () => {
+
+    assert.equal(findVideoTrack(makeInitSegment([AUDIO_TRACK])), null);
+  });
+
+  test("answers null for a tkhd or an mdhd of a version above 1", () => {
+
+    assert.equal(findVideoTrack(initWithBoxes({ mdhd: makeMdhdBox({ timescale: 90000 }), tkhd: versioned(makeTkhdBox({ trackId: 1, version: 1 }), 2) })), null);
+    assert.equal(findVideoTrack(initWithBoxes({ mdhd: versioned(makeMdhdBox({ timescale: 90000, version: 1 }), 2), tkhd: makeTkhdBox({ trackId: 1 }) })), null);
+  });
+
+  test("answers null for a tkhd or an mdhd that is missing or too short", () => {
+
+    const mdhd = makeMdhdBox({ timescale: 90000 });
+    const tkhd = makeTkhdBox({ trackId: 1 });
+
+    assert.equal(findVideoTrack(initWithBoxes({ mdhd, tkhd: makeBox("free", tkhd.subarray(8)) })), null);
+    assert.equal(findVideoTrack(initWithBoxes({ mdhd: makeBox("free", mdhd.subarray(8)), tkhd })), null);
+
+    // Each short box holds a whole fullbox header but is cut before its field, and the one marked with the wider layout is cut where the narrower layout's field
+    // would end.
+    assert.equal(findVideoTrack(initWithBoxes({ mdhd, tkhd: makeBox("tkhd", Buffer.alloc(15)) })), null);
+    assert.equal(findVideoTrack(initWithBoxes({ mdhd: makeBox("mdhd", Buffer.alloc(15)), tkhd })), null);
+    assert.equal(findVideoTrack(initWithBoxes({ mdhd, tkhd: makeBox("tkhd", Buffer.from([ 1, ...Buffer.alloc(15) ])) })), null);
+    assert.equal(findVideoTrack(initWithBoxes({ mdhd, tkhd: makeBox("tkhd", Buffer.alloc(3)) })), null);
+  });
+
+  test("answers null for a timescale of zero", () => {
+
+    assert.equal(findVideoTrack(makeInitSegment([ AUDIO_TRACK, { handler: HDLR_TYPE_VIDE, id: 1, timescale: 0 } ])), null);
+  });
+});
+
+describe("splitVideoFrames over FFmpeg's own fragments", { skip: !ffmpegIntegrationEnabled }, () => {
+
+  test("splits every fragment FFmpeg writes for its own test pattern and a tone, rejoining each, numbering the frames and summing to the clip's length", async (t) => {
+
+    // FFmpeg is located the way the options suite's integration rows locate it.
+    const codecs = await FfmpegCodecs.probe({ log: silentLog() });
+
+    assert.ok(codecs, "FfmpegCodecs.probe() must succeed for the integration row to run");
+
+    if(!codecs.hasEncoder("h264", "libx264") || !codecs.hasEncoder("aac", "aac")) {
+
+      t.skip("host does not advertise libx264 and the native aac encoder");
+
+      return;
+    }
+
+    // The test pattern for a fixed count of frames at a fixed rate, and a tone that ends first so every fragment holds video. The movflags are the livestream process's,
+    // with a fragment duration, and the output stays well inside the exec buffer.
+    const frames = 60;
+    const rate = 30;
+    const { stdout } = await execFileAsync(codecs.ffmpegExec, [ "-hide_banner", "-nostats", "-loglevel", "error", "-f", "lavfi", "-i",
+      "testsrc2=size=160x120:rate=" + rate.toString(), "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1.5", "-map", "0:v", "-map", "1:a",
+      "-frames:v", frames.toString(), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", rate.toString(), "-c:a", "aac", "-b:a", "32k",
+      "-movflags", "default_base_moof+empty_moov+frag_keyframe+skip_sidx+skip_trailer", "-frag_duration", "500000", "-f", "mp4", "pipe:1" ], { encoding: "buffer" });
+    const boxes = [...new Mp4BoxParser().consume(stdout)];
+    const firstMoof = boxes.findIndex(({ type }) => type === BOX_TYPE_MOOF);
+    const track = present(findVideoTrack(Buffer.concat(boxes.slice(0, firstMoof).map(({ bytes }) => bytes))), "the video track of FFmpeg's header");
+    const fragments: Buffer[] = [];
+
+    for(let index = firstMoof; index < boxes.length; index += 2) {
+
+      fragments.push(Buffer.concat([ expectAt(boxes, index, "a fragment's moof").bytes, expectAt(boxes, index + 1, "a fragment's mdat").bytes ]));
+    }
+
+    assert.ok(fragments.length > 1, "FFmpeg writes the clip as more than one fragment");
+
+    const pieces = fragments.flatMap((fragment) => {
+
+      const split = present(splitVideoFrames(fragment, track), "the pieces of every fragment");
+
+      assert.deepEqual(Buffer.concat(split.map(({ bytes }) => bytes)), fragment, "each fragment's pieces rejoin it exactly");
+
+      return split;
+    });
+
+    assert.equal(pieces.length, frames);
+    assert.ok(Math.abs(pieces.reduce((total, { duration }) => total + duration, 0) - ((frames * 1000) / rate)) < (1000 / rate), "the durations sum to the clip's length");
   });
 });

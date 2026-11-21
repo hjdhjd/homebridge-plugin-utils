@@ -4,8 +4,8 @@
  */
 
 /**
- * Resolves the boolean that gates the FFmpeg integration test suites (`codecs.test.ts`, `options.test.ts`). The resolution is sticky: it runs once at module load and
- * the result is reused for every `describe` skip predicate that imports it.
+ * Resolves the boolean that gates the FFmpeg integration test suites (`codecs.test.ts`, `options.test.ts`, and the frame-reader row in `fmp4.test.ts`). The
+ * resolution is sticky: it runs once at module load and the result is reused for every `describe` skip predicate that imports it.
  *
  * Two inputs feed the decision, in this order of precedence:
  *

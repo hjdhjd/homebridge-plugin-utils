@@ -6,9 +6,9 @@
 /**
  * Pure stateful byte-to-record parser for ISO BMFF (fMP4) box streams.
  *
- * This module ships the streaming counterpart to the static predicates in {@link ffmpeg/fmp4! | fmp4}. The predicates (`findBox`, `isKeyframe`, `hasAudioTrack`,
- * `splitMoofMdat`) answer one-shot questions about a complete Buffer. {@link Mp4BoxParser} solves a different problem: incrementally consuming an unbounded byte stream
- * (typically FFmpeg stdout producing fMP4 fragments) and emitting each complete box as it becomes available.
+ * This module ships the streaming counterpart to the one-shot readers in {@link ffmpeg/fmp4! | fmp4}, each of which answers a question about a complete Buffer.
+ * {@link Mp4BoxParser} solves a different problem: incrementally consuming an unbounded byte stream (typically FFmpeg stdout producing fMP4 fragments) and emitting
+ * each complete box as it becomes available.
  *
  * The parser is intentionally signal-free, event-free, and allocation-light. It carries only the bytes of an incomplete trailing box across calls and hands out
  * zero-copy `subarray` views whenever possible. Resource lifetime, async consumption, and cancellation are not this class's job - those belong to the composing

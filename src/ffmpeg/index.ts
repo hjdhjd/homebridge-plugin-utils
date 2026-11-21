@@ -7,6 +7,7 @@ export * from "./exec.ts";
 export * from "./fmp4.ts";
 export * from "./hap-enums.ts";
 export * from "./mp4-assembler.ts";
+export * from "./mp4-frame-feed.ts";
 export * from "./mp4-parser.ts";
 export * from "./options.ts";
 export * from "./process.ts";

@@ -2,19 +2,21 @@
  *
  * ffmpeg/rtp.test.ts: Unit tests for the RtpDemuxer / RtpPortAllocator / PortReservation surface - single-socket forwarding, source-port symmetry,
  * always-on RTCP-replay heartbeat, signal-driven socket lifetime, two-tier readiness milestones, scope-bound port reservation handles, and concurrent
- * allocator behavior.
+ * allocator behavior - and the parity rows that run each lifecycle scenario a two-way audio consumer meets, from the bind to the demuxer's disposal, on the real
+ * demuxer and on TestRtpDemuxer alike.
  */
-import type { PortReservation, RtpProbeSocket } from "./rtp.ts";
-import { RtpDemuxer, RtpPortAllocator } from "./rtp.ts";
+import type { PortReservation, RtpDemuxerHandle, RtpProbeSocket } from "./rtp.ts";
+import { RtpDemuxer, RtpPortAllocator, rtpDemuxerFactory } from "./rtp.ts";
+import { TestProbeSocketFactory, TestRtpDemuxerFactory, expectAt, waitUntil } from "../testing/index.ts";
+import { assertEachSubject, lifetimeState, settlement } from "./process-parity.helpers.ts";
 import { bindReceiver, probePortAvailable, sendDatagram } from "./udp.helpers.ts";
 import { describe, test } from "node:test";
+import { AsyncDisposableStack } from "../async-disposable-stack.ts";
 import { HbpuAbortError } from "../util.ts";
 import { RTCP_HEARTBEAT_INTERVAL } from "./settings.ts";
 import { TestClock } from "../clock-double.ts";
-import { TestProbeSocketFactory } from "./rtp.helpers.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
-import { waitUntil } from "../testing/index.ts";
 
 // Build a minimal RTP-shaped datagram. The parser reads the second byte's low seven bits for payload type - values above 90 and the distinguished 0 are RTP,
 // everything else is RTCP. We pick 96 (a typical dynamic media payload type) for the "is this RTP?" assertions and 72 (a sender report identifier) for RTCP coverage.
@@ -469,7 +471,7 @@ describe("RtpDemuxer - socket errors", () => {
 
     // Regression guard for the socket `"error"` path: we provoke a real EADDRINUSE by binding two demuxers to the same port. The holder claims an ephemeral port
     // atomically (inputPort: 0 binds against whatever the kernel picks), then the collider is constructed with the holder's now-known port as its explicit target.
-    // The collider's bind fails asynchronously with a kernel-level error, which fires our `"error"` listener and routes the failure through
+    // The collider's bind fails inside its constructor with a kernel-level error, which fires our `"error"` listener and routes the failure through
     // `HbpuAbortError("failed", { cause })`. This is the only practical way to exercise the socket-error code path in-process without mocking the dgram module.
     await using rtpReceiver = await bindReceiver();
     await using rtcpReceiver = await bindReceiver();
@@ -484,9 +486,9 @@ describe("RtpDemuxer - socket errors", () => {
 
     try {
 
-      // Poll until the second demuxer's bind failure has surfaced. A short delay is enough on loopback because EADDRINUSE reports on the next event-loop turn after
-      // bind; we await a few ticks and then assert. If the demuxer stayed alive (e.g., the test host's OS allows SO_REUSEPORT-style double-bind), that is a platform
-      // surprise we want the test to flag loudly.
+      // The second demuxer's bind failure has already surfaced, because a bind through the socket factory completes or fails inside the call, so EADDRINUSE reports
+      // inside the collider's constructor; the short delay is only a margin before we assert. If the demuxer stayed alive (e.g., the test host's OS allows
+      // SO_REUSEPORT-style double-bind), that is a platform surprise we want the test to flag loudly.
       await delay(50);
 
       assert.equal(collider.aborted, true, "collider must have aborted after failing to bind to a port held by another demuxer");
@@ -602,6 +604,227 @@ describe("RtpDemuxer - signal-driven teardown", () => {
     assert.ok(capturedSignal, "the demuxer must have observed an abort signal during ready resolution");
     assert.equal(capturedSignal.aborted, true);
     assert.throws(() => capturedSignal.throwIfAborted(), { constructor: HbpuAbortError, name: "shutdown" });
+  });
+});
+
+/* The point a parity row starts from. `constructed` is a demuxer asking for an ephemeral port, handed back as its construction returns with nothing awaited,
+ * `bound` one whose ready has resolved, `flowing` one that has forwarded its first RTP packet, `bindFails` one asking for a port another demuxer already holds,
+ * handed back as its construction returns, and `specificPort` one asking for SPECIFIC_PORT, which a row constructs only under a parent already aborted, so neither
+ * subject binds it.
+ */
+type DemuxerStage = "bindFails" | "bound" | "constructed" | "flowing" | "specificPort";
+
+// Bring a subject to a stage, its lifetime composed with `signal`, and hand `stack` whatever the subject needs beside it, so the row releases those with the subject.
+type StartDemuxer = (stage: DemuxerStage, signal: AbortSignal, stack: AsyncDisposableStack) => Promise<RtpDemuxerHandle>;
+
+// The invented port the specificPort stage asks for, never bound.
+const SPECIFIC_PORT = 50000;
+
+// The invented port the double's ephemeral bind completes on.
+const ASSIGNED_PORT = 50010;
+
+// The real subject: a demuxer the production factory built, forwarding to receivers the row's stack owns. For the bound and flowing stages it awaits ready, as a
+// consumer does, and past it, for the flowing stage, the first forwarded RTP packet, so the row starts where the double's levers leave it.
+async function startRealDemuxer(stage: DemuxerStage, signal: AbortSignal, stack: AsyncDisposableStack): Promise<RtpDemuxerHandle> {
+
+  const rtpReceiver = stack.use(await bindReceiver());
+  const rtcpReceiver = stack.use(await bindReceiver());
+  const ports = { rtcpPort: rtcpReceiver.port, rtpPort: rtpReceiver.port };
+  let inputPort = 0;
+
+  // The collision comes from a holder demuxer bound first to an ephemeral port, as the socket-error row provokes it.
+  if(stage === "bindFails") {
+
+    const holder = stack.use(new RtpDemuxer({ ...ports, inputPort: 0 }));
+
+    await holder.ready;
+    inputPort = holder.inputPort;
+  } else if(stage === "specificPort") {
+
+    inputPort = SPECIFIC_PORT;
+  }
+
+  const demuxer = rtpDemuxerFactory.create({ ...ports, inputPort, signal });
+
+  assert.ok(demuxer instanceof RtpDemuxer, "the production factory must build an RtpDemuxer");
+
+  if((stage === "bound") || (stage === "flowing")) {
+
+    await demuxer.ready;
+  }
+
+  if(stage === "flowing") {
+
+    await sendDatagram(demuxer.inputPort, makeRtpDatagram());
+    await demuxer.mediaReady;
+  }
+
+  return demuxer;
+}
+
+/* The double subject: a demuxer TestRtpDemuxerFactory built over the row's signal, driven to the stage the real demuxer reaches on its own. The double binds inside
+ * its constructor, as the real demuxer does, from the answer its factory's script hands it: the port the kernel would assign an ephemeral bind, or a refusal for the
+ * collision. A construction under a parent already aborted binds nothing and takes no answer, as a real demuxer torn down in its constructor never binds. The first
+ * packet arrives on a later turn than the bind, so it is pulled a turn after it.
+ */
+async function startDoubleDemuxer(stage: DemuxerStage, signal: AbortSignal): Promise<RtpDemuxerHandle> {
+
+  const factory = new TestRtpDemuxerFactory([(stage === "bindFails") ? "refused" : ASSIGNED_PORT]);
+
+  factory.create({ inputPort: ((stage === "bindFails") || (stage === "specificPort")) ? SPECIFIC_PORT : 0, rtcpPort: 50001, rtpPort: 50002, signal });
+
+  const demuxer = expectAt(factory.createCalls, 0, "the demuxer the factory built").demuxer;
+
+  if([ "bindFails", "constructed", "specificPort" ].includes(stage)) {
+
+    return demuxer;
+  }
+
+  await demuxer.ready;
+
+  if(stage === "flowing") {
+
+    setImmediate(() => demuxer.resolveMediaReady());
+    await demuxer.mediaReady;
+  }
+
+  return demuxer;
+}
+
+/* Run a parity row's body over a subject brought to `stage`, and release the subject once the body is done, whatever it did: its disposal ends a demuxer still
+ * running and waits for its port, and then everything the starter stood up beside it is released. A row that starts under a parent signal already aborted hands the
+ * controller it aborted.
+ */
+async function withDemuxer<T>(start: StartDemuxer, stage: DemuxerStage, body: (demuxer: RtpDemuxerHandle, controller: AbortController) => Promise<T>,
+  { controller = new AbortController() }: { controller?: AbortController } = {}): Promise<T> {
+
+  await using stack = new AsyncDisposableStack();
+
+  const demuxer = stack.use(await start(stage, controller.signal, stack));
+
+  return await body(demuxer, controller);
+}
+
+// Run one demuxer scenario against the double and against the real demuxer through the shared parity runner, over this suite's starters.
+async function assertEachDemuxer<T>(expected: T, scenario: (start: StartDemuxer) => Promise<T>): Promise<void> {
+
+  await assertEachSubject({ double: startDoubleDemuxer, real: startRealDemuxer }, expected, scenario);
+}
+
+describe("RtpDemuxerHandle - the real demuxer and TestRtpDemuxer agree on the lifecycle", () => {
+
+  test("an abort after the bind rejects the pending mediaReady as shutdown and leaves ready resolved", async () => {
+
+    await assertEachDemuxer({ lifetime: "shutdown", mediaReady: "rejected shutdown", ready: "resolved" }, async (start) => withDemuxer(start, "bound",
+      async (demuxer) => {
+
+        demuxer.abort();
+
+        return { lifetime: lifetimeState(demuxer.signal), mediaReady: await settlement(demuxer.mediaReady), ready: await settlement(demuxer.ready) };
+      }));
+  });
+
+  test("once media flows, ready and mediaReady stay resolved through a later abort", async () => {
+
+    await assertEachDemuxer({ lifetime: "shutdown", mediaReady: "resolved", ready: "resolved" }, async (start) => withDemuxer(start, "flowing", async (demuxer) => {
+
+      demuxer.abort();
+
+      return { lifetime: lifetimeState(demuxer.signal), mediaReady: await settlement(demuxer.mediaReady), ready: await settlement(demuxer.ready) };
+    }));
+  });
+
+  test("a bind colliding with a held port has failed the lifetime once the starter's await returns, rejecting ready and mediaReady with an error as cause", async () => {
+
+    await assertEachDemuxer({ atReturn: "failed", causeIsError: true, mediaReady: "rejected failed", ready: "rejected failed" }, async (start) => withDemuxer(start,
+      "bindFails", async (demuxer) => {
+
+        // Read straight after the starter's await and before anything else is awaited, so this is the state the bind left once that await returned: a bind settled
+        // on a later event-loop turn would read live here, though one settled a microtask late would not. The construction turn itself is held by the double's own
+        // suite, in its row that reads the bind with no await at all.
+        const atReturn = lifetimeState(demuxer.signal);
+
+        return { atReturn, causeIsError: (demuxer.signal.reason as { cause?: unknown }).cause instanceof Error, mediaReady: await settlement(demuxer.mediaReady),
+          ready: await settlement(demuxer.ready) };
+      }));
+  });
+
+  test("a parent already aborted with a timeout reason rejects ready and mediaReady with it, reads as timed out and keeps the requested port", async () => {
+
+    await assertEachDemuxer({ inputPort: SPECIFIC_PORT, isTimedOut: true, lifetime: "timeout", mediaReady: "rejected timeout", ready: "rejected timeout" },
+      async (start) => {
+
+        const controller = new AbortController();
+
+        controller.abort(new HbpuAbortError("timeout"));
+
+        return withDemuxer(start, "specificPort", async (demuxer) => ({ inputPort: demuxer.inputPort, isTimedOut: demuxer.isTimedOut,
+          lifetime: lifetimeState(demuxer.signal), mediaReady: await settlement(demuxer.mediaReady), ready: await settlement(demuxer.ready) }), { controller });
+      });
+  });
+
+  test("the parent's abort after the bind ends the lifetime with the parent's reason and rejects the pending mediaReady with it", async () => {
+
+    await assertEachDemuxer({ aborted: true, lifetime: "replaced", mediaReady: "rejected replaced", ready: "resolved" }, async (start) => withDemuxer(start, "bound",
+      async (demuxer, controller) => {
+
+        controller.abort(new HbpuAbortError("replaced"));
+
+        return { aborted: demuxer.aborted, lifetime: lifetimeState(demuxer.signal), mediaReady: await settlement(demuxer.mediaReady),
+          ready: await settlement(demuxer.ready) };
+      }));
+  });
+
+  test("abort passes an explicit reason through, reads a null one as shutdown, and leaves the first reason standing through a second abort", async () => {
+
+    await assertEachDemuxer({ explicit: { passedThrough: true, standsThroughSecond: true }, nullReason: "shutdown" }, async (start) => ({
+
+      explicit: await withDemuxer(start, "bound", async (demuxer) => {
+
+        const reason = new HbpuAbortError("replaced");
+
+        demuxer.abort(reason);
+
+        const passedThrough = demuxer.signal.reason === reason;
+
+        demuxer.abort(new HbpuAbortError("failed"));
+
+        return { passedThrough, standsThroughSecond: demuxer.signal.reason === reason };
+      }),
+      nullReason: await withDemuxer(start, "bound", async (demuxer) => {
+
+        demuxer.abort(null);
+
+        return lifetimeState(demuxer.signal);
+      })
+    }));
+  });
+
+  test("disposal ends the lifetime as shutdown and resolves, again on a repeat and after the lifetime has ended", async () => {
+
+    await assertEachDemuxer({ afterEnd: { disposed: "resolved", lifetime: "replaced" }, live: { again: "resolved", disposed: "resolved", lifetime: "shutdown" } },
+      async (start) => ({
+
+        afterEnd: await withDemuxer(start, "bound", async (demuxer) => {
+
+          demuxer.abort(new HbpuAbortError("replaced"));
+
+          return { disposed: await settlement(demuxer[Symbol.asyncDispose]()), lifetime: lifetimeState(demuxer.signal) };
+        }),
+        live: await withDemuxer(start, "bound", async (demuxer) => {
+
+          const disposed = await settlement(demuxer[Symbol.asyncDispose]());
+          const lifetime = lifetimeState(demuxer.signal);
+
+          return { again: await settlement(demuxer[Symbol.asyncDispose]()), disposed, lifetime };
+        })
+      }));
+  });
+
+  test("an ephemeral demuxer reads the nonzero port it was bound to once the starter's await returns", async () => {
+
+    await assertEachDemuxer({ atReturn: "nonzero" }, async (start) => withDemuxer(start, "constructed",
+      async (demuxer) => ({ atReturn: (demuxer.inputPort > 0) ? "nonzero" : demuxer.inputPort.toString() })));
   });
 });
 
@@ -911,9 +1134,9 @@ describe("RtpPortAllocator - retry and collision paths", () => {
 
   test("an abort while a probe bind is pending rejects with the signal's reason and leaves the pool empty", async () => {
 
-    // The double answers a bind on the next tick, so the abort below lands while the first probe waits for its answer. The package's own factory answers a bind
-    // inside the call, so only a factory whose binds answer later reaches this path.
-    const probes = new TestProbeSocketFactory([50000]);
+    // The deferred double answers a bind on a later turn, so the abort below lands while the first probe waits for its answer. The package's own factory answers
+    // a bind inside the call, so only a factory whose binds answer later reaches this path.
+    const probes = new TestProbeSocketFactory([50000], { deferred: true });
     const allocator = new RtpPortAllocator({ socketFactory: probes.create });
     const controller = new AbortController();
     const reason = new HbpuAbortError("shutdown");

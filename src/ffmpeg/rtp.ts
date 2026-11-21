@@ -16,6 +16,9 @@
  *     kernel-tracked socket. A self-rearming inactivity {@link Watchdog} re-emits the last received RTCP packet to the RTP destination port at the
  *     {@link RTCP_HEARTBEAT_INTERVAL} cadence whenever inbound RTCP traffic stalls, keeping inbound traffic arriving at FFmpeg's RTP input during legitimate quiet
  *     periods in two-way audio. A second optional inactivity {@link Watchdog} aborts the demuxer when no inbound traffic arrives within a caller-configurable window.
+ *   - {@link RtpDemuxerHandle} and {@link RtpDemuxerFactory} - the demuxer's dependency-inversion boundary. A consumer that wants its two-way audio under test
+ *     constructs the demuxer through the factory and reads it through the handle, whose production factory is {@link rtpDemuxerFactory} and whose double ships on
+ *     the testing entry point.
  *   - {@link RtpPortAllocator} - a plugin-singleton registry that issues {@link PortReservation} handles. The allocator itself holds no OS resources; each reservation
  *     is the scoped resource that owns one or two UDP ports.
  *   - {@link PortReservation} - an {@link AsyncDisposable} handle. Disposal releases the reserved ports back to the allocator's internal pool. Callers use
@@ -84,6 +87,90 @@ export interface RtpDemuxerInit {
 }
 
 /**
+ * The surface a two-way audio consumer reads off an RTP demuxer. This is the product half of the demuxer's dependency-inversion boundary: a class that stands up a
+ * return-audio path depends on this narrow interface rather than the concrete {@link RtpDemuxer}, so a test can substitute a double without binding a socket. It is an
+ * interface rather than the class because the class's private fields make its type one that only the real class, which binds a socket, can satisfy. The interface is
+ * type-only, so importing it costs a consumer nothing at runtime.
+ *
+ * {@link RtpDemuxer} satisfies it with its own public members and carries only an `implements` annotation. A consumer waits on `ready` and `mediaReady`, reads the
+ * bound port and why the lifetime ended, and ends the demuxer through `abort()`, the signal it passed in its init, or disposal.
+ *
+ * @see RtpDemuxer
+ * @see RtpDemuxerFactory
+ *
+ * @category FFmpeg
+ */
+export interface RtpDemuxerHandle extends AsyncDisposable {
+
+  /**
+   * End the lifetime with `reason`, or with `HbpuAbortError("shutdown")` when the reason is `undefined` or `null`. A call once the lifetime has ended changes nothing.
+   *
+   * @param reason - Optional abort reason.
+   */
+  abort(reason?: unknown): void;
+
+  /**
+   * `true` once the lifetime has ended. Derived from `signal`.
+   */
+  readonly aborted: boolean;
+
+  /**
+   * The UDP port the demuxer is bound to. The bind has completed or failed by the time construction returns, so this reads the port the kernel bound from then on,
+   * an ephemeral construction's (`inputPort: 0`) among them, and the requested port when the bind failed or the lifetime ended before it.
+   */
+  readonly inputPort: number;
+
+  /**
+   * `true` when the lifetime ended for a timeout: `HbpuAbortError("timeout")`, which the inactivity watchdog raises, or the platform `TimeoutError`.
+   */
+  readonly isTimedOut: boolean;
+
+  /**
+   * Resolves once the demuxer has forwarded its first RTP packet, and rejects with the lifetime's reason when the lifetime ends first.
+   */
+  readonly mediaReady: Promise<void>;
+
+  /**
+   * Carries the bind's outcome. The bind has completed or failed by the time construction returns, so this has resolved by then when the socket bound, and has
+   * rejected with the lifetime's reason when the bind failed or the lifetime ended before it.
+   */
+  readonly ready: Promise<void>;
+
+  /**
+   * The abort signal representing the demuxer's lifetime. Aborts exactly once; the reason on `signal.reason` names the cause.
+   */
+  readonly signal: AbortSignal;
+
+  /**
+   * End the lifetime with `HbpuAbortError("shutdown")` unless it has already ended, and resolve once the demuxer has let go of its port. Safe to call more than once.
+   */
+  [Symbol.asyncDispose](): Promise<void>;
+}
+
+/**
+ * The creational half of the demuxer's dependency-inversion boundary: build an {@link RtpDemuxerHandle} from an init. A consumer holds this factory typed as the
+ * abstraction and constructs through it, so a test can substitute a factory that returns a double, and a suite reads the ports and the signal the consumer chose from
+ * the init it passed. The production factory is {@link rtpDemuxerFactory}, whose `create` is exactly the {@link RtpDemuxer} constructor call, so routing construction
+ * through this boundary changes no behavior.
+ *
+ * @see rtpDemuxerFactory
+ * @see RtpDemuxerHandle
+ *
+ * @category FFmpeg
+ */
+export interface RtpDemuxerFactory {
+
+  /**
+   * Construct and bind a demuxer for the supplied init.
+   *
+   * @param init - Init options. See {@link RtpDemuxerInit}.
+   *
+   * @returns A new {@link RtpDemuxerHandle}.
+   */
+  create(init: RtpDemuxerInit): RtpDemuxerHandle;
+}
+
+/**
  * Signal-driven RTP/RTCP demultiplexer with FFmpeg keepalive heartbeat.
  *
  * The class owns one bound UDP socket. Inbound datagrams are classified by an internal {@link RtpPacketParser} and forwarded through the same socket to the configured
@@ -104,6 +191,8 @@ export interface RtpDemuxerInit {
  *
  * An optional second {@link Watchdog} aborts the demuxer with `HbpuAbortError("timeout")` when no inbound traffic arrives within a caller-supplied window. Both
  * watchdogs compose against the same lifetime signal, so disposal cleans them up uniformly.
+ *
+ * The class satisfies {@link RtpDemuxerHandle}, and a consumer that substitutes it under test constructs it through a {@link RtpDemuxerFactory}.
  *
  * @example
  *
@@ -136,7 +225,7 @@ export interface RtpDemuxerInit {
  *
  * @category FFmpeg
  */
-export class RtpDemuxer implements AsyncDisposable {
+export class RtpDemuxer implements RtpDemuxerHandle {
 
   /**
    * The composed abort signal representing this demuxer's lifetime. Aborts exactly once when the socket errors, the inactivity watchdog fires, the parent signal
@@ -176,9 +265,9 @@ export class RtpDemuxer implements AsyncDisposable {
   public readonly mediaReady: Promise<void>;
 
   /**
-   * The UDP port the demuxer is bound to. For a specific-port construction (`init.inputPort` non-zero), this equals `init.inputPort` from the moment the constructor
-   * returns; for an ephemeral construction (`init.inputPort === 0`), the value is `0` until the kernel completes the bind, then the kernel-assigned port. Consumers
-   * that need the assigned ephemeral port `await demuxer.ready` before reading this property.
+   * The UDP port the demuxer is bound to. For a specific-port construction (`init.inputPort` non-zero), this equals `init.inputPort`; for an ephemeral construction
+   * (`init.inputPort === 0`), the value is `0` until the kernel completes the bind, which it does inside the constructor, then the kernel-assigned port, so the
+   * assigned port reads from the moment construction returns, as {@link RtpDemuxerHandle} promises.
    *
    * Reads from the cached projection of `socket.address().port` captured at the `"listening"` event so the value reflects what the kernel actually bound, not just what
    * was requested. The two coincide for specific-port binds; they diverge for ephemeral binds where the requested value is `0` and the bound value is the kernel's pick.
@@ -261,8 +350,10 @@ export class RtpDemuxer implements AsyncDisposable {
    * Construct and bind a new RTP demuxer.
    *
    * Socket binding happens synchronously as part of construction: by the time the constructor returns, the socket has been asked to bind on the configured port and
-   * the inactivity watchdog (if configured) is already armed. There is no separate `start()` step. The bind itself completes on a later turn; consumers that need to
-   * sequence work against bind completion `await demuxer.ready`.
+   * the inactivity watchdog (if configured) is already armed. There is no separate `start()` step. The bind itself completes or fails inside the constructor too: the
+   * socket comes from {@link createDgramSocket}, which completes a bind to an address literal inside the call, and a bind that names no address binds the family's
+   * any-address literal. So `ready` has settled, and an ephemeral `inputPort` reads the bound port, by the time construction returns, which is the contract
+   * {@link RtpDemuxerHandle} states for every demuxer.
    *
    * @param init - Required init options. See {@link RtpDemuxerInit}.
    */
@@ -454,13 +545,28 @@ export class RtpDemuxer implements AsyncDisposable {
 }
 
 /**
+ * The production {@link RtpDemuxerFactory}: builds the concrete socket-backed demuxer. A consumer holds this typed as the abstraction; a test substitutes a fake
+ * factory. `create` is exactly the {@link RtpDemuxer} constructor call, so wiring construction through this boundary changes no behavior.
+ *
+ * @see RtpDemuxerFactory
+ *
+ * @category FFmpeg
+ */
+export const rtpDemuxerFactory: RtpDemuxerFactory = {
+
+  create: (init: RtpDemuxerInit): RtpDemuxerHandle => new RtpDemuxer(init)
+};
+
+/**
  * Construction-time options for {@link RtpPortAllocator.reserve}.
  *
  * @property count    - Optional. The number of consecutive UDP ports to reserve. `1` yields a single port, `2` yields the reserved port plus the next port so FFmpeg's
  *                      "RTP port N implies RTCP port N+1" convention is satisfied. Defaults to `1`.
  * @property ipFamily - Optional. `"ipv4"` or `"ipv6"`. Defaults to `"ipv4"`.
  * @property signal   - Optional caller {@link AbortSignal}. Cancels in-flight bind-retry attempts. If the signal aborts while `reserve()` is still looking for
- *                      consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`.
+ *                      consecutive ports, the partially reserved port (if any) is released and the promise rejects with `signal.reason`. Over sockets that bind
+ *                      inside the call, as the package's own do, a single-port reservation completes before an abort in the same turn can land, so it resolves,
+ *                      and the caller disposes it as it would any other.
  *
  * @category FFmpeg
  */
@@ -526,9 +632,10 @@ export type RtpProbeSocketFactory = (ipFamily: IpFamily) => RtpProbeSocket;
 /**
  * Construction-time options for {@link RtpPortAllocator}.
  *
- * @property socketFactory - Optional. How each probe socket is made, so a host can substitute the sockets the allocator binds. Defaults to the package's own
- *                           {@link createDgramSocket}, whose sockets bind exclusively. A substitute answers exclusive sockets too, because the pool reads a
- *                           granted bind as proof that the port was free.
+ * @property socketFactory - Optional. How each probe socket is made, so a host can substitute the sockets the allocator binds, as a suite does with the
+ *                           `TestProbeSocketFactory` double the testing entry point ships. Defaults to the package's own {@link createDgramSocket}, whose
+ *                           sockets bind exclusively. A substitute answers exclusive sockets too, because the pool reads a granted bind as proof that the port
+ *                           was free.
  *
  * @category FFmpeg
  */
